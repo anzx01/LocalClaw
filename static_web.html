@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LocalClaw</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%23007bff' d='M8 0C3.58 0 0 3.58 0 8s3.58 8 8 8 8-3.58 8-8-3.58-8-8-8zm0 14.5c-3.59 0-6.5-2.91-6.5-6.5S4.41 1.5 8 1.5 14.5 4.41 14.5 8 11.59 14.5 8 14.5zm-1.5-8c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5-.67-1.5-1.5-1.5-1.5.67-1.5 1.5zm0 5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5-.67-1.5-1.5-1.5-1.5.67-1.5 1.5z'/%3E%3C/svg%3E" type="image/svg+xml">
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .header h1 { color: #333; }
+        .tabs { display: flex; margin-bottom: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .tab { flex: 1; padding: 15px; text-align: center; cursor: pointer; border-bottom: 3px solid transparent; }
+        .tab.active { border-bottom-color: #007bff; color: #007bff; font-weight: bold; }
+        .tab-content { display: none; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 20px; }
+        .tab-content.active { display: block; }
+        .chat-container { background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .messages { height: 400px; overflow-y: auto; padding: 20px; border-bottom: 1px solid #eee; }
+        .message { margin-bottom: 15px; padding: 10px 15px; border-radius: 8px; }
+        .message.user { background: #007bff; color: white; margin-left: 20%; }
+        .message.system { background: #f0f0f0; margin-right: 20%; }
+        .message.error { background: #f8d7da; color: #721c24; }
+        .input-area { padding: 15px; display: flex; gap: 10px; }
+        .input-area input { flex: 1; padding: 10px 15px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        .input-area button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .input-area button:hover { background: #0056b3; }
+        .sidebar { margin-top: 20px; background: white; border-radius: 8px; padding: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .sidebar h3 { margin-bottom: 10px; color: #333; }
+        .skill-list { list-style: none; }
+        .skill-list li { padding: 5px 0; border-bottom: 1px solid #eee; }
+        .status { font-size: 12px; color: #666; margin-top: 10px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .task { border: 1px solid #eee; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+        .task h4 { margin-bottom: 10px; color: #333; }
+        .task p { margin-bottom: 5px; font-size: 14px; }
+        .task-status { display: inline-block; padding: 3px 8px; border-radius: 10px; font-size: 12px; font-weight: bold; }
+        .task-status.completed { background-color: #d4edda; color: #155724; }
+        .task-status.failed { background-color: #f8d7da; color: #721c24; }
+        .task-status.running { background-color: #d1ecf1; color: #0c5460; }
+        .skill-card { border: 1px solid #eee; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+        .skill-card h4 { margin-bottom: 10px; color: #333; }
+        .skill-card p { margin-bottom: 5px; font-size: 14px; }
+        .skill-actions { margin-top: 10px; display: flex; gap: 10px; }
+        .skill-actions button { padding: 5px 10px; font-size: 12px; border: none; border-radius: 4px; cursor: pointer; }
+        .skill-actions button.install { background: #28a745; color: white; }
+        .skill-actions button.uninstall { background: #dc3545; color: white; }
+        .skill-actions button:hover { opacity: 0.8; }
+    </style>
+</head>
+<body>
+    <div class="container" x-data="app()" x-init="init()">
+        <div class="header">
+            <h1>🦀 LocalClaw</h1>
+            <p class="status">Mode: <span x-text="config.mode || 'loading...'"></span></p>
+        </div>
+        
+        <div class="tabs">
+            <div class="tab" :class="{active: activeTab === 'chat'}" @click="activeTab = 'chat'">Chat</div>
+            <div class="tab" :class="{active: activeTab === 'tasks'}" @click="activeTab = 'tasks'">Tasks</div>
+            <div class="tab" :class="{active: activeTab === 'skills'}" @click="activeTab = 'skills'">Skills</div>
+        </div>
+        
+        <div class="tab-content" x-show="activeTab === 'chat'">
+            <div class="chat-container">
+                <div class="messages" x-ref="messages">
+                    <template x-for="msg in messages" :key="msg.id">
+                        <div class="message" :class="msg.type" x-text="msg.content"></div>
+                    </template>
+                </div>
+                
+                <div class="input-area">
+                    <input type="text" x-model="input" @keyup.enter="sendMessage()" placeholder="Type a message or /skill_name params...">
+                    <button @click="sendMessage()" :disabled="loading">Send</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="tab-content" x-show="activeTab === 'tasks'">
+            <h2>Task History</h2>
+            <div class="task-list">
+                <template x-for="task in tasks" :key="task.id">
+                    <div class="task">
+                        <h4>Task {{ task.id }}</h4>
+                        <p><strong>Status:</strong> <span class="task-status" :class="task.state.toLowerCase()">{{ task.state }}</span></p>
+                        <p><strong>Created:</strong> <span x-text="new Date(task.created_at).toLocaleString()"></span></p>
+                        <p><strong>Completed:</strong> <span x-text="task.completed_at ? new Date(task.completed_at).toLocaleString() : 'N/A'"></span></p>
+                        <p><strong>Result:</strong> <span x-text="JSON.stringify(task.result)"></span></p>
+                        <p><strong>Error:</strong> <span x-text="task.error || 'N/A'"></span></p>
+                    </div>
+                </template>
+            </div>
+        </div>
+        
+        <div class="tab-content" x-show="activeTab === 'skills'">
+            <h2>Skill Management</h2>
+            <div class="grid">
+                <div>
+                    <h3>Installed Skills</h3>
+                    <div class="skill-list">
+                        <template x-for="skill in skills" :key="skill.name">
+                            <div class="skill-card">
+                                <h4>{{ skill.name }} v{{ skill.version }}</h4>
+                                <p><strong>Description:</strong> {{ skill.description }}</p>
+                                <p><strong>Type:</strong> {{ skill.type }}</p>
+                                <p><strong>State:</strong> {{ skill.state }}</p>
+                                <div class="skill-actions">
+                                    <button class="uninstall" @click="uninstallSkill(skill.name)">Uninstall</button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+                <div>
+                    <h3>Available Skills</h3>
+                    <div class="skill-list">
+                        <template x-for="skill in availableSkills" :key="skill.id">
+                            <div class="skill-card">
+                                <h4>{{ skill.name }} v{{ skill.version }}</h4>
+                                <p><strong>Description:</strong> {{ skill.description }}</p>
+                                <p><strong>Author:</strong> {{ skill.author }}</p>
+                                <div class="skill-actions">
+                                    <button class="install" @click="installSkill(skill.id)">Install</button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Define app function in global scope
+        window.app = function() {
+            return {
+                activeTab: 'chat',
+                messages: [],
+                input: '',
+                loading: false,
+                skills: [],
+                availableSkills: [],
+                tasks: [],
+                config: {},
+                
+                async init() {
+                    console.log('Initializing app...');
+                    await this.loadConfig();
+                    await this.loadSkills();
+                    await this.loadTasks();
+                    await this.loadAvailableSkills();
+                    console.log('App initialized successfully!');
+                },
+                
+                async loadConfig() {
+                    try {
+                        // Mock config
+                        this.config = { mode: 'local' };
+                    } catch (e) {
+                        console.error('Failed to load config:', e);
+                    }
+                },
+                
+                async loadSkills() {
+                    try {
+                        // Mock skills
+                        this.skills = [
+                            { name: 'system_status', version: '1.0.0', description: 'Get system status information', type: 'tool', state: 'active' },
+                            { name: 'list_skills', version: '1.0.0', description: 'List all available skills', type: 'tool', state: 'active' }
+                        ];
+                    } catch (e) {
+                        console.error('Failed to load skills:', e);
+                    }
+                },
+                
+                async loadTasks() {
+                    try {
+                        // Mock tasks
+                        this.tasks = [
+                            { id: '1', state: 'completed', created_at: new Date().toISOString(), completed_at: new Date().toISOString(), result: {}, error: null },
+                            { id: '2', state: 'completed', created_at: new Date().toISOString(), completed_at: new Date().toISOString(), result: {}, error: null }
+                        ];
+                    } catch (e) {
+                        console.error('Failed to load tasks:', e);
+                    }
+                },
+                
+                async loadAvailableSkills() {
+                    try {
+                        // Mock available skills
+                        this.availableSkills = [
+                            { id: 'weather', name: 'Weather', version: '1.0.0', description: 'Get weather information', author: 'LocalClaw Team' },
+                            { id: 'date', name: 'Date', version: '1.0.0', description: 'Get current date and time', author: 'LocalClaw Team' },
+                            { id: 'calculator', name: 'Calculator', version: '1.0.0', description: 'Perform calculations', author: 'LocalClaw Team' },
+                            { id: 'translator', name: 'Translator', version: '1.0.0', description: 'Translate text', author: 'LocalClaw Team' }
+                        ];
+                    } catch (e) {
+                        console.error('Failed to load available skills:', e);
+                    }
+                },
+                
+                async sendMessage() {
+                    if (!this.input.trim() || this.loading) return;
+                    
+                    const content = this.input.trim();
+                    this.input = '';
+                    
+                    this.messages.push({
+                        id: Date.now(),
+                        type: 'user',
+                        content: content
+                    });
+                    
+                    this.loading = true;
+                    
+                    try {
+                        // Mock response
+                        setTimeout(() => {
+                            this.messages.push({
+                                id: Date.now() + 1,
+                                type: 'system',
+                                content: `You said: ${content}`
+                            });
+                            this.loading = false;
+                        }, 500);
+                    } catch (e) {
+                        this.messages.push({
+                            id: Date.now() + 1,
+                            type: 'error',
+                            content: 'Error: ' + (e.message || 'Unknown error')
+                        });
+                        this.loading = false;
+                    }
+                },
+                
+                async installSkill(skillId) {
+                    try {
+                        alert(`Installing skill ${skillId}...`);
+                        setTimeout(() => {
+                            this.loadSkills();
+                            alert(`Skill ${skillId} installed successfully!`);
+                        }, 1000);
+                    } catch (e) {
+                        console.error('Failed to install skill:', e);
+                        alert('Failed to install skill: ' + (e.message || 'Unknown error'));
+                    }
+                },
+                
+                async uninstallSkill(skillName) {
+                    try {
+                        alert(`Uninstalling skill ${skillName}...`);
+                        setTimeout(() => {
+                            this.loadSkills();
+                            alert(`Skill ${skillName} uninstalled successfully!`);
+                        }, 1000);
+                    } catch (e) {
+                        console.error('Failed to uninstall skill:', e);
+                        alert('Failed to uninstall skill: ' + (e.message || 'Unknown error'));
+                    }
+                }
+            };
+        };
+    </script>
+</body>
+</html>

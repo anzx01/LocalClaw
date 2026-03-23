@@ -119,7 +119,7 @@ class FileListTool(Tool):
     name = "file_list"
     description = "List contents of a directory"
     risk_level = RiskLevel.LOW
-    inputs = {"path": "string", "all": "boolean", "long": "boolean"}
+    inputs = {"path": "string"}
     outputs = {"files": "list", "directories": "list", "details": "object"}
     
     def __init__(self, base_dir: Optional[Path] = None) -> None:

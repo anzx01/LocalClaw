@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LocalClaw Test</title>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://unpkg.com/axios@1.x.x/dist/axios.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .header { margin-bottom: 20px; }
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab { padding: 10px 20px; background: #f0f0f0; cursor: pointer; }
+        .tab.active { background: #007bff; color: white; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .chat-container { border: 1px solid #ddd; border-radius: 8px; padding: 20px; }
+        .messages { height: 300px; overflow-y: auto; margin-bottom: 20px; border: 1px solid #eee; padding: 10px; }
+        .message { margin-bottom: 10px; padding: 10px; border-radius: 4px; }
+        .message.user { background: #e3f2fd; }
+        .message.system { background: #f3e5f5; }
+        .message.error { background: #ffebee; }
+        .input-area { display: flex; gap: 10px; }
+        .input-area input { flex: 1; padding: 10px; }
+        .input-area button { padding: 10px 20px; }
+    </style>
+</head>
+<body>
+    <div class="container" x-data="app()" x-init="init()">
+        <div class="header">
+            <h1>🦀 LocalClaw Test</h1>
+            <p>Mode: <span x-text="config.mode || 'loading...'"></span></p>
+        </div>
+        
+        <div class="tabs">
+            <div class="tab" :class="{active: activeTab === 'chat'}" @click="activeTab = 'chat'">Chat</div>
+            <div class="tab" :class="{active: activeTab === 'tasks'}" @click="activeTab = 'tasks'">Tasks</div>
+            <div class="tab" :class="{active: activeTab === 'skills'}" @click="activeTab = 'skills'">Skills</div>
+        </div>
+        
+        <div class="tab-content" :class="{active: activeTab === 'chat'}">
+            <div class="chat-container">
+                <div class="messages">
+                    <template x-for="msg in messages" :key="msg.id">
+                        <div class="message" :class="msg.type" x-text="msg.content"></div>
+                    </template>
+                </div>
+                
+                <div class="input-area">
+                    <input type="text" x-model="input" @keyup.enter="sendMessage()" placeholder="Type a message...">
+                    <button @click="sendMessage()" :disabled="loading">Send</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="tab-content" :class="{active: activeTab === 'tasks'">
+            <h2>Task History</h2>
+            <div class="task-list">
+                <template x-for="task in tasks" :key="task.id">
+                    <div class="task">
+                        <h4>Task {{ task.id }}</h4>
+                        <p>Status: {{ task.state }}</p>
+                    </div>
+                </template>
+            </div>
+        </div>
+        
+        <div class="tab-content" :class="{active: activeTab === 'skills'">
+            <h2>Skills</h2>
+            <div class="skill-list">
+                <template x-for="skill in skills" :key="skill.name">
+                    <div class="skill">
+                        <h4>{{ skill.name }}</h4>
+                        <p>{{ skill.description }}</p>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Define app function in global scope
+        window.app = function() {
+            return {
+                activeTab: 'chat',
+                messages: [],
+                input: '',
+                loading: false,
+                skills: [],
+                availableSkills: [],
+                tasks: [],
+                config: {},
+                
+                async init() {
+                    console.log('Initializing app...');
+                    await this.loadConfig();
+                    await this.loadSkills();
+                    await this.loadTasks();
+                    await this.loadAvailableSkills();
+                    console.log('App initialized successfully!');
+                },
+                
+                async loadConfig() {
+                    try {
+                        // Mock config
+                        this.config = { mode: 'local' };
+                    } catch (e) {
+                        console.error('Failed to load config:', e);
+                    }
+                },
+                
+                async loadSkills() {
+                    try {
+                        // Mock skills
+                        this.skills = [
+                            { name: 'date', description: 'Get current date and time' },
+                            { name: 'weather', description: 'Get weather information' }
+                        ];
+                    } catch (e) {
+                        console.error('Failed to load skills:', e);
+                    }
+                },
+                
+                async loadTasks() {
+                    try {
+                        // Mock tasks
+                        this.tasks = [
+                            { id: 1, state: 'completed' },
+                            { id: 2, state: 'running' }
+                        ];
+                    } catch (e) {
+                        console.error('Failed to load tasks:', e);
+                    }
+                },
+                
+                async loadAvailableSkills() {
+                    try {
+                        // Mock available skills
+                        this.availableSkills = [
+                            { id: 'calculator', name: 'Calculator', description: 'Perform calculations' },
+                            { id: 'translator', name: 'Translator', description: 'Translate text' }
+                        ];
+                    } catch (e) {
+                        console.error('Failed to load available skills:', e);
+                    }
+                },
+                
+                async sendMessage() {
+                    if (!this.input.trim() || this.loading) return;
+                    
+                    const content = this.input.trim();
+                    this.input = '';
+                    
+                    this.messages.push({
+                        id: Date.now(),
+                        type: 'user',
+                        content: content
+                    });
+                    
+                    this.loading = true;
+                    
+                    try {
+                        // Mock response
+                        setTimeout(() => {
+                            this.messages.push({
+                                id: Date.now() + 1,
+                                type: 'system',
+                                content: `You said: ${content}`
+                            });
+                            this.loading = false;
+                        }, 500);
+                    } catch (e) {
+                        this.messages.push({
+                            id: Date.now() + 1,
+                            type: 'error',
+                            content: 'Error: ' + (e.message || 'Unknown error')
+                        });
+                        this.loading = false;
+                    }
+                }
+            };
+        };
+    </script>
+</body>
+</html>

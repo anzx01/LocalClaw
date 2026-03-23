@@ -38,6 +38,10 @@ class Planner:
             skill_name = intent.intent[6:]
             return self._plan_from_skill(skill_name, intent.params, intent)
         
+        if intent.intent.startswith("tool."):
+            tool_name = intent.intent[5:]
+            return self._plan_tool_call(tool_name, intent.params, intent)
+        
         if intent.intent == "greeting":
             return self._plan_greeting(intent)
         
@@ -54,6 +58,9 @@ class Planner:
             return self._plan_status(intent)
         
         if intent.intent == "date_today":
+            return self._plan_date_today(intent)
+        
+        if intent.intent == "date_query":
             return self._plan_date_today(intent)
         
         if intent.intent == "time_now":
@@ -94,15 +101,27 @@ class Planner:
                 )
             )
             return plan
-        if intent.intent == "list_files" or intent.intent == "list":
-            # Create plan to list files
+        if intent.intent == "list_files" or intent.intent == "list" or intent.intent == "file_list":
+            import os
+            import re
+            path = intent.params.get("path", ".")
+            if path in ["~/Desktop", "Desktop", "桌面", "~/桌面"]:
+                path = os.path.join(os.path.expanduser("~"), "Desktop")
+            elif path and not os.path.isabs(path):
+                drive_match = re.match(r'^([A-Za-z]):[/\\]?$', path)
+                if drive_match:
+                    path = drive_match.group(1) + ":/"
+                elif os.path.exists(os.path.join(os.path.expanduser("~"), "Desktop", path)):
+                    path = os.path.join(os.path.expanduser("~"), "Desktop", path)
+                elif os.path.exists(os.path.join(os.getcwd(), path)):
+                    path = os.path.join(os.getcwd(), path)
             plan = Plan(intent=intent)
             plan.steps.append(
                 Step(
                     type=StepType.TOOL_CALL,
                     name="list_files",
                     tool_name="file_list",
-                    input={"path": intent.params.get("directory", "."), "all": intent.params.get("all", False), "long": intent.params.get("long", False)}
+                    input={"path": path}
                 )
             )
             return plan
@@ -177,6 +196,38 @@ class Planner:
             return plan
         
         return self._plan_unknown(intent)
+    
+    def _plan_tool_call(self, tool_name: str, params: Dict[str, Any], intent: Intent) -> Plan:
+        """Create a plan for direct tool call from LLM."""
+        import os
+        import platform
+        
+        plan = Plan(intent=intent)
+        
+        processed_params = {}
+        for key, value in params.items():
+            if key == "path" and value:
+                if isinstance(value, str):
+                    value_lower = value.lower()
+                    if value_lower in ["桌面", "desktop"]:
+                        value = os.path.join(os.path.expanduser("~"), "Desktop")
+                    elif "用户名" in value or "username" in value_lower or "your_username" in value_lower:
+                        value = os.path.join(os.path.expanduser("~"), "Desktop")
+                    elif len(value) == 2 and value[1] == ":":
+                        value = value[0] + ":/"
+                    elif value.startswith("/Users/") or value.startswith("/home/"):
+                        value = os.path.join(os.path.expanduser("~"), "Desktop")
+            processed_params[key] = value
+        
+        plan.steps.append(
+            Step(
+                type=StepType.TOOL_CALL,
+                name=f"call_{tool_name}",
+                tool_name=tool_name,
+                input=processed_params,
+            )
+        )
+        return plan
     
     def _plan_from_skill(self, skill_name: str, params: Dict[str, Any], intent: Intent) -> Plan:
         """Create a plan from a skill definition."""

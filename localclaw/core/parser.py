@@ -136,40 +136,48 @@ class LLMParser(ParserBackend):
         """Parse using LLM. Returns None if LLM is not available."""
         try:
             llm_provider = get_llm_provider()
-            print(f"LLM provider: {llm_provider.__class__.__name__}")
             
-            prompt = f"""Analyze the following user message and extract the intent and parameters.
-Return a JSON object with:
-- intent: the action the user wants to perform
-- params: any parameters mentioned
+            prompt = f"""你是一个智能助手。分析用户请求，决定调用哪个工具。
 
-User message: {message.content}
+可用工具:
+- file_list: 列出目录内容，参数: path (Windows路径如 "D:/", "C:/Users/用户名/Desktop", "桌面"表示桌面)
+- file_read: 读取文件，参数: path
+- file_write: 写入文件，参数: path, content
+- shell: 执行命令，参数: command
+- http_get: HTTP请求，参数: url
 
-JSON response:"""
+用户请求: {message.content}
+
+返回JSON格式:
+{{"tool": "工具名", "params": {{"参数": "值"}}}}
+
+JSON:"""
             
-            print(f"Generating response with prompt: {prompt}")
             response = await llm_provider.generate(prompt)
-            print(f"Response content: {response.content}")
             
             import json
             content = response.content.strip()
-            print(f"Stripped content: {content}")
-            # Remove code fences if present
             if content.startswith('```json') and '```' in content:
                 content = content.split('```json')[1].split('```')[0].strip()
-                print(f"Content after removing code fences: {content}")
-            result = json.loads(content)
-            print(f"Parsed result: {result}")
+            elif content.startswith('```') and '```' in content:
+                content = content.split('```')[1].split('```')[0].strip()
             
-            # Ensure params is a dictionary
+            json_start = content.find('{')
+            json_end = content.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                content = content[json_start:json_end]
+            
+            result = json.loads(content)
+            
             params = result.get("params", {})
             if not isinstance(params, dict):
                 params = {}
             
+            tool_name = result.get("tool", "")
             return Intent(
-                intent=result.get("intent", "unknown"),
+                intent=f"tool.{tool_name}" if tool_name else "unknown",
                 params=params,
-                confidence=0.8,
+                confidence=0.9,
                 source="llm",
                 raw_message=message.content,
             )
@@ -273,6 +281,40 @@ def create_default_parser(llm_enabled: bool = False) -> Parser:
             intent="echo",
             params_template={"text": "$text"},
             priority=5,
+        ),
+        ParseRule(
+            pattern=r'^(?:列出|看看|查看|显示).*?(?:桌面|文件夹|目录|文件)',
+            intent="file_list",
+            params_template={"path": "~/Desktop"},
+            priority=15,
+        ),
+        ParseRule(
+            pattern=r'^文件夹(?P<path>[^下]+?)下.*?(?:文件|内容)',
+            intent="file_list",
+            params_template={"path": "$path"},
+            priority=25,
+        ),
+        ParseRule(
+            pattern=r'^目录(?P<path>[^下]+?)下.*?(?:文件|内容)',
+            intent="file_list",
+            params_template={"path": "$path"},
+            priority=25,
+        ),
+        ParseRule(
+            pattern=r'^(?:list|ls)\s*(?P<path>.*)?$',
+            intent="file_list",
+            params_template={"path": "$path"},
+            priority=15,
+        ),
+        ParseRule(
+            pattern=r'^今天.*?(?:星期|几号|日期)',
+            intent="date_query",
+            priority=15,
+        ),
+        ParseRule(
+            pattern=r'^what.*?(?:date|day|time)',
+            intent="date_query",
+            priority=15,
         ),
     ]
     
