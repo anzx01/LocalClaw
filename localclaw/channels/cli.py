@@ -9,13 +9,14 @@ import click
 
 from localclaw.config.settings import Mode, get_settings, reload_settings
 from localclaw.core.engine import ExecutionEngine, get_engine
-from localclaw.core.models import Message, Task, TaskState
+from localclaw.core.models import Message, Task, TaskState, ExecutionResult
 from localclaw.security.audit import configure_audit_logger, get_audit_logger
 from localclaw.skills.loader import load_skills_from_dir, register_builtin_skills
 from localclaw.tools.base import Tool, get_tool_registry
 from localclaw.tools.file_tool import register_file_tools
 from localclaw.tools.http_tool import register_http_tools
 from localclaw.tools.shell_tool import register_shell_tools
+from localclaw.tools.clawhub_tool import register_clawhub_tools
 
 
 logger = logging.getLogger(__name__)
@@ -29,17 +30,16 @@ class SystemStatusTool(Tool):
     inputs = {}
     outputs = {"status": "string", "version": "string"}
     
-    async def execute(self, **kwargs) -> dict:
+    async def execute(self, **kwargs) -> ExecutionResult:
         from localclaw import __version__
-        return {
-            "status": "success",
-            "message": "System status",
-            "data": {
+        return ExecutionResult.success(
+            message="System status",
+            data={
                 "status": "running",
                 "version": __version__,
                 "mode": get_settings().mode.value,
             },
-        }
+        )
 
 
 class ListSkillsTool(Tool):
@@ -50,14 +50,26 @@ class ListSkillsTool(Tool):
     inputs = {}
     outputs = {"skills": "list"}
     
-    async def execute(self, **kwargs) -> dict:
+    async def execute(self, **kwargs) -> ExecutionResult:
         from localclaw.skills.registry import get_skill_registry
         skills = get_skill_registry().list_skills()
-        return {
-            "status": "success",
-            "message": f"Found {len(skills)} skills",
-            "data": {"skills": skills},
-        }
+        
+        # Generate a more natural response
+        response = "我是一个智能助手，可以帮助你做以下事情：\n\n"
+        response += "1. 提供信息：\n"
+        response += "   - 查询日期和时间（今天几号？明天星期几？）\n"
+        response += "   - 查询天气信息（今天天气如何？）\n"
+        response += "2. 系统功能：\n"
+        response += "   - 查看系统状态\n"
+        response += "   - 列出所有可用技能\n"
+        response += "3. 其他功能：\n"
+        response += "   - 执行各种工具操作\n"
+        response += "   - 处理用户的各种查询\n"
+        
+        return ExecutionResult.success(
+            message="系统功能介绍",
+            data={"skills": skills, "result": response},
+        )
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -76,12 +88,23 @@ def initialize_system() -> ExecutionEngine:
     
     configure_audit_logger(settings.audit_log)
     
+    # Initialize LLM provider if enabled
+    if settings.llm_enabled:
+        from localclaw.llm.ollama import initialize_ollama, OllamaConfig
+        ollama_config = OllamaConfig(
+            base_url=settings.ollama_base_url or "http://localhost:11434",
+            model="gemma3:4b",
+        )
+        initialize_ollama(ollama_config)
+        logger.info("Ollama LLM provider initialized")
+    
     tool_registry = get_tool_registry()
     tool_registry.register(SystemStatusTool())
     tool_registry.register(ListSkillsTool())
     register_file_tools()
     register_http_tools()
     register_shell_tools()
+    register_clawhub_tools()
     
     register_builtin_skills()
     

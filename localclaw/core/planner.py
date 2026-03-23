@@ -59,6 +59,123 @@ class Planner:
         if intent.intent == "time_now":
             return self._plan_time_now(intent)
         
+        if intent.intent == "get_day_of_week":
+            return self._plan_from_skill("day_of_week", intent.params, intent)
+        if intent.intent == "get_date":
+            return self._plan_from_skill("date", intent.params, intent)
+        if intent.intent == "check_weather" or intent.intent == "get_weather":
+            return self._plan_from_skill("weather", intent.params, intent)
+        if intent.intent == "query_capabilities":
+            return self._plan_from_skill("list_skills", intent.params, intent)
+        if intent.intent == "list_folders":
+            # Get desktop path
+            import os
+            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+            # Create plan to list desktop folders
+            plan = Plan(intent=intent)
+            plan.steps.append(
+                Step(
+                    type=StepType.TOOL_CALL,
+                    name="list_desktop_folders",
+                    tool_name="file_list",
+                    input={"path": desktop_path}
+                )
+            )
+            return plan
+        if intent.intent == "search_skill":
+            # Create plan to search for skills
+            plan = Plan(intent=intent)
+            plan.steps.append(
+                Step(
+                    type=StepType.TOOL_CALL,
+                    name="search_skills",
+                    tool_name="clawhub_search",
+                    input={"query": intent.params.get("skill", "")}
+                )
+            )
+            return plan
+        if intent.intent == "list_files" or intent.intent == "list":
+            # Create plan to list files
+            plan = Plan(intent=intent)
+            plan.steps.append(
+                Step(
+                    type=StepType.TOOL_CALL,
+                    name="list_files",
+                    tool_name="file_list",
+                    input={"path": intent.params.get("directory", "."), "all": intent.params.get("all", False), "long": intent.params.get("long", False)}
+                )
+            )
+            return plan
+        if intent.intent == "create_directory" or intent.intent == "mkdir":
+            # Create plan to create directory
+            plan = Plan(intent=intent)
+            plan.steps.append(
+                Step(
+                    type=StepType.TOOL_CALL,
+                    name="create_directory",
+                    tool_name="file_mkdir",
+                    input={"path": intent.params.get("path", intent.params.get("dir_name", intent.params.get("directory", ""))), "parents": intent.params.get("parents", True)}
+                )
+            )
+            return plan
+        if intent.intent == "append_file" or intent.intent == "fs_append":
+            # Create plan to append file content
+            plan = Plan(intent=intent)
+            plan.steps.append(
+                Step(
+                    type=StepType.TOOL_CALL,
+                    name="append_file",
+                    tool_name="file_append",
+                    input={"path": intent.params.get("path", intent.params.get("file", "")), "content": intent.params.get("content", "")}
+                )
+            )
+            return plan
+        if intent.intent == "delete_file" or intent.intent == "delete":
+            # Create plan to delete file or directory
+            plan = Plan(intent=intent)
+            # Try to get path from different parameter names
+            path = intent.params.get("path", intent.params.get("file", intent.params.get("file_path", "")))
+            # If path is not provided, try to build it from directory and filename
+            if not path:
+                directory = intent.params.get("directory", "")
+                filename = intent.params.get("filename", "")
+                if directory and filename:
+                    import os
+                    path = os.path.join(directory, filename)
+            plan.steps.append(
+                Step(
+                    type=StepType.TOOL_CALL,
+                    name="delete_file",
+                    tool_name="file_delete",
+                    input={"path": path, "recursive": intent.params.get("recursive", True)}
+                )
+            )
+            return plan
+        if intent.intent == "write_file" or intent.intent == "fs.write":
+            # Create plan to write file content
+            plan = Plan(intent=intent)
+            plan.steps.append(
+                Step(
+                    type=StepType.TOOL_CALL,
+                    name="write_file",
+                    tool_name="file_write",
+                    input={"path": intent.params.get("path", ""), "content": intent.params.get("content", ""), "mode": intent.params.get("mode", "write")}
+                )
+            )
+            return plan
+        if intent.intent == "read_file" or intent.intent == "fs.read":
+            # Create plan to read file content
+            plan = Plan(intent=intent)
+            plan.steps.append(
+                Step(
+                    type=StepType.TOOL_CALL,
+                    name="read_file",
+                    tool_name="file_read",
+                    input={"path": intent.params.get("path", intent.params.get("file_path", ""))}
+                )
+            )
+            return plan
+        
         return self._plan_unknown(intent)
     
     def _plan_from_skill(self, skill_name: str, params: Dict[str, Any], intent: Intent) -> Plan:

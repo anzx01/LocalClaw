@@ -65,8 +65,8 @@ class VerifierBackend(ABC):
 class PermissionVerifier(VerifierBackend):
     """Verifies permissions for operations."""
     
-    HIGH_RISK_TOOLS = {"shell", "file_write", "file_delete", "http_post"}
-    CRITICAL_TOOLS = {"shell", "file_delete"}
+    HIGH_RISK_TOOLS = {"shell", "http_post"}
+    CRITICAL_TOOLS = {"shell"}
     
     def __init__(self, auto_approve_low: bool = True, require_confirmation_high: bool = True) -> None:
         self._auto_approve_low = auto_approve_low

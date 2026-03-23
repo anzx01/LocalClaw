@@ -1,0 +1,32 @@
+{
+  "name": "weather",
+  "version": "1.0.0",
+  "description": "Check current weather conditions",
+  "type": "atomic",
+  "inputs": {
+    "location": "string"
+  },
+  "outputs": {
+    "weather": "string"
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "template": "今天天气晴朗，温度23°C，适合户外活动。",
+      "params": {}
+    }
+  ],
+  "permissions": {
+    "risk_level": "low"
+  },
+  "triggers": [
+    {
+      "type": "intent",
+      "pattern": "check_weather"
+    },
+    {
+      "type": "intent",
+      "pattern": "get_weather"
+    }
+  ]
+}

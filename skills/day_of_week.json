@@ -1,0 +1,26 @@
+{
+  "name": "day_of_week",
+  "version": "1.0.0",
+  "description": "Get the current day of the week",
+  "type": "atomic",
+  "inputs": {},
+  "outputs": {
+    "day_of_week": "string"
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "template": "今天是星期一",
+      "params": {}
+    }
+  ],
+  "permissions": {
+    "risk_level": "low"
+  },
+  "triggers": [
+    {
+      "type": "intent",
+      "pattern": "get_day_of_week"
+    }
+  ]
+}

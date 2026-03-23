@@ -12,13 +12,14 @@ from pydantic import BaseModel
 
 from localclaw.config.settings import get_settings
 from localclaw.core.engine import ExecutionEngine, get_engine
-from localclaw.core.models import Message, Task, TaskState
+from localclaw.core.models import Message, Task, TaskState, ExecutionResult
 from localclaw.security.audit import configure_audit_logger
 from localclaw.skills.loader import load_skills_from_dir, register_builtin_skills
 from localclaw.tools.base import Tool, get_tool_registry
 from localclaw.tools.file_tool import register_file_tools
 from localclaw.tools.http_tool import register_http_tools
 from localclaw.tools.shell_tool import register_shell_tools
+from localclaw.tools.clawhub_tool import register_clawhub_tools
 
 
 logger = logging.getLogger(__name__)
@@ -95,17 +96,16 @@ class SystemStatusTool(Tool):
     inputs = {}
     outputs = {"status": "string", "version": "string"}
     
-    async def execute(self, **kwargs) -> dict:
+    async def execute(self, **kwargs) -> ExecutionResult:
         from localclaw import __version__
-        return {
-            "status": "success",
-            "message": "System status",
-            "data": {
+        return ExecutionResult.success(
+            message="System status",
+            data={
                 "status": "running",
                 "version": __version__,
                 "mode": get_settings().mode.value,
             },
-        }
+        )
 
 
 class ListSkillsTool(Tool):
@@ -116,14 +116,26 @@ class ListSkillsTool(Tool):
     inputs = {}
     outputs = {"skills": "list"}
     
-    async def execute(self, **kwargs) -> dict:
+    async def execute(self, **kwargs) -> ExecutionResult:
         from localclaw.skills.registry import get_skill_registry
         skills = get_skill_registry().list_skills()
-        return {
-            "status": "success",
-            "message": f"Found {len(skills)} skills",
-            "data": {"skills": skills},
-        }
+        
+        # Generate a more natural response
+        response = "我是一个智能助手，可以帮助你做以下事情：\n\n"
+        response += "1. 提供信息：\n"
+        response += "   - 查询日期和时间（今天几号？明天星期几？）\n"
+        response += "   - 查询天气信息（今天天气如何？）\n"
+        response += "2. 系统功能：\n"
+        response += "   - 查看系统状态\n"
+        response += "   - 列出所有可用技能\n"
+        response += "3. 其他功能：\n"
+        response += "   - 执行各种工具操作\n"
+        response += "   - 处理用户的各种查询\n"
+        
+        return ExecutionResult.success(
+            message="系统功能介绍",
+            data={"skills": skills, "result": response},
+        )
 
 
 def initialize_system() -> ExecutionEngine:
@@ -133,12 +145,30 @@ def initialize_system() -> ExecutionEngine:
     
     configure_audit_logger(settings.audit_log)
     
+    # Initialize LLM provider if enabled
+    if settings.llm_enabled:
+        logger.info("LLM enabled, initializing Ollama provider")
+        try:
+            from localclaw.llm.ollama import initialize_ollama, OllamaConfig
+            ollama_config = OllamaConfig(
+                base_url=settings.ollama_base_url or "http://localhost:11434",
+                model="gemma3:4b",
+            )
+            logger.info(f"Initializing Ollama with model: {ollama_config.model}")
+            initialize_ollama(ollama_config)
+            logger.info("Ollama LLM provider initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Ollama LLM provider: {e}")
+    else:
+        logger.info("LLM is disabled")
+    
     tool_registry = get_tool_registry()
     tool_registry.register(SystemStatusTool())
     tool_registry.register(ListSkillsTool())
     register_file_tools()
     register_http_tools()
     register_shell_tools()
+    register_clawhub_tools()
     
     register_builtin_skills()
     
@@ -149,8 +179,6 @@ def initialize_system() -> ExecutionEngine:
     from localclaw.core.parser import create_default_parser
     parser = create_default_parser(
         llm_enabled=settings.llm_enabled,
-        llm_model="llama2",
-        llm_base_url=settings.ollama_base_url,
     )
     
     engine = ExecutionEngine(
@@ -187,13 +215,21 @@ def initialize_system() -> ExecutionEngine:
         on_task_complete=on_task_complete,
     )
     
+    # Set the global engine instance
+    from localclaw.core.engine import _engine
+    import localclaw.core.engine as engine_module
+    engine_module._engine = engine
+    
     return engine
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    initialize_system()
+    # Check if system is already initialized
+    from localclaw.core.engine import _engine
+    if _engine is None:
+        initialize_system()
     logger.info("LocalClaw web server started")
     yield
     logger.info("LocalClaw web server stopped")
@@ -361,9 +397,14 @@ def get_web_ui_html() -> str:
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
-        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
         .header { text-align: center; margin-bottom: 20px; }
         .header h1 { color: #333; }
+        .tabs { display: flex; margin-bottom: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .tab { flex: 1; padding: 15px; text-align: center; cursor: pointer; border-bottom: 3px solid transparent; }
+        .tab.active { border-bottom-color: #007bff; color: #007bff; font-weight: bold; }
+        .tab-content { display: none; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 20px; }
+        .tab-content.active { display: block; }
         .chat-container { background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
         .messages { height: 400px; overflow-y: auto; padding: 20px; border-bottom: 1px solid #eee; }
         .message { margin-bottom: 15px; padding: 10px 15px; border-radius: 8px; }
@@ -379,120 +420,272 @@ def get_web_ui_html() -> str:
         .skill-list { list-style: none; }
         .skill-list li { padding: 5px 0; border-bottom: 1px solid #eee; }
         .status { font-size: 12px; color: #666; margin-top: 10px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .task { border: 1px solid #eee; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+        .task h4 { margin-bottom: 10px; color: #333; }
+        .task p { margin-bottom: 5px; font-size: 14px; }
+        .task-status { display: inline-block; padding: 3px 8px; border-radius: 10px; font-size: 12px; font-weight: bold; }
+        .task-status.completed { background-color: #d4edda; color: #155724; }
+        .task-status.failed { background-color: #f8d7da; color: #721c24; }
+        .task-status.running { background-color: #d1ecf1; color: #0c5460; }
+        .skill-card { border: 1px solid #eee; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+        .skill-card h4 { margin-bottom: 10px; color: #333; }
+        .skill-card p { margin-bottom: 5px; font-size: 14px; }
+        .skill-actions { margin-top: 10px; display: flex; gap: 10px; }
+        .skill-actions button { padding: 5px 10px; font-size: 12px; border: none; border-radius: 4px; cursor: pointer; }
+        .skill-actions button.install { background: #28a745; color: white; }
+        .skill-actions button.uninstall { background: #dc3545; color: white; }
+        .skill-actions button:hover { opacity: 0.8; }
     </style>
 </head>
 <body>
-    <div class="container" x-data="app()" x-init="init()">
+    <div class="container" x-data="app">
         <div class="header">
             <h1>🦀 LocalClaw</h1>
             <p class="status">Mode: <span x-text="config.mode || 'loading...'"></span></p>
         </div>
         
-        <div class="chat-container">
-            <div class="messages" x-ref="messages">
-                <template x-for="msg in messages" :key="msg.id">
-                    <div class="message" :class="msg.type" x-text="msg.content"></div>
-                </template>
-            </div>
-            
-            <div class="input-area">
-                <input type="text" x-model="input" @keyup.enter="sendMessage()" placeholder="Type a message or /skill_name params...">
-                <button @click="sendMessage()" :disabled="loading">Send</button>
+        <div class="tabs">
+            <div class="tab active" @click="activeTab = 'chat'">Chat</div>
+            <div class="tab" @click="activeTab = 'tasks'">Tasks</div>
+            <div class="tab" @click="activeTab = 'skills'">Skills</div>
+        </div>
+        
+        <div class="tab-content active" x-show="activeTab === 'chat'">
+            <div class="chat-container">
+                <div class="messages" x-ref="messages">
+                    <template x-for="msg in messages" :key="msg.id">
+                        <div class="message" :class="msg.type" x-text="msg.content"></div>
+                    </template>
+                </div>
+                
+                <div class="input-area">
+                    <input type="text" x-model="input" @keyup.enter="sendMessage()" placeholder="Type a message or /skill_name params...">
+                    <button @click="sendMessage()" :disabled="loading">Send</button>
+                </div>
             </div>
         </div>
         
-        <div class="sidebar">
-            <h3>Available Skills</h3>
-            <ul class="skill-list">
-                <template x-for="skill in skills" :key="skill.name">
-                    <li x-text="skill.name + ' - ' + skill.description"></li>
+        <div class="tab-content" x-show="activeTab === 'tasks'">
+            <h2>Task History</h2>
+            <div class="task-list">
+                <template x-for="task in tasks" :key="task.id">
+                    <div class="task">
+                        <h4>Task {{ task.id }}</h4>
+                        <p><strong>Status:</strong> <span class="task-status" :class="task.state.toLowerCase()">{{ task.state }}</span></p>
+                        <p><strong>Created:</strong> <span x-text="new Date(task.created_at).toLocaleString()"></span></p>
+                        <p><strong>Completed:</strong> <span x-text="task.completed_at ? new Date(task.completed_at).toLocaleString() : 'N/A'"></span></p>
+                        <p><strong>Result:</strong> <span x-text="JSON.stringify(task.result)"></span></p>
+                        <p><strong>Error:</strong> <span x-text="task.error || 'N/A'"></span></p>
+                    </div>
                 </template>
-            </ul>
+            </div>
+        </div>
+        
+        <div class="tab-content" x-show="activeTab === 'skills'">
+            <h2>Skill Management</h2>
+            <div class="grid">
+                <div>
+                    <h3>Installed Skills</h3>
+                    <div class="skill-list">
+                        <template x-for="skill in skills" :key="skill.name">
+                            <div class="skill-card">
+                                <h4>{{ skill.name }} v{{ skill.version }}</h4>
+                                <p><strong>Description:</strong> {{ skill.description }}</p>
+                                <p><strong>Type:</strong> {{ skill.type }}</p>
+                                <p><strong>State:</strong> {{ skill.state }}</p>
+                                <div class="skill-actions">
+                                    <button class="uninstall" @click="uninstallSkill(skill.name)">Uninstall</button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+                <div>
+                    <h3>Available Skills</h3>
+                    <div class="skill-list">
+                        <template x-for="skill in availableSkills" :key="skill.id">
+                            <div class="skill-card">
+                                <h4>{{ skill.name }} v{{ skill.version }}</h4>
+                                <p><strong>Description:</strong> {{ skill.description }}</p>
+                                <p><strong>Author:</strong> {{ skill.author }}</p>
+                                <div class="skill-actions">
+                                    <button class="install" @click="installSkill(skill.id)">Install</button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
     
     <script>
-        function app() {
-            return {
-                messages: [],
-                input: '',
-                loading: false,
-                skills: [],
-                config: {},
+        const app = {
+            activeTab: 'chat',
+            messages: [],
+            input: '',
+            loading: false,
+            skills: [],
+            availableSkills: [],
+            tasks: [],
+            config: {},
+            
+            async init() {
+                await this.loadConfig();
+                await this.loadSkills();
+                await this.loadTasks();
+                await this.loadAvailableSkills();
                 
-                async init() {
-                    await this.loadConfig();
-                    await this.loadSkills();
-                },
+                // Refresh data every 5 seconds
+                setInterval(() => {
+                    this.loadSkills();
+                    this.loadTasks();
+                    this.loadAvailableSkills();
+                }, 5000);
+            },
+            
+            async loadConfig() {
+                try {
+                    const response = await axios.get('/api/config');
+                    this.config = response.data;
+                } catch (e) {
+                    console.error('Failed to load config:', e);
+                }
+            },
+            
+            async loadSkills() {
+                try {
+                    const response = await axios.get('/api/skills');
+                    this.skills = response.data;
+                } catch (e) {
+                    console.error('Failed to load skills:', e);
+                }
+            },
+            
+            async loadTasks() {
+                try {
+                    const response = await axios.get('/api/tasks');
+                    this.tasks = response.data;
+                } catch (e) {
+                    console.error('Failed to load tasks:', e);
+                }
+            },
+            
+            async loadAvailableSkills() {
+                try {
+                    // This is a mock for now, in real implementation this would call ClawHub API
+                    this.availableSkills = [
+                        { id: 'weather', name: 'Weather', version: '1.0.0', description: 'Get weather information', author: 'LocalClaw Team' },
+                        { id: 'date', name: 'Date', version: '1.0.0', description: 'Get current date and time', author: 'LocalClaw Team' },
+                        { id: 'calculator', name: 'Calculator', version: '1.0.0', description: 'Perform calculations', author: 'LocalClaw Team' },
+                        { id: 'translator', name: 'Translator', version: '1.0.0', description: 'Translate text', author: 'LocalClaw Team' }
+                    ];
+                } catch (e) {
+                    console.error('Failed to load available skills:', e);
+                }
+            },
+            
+            async sendMessage() {
+                if (!this.input.trim() || this.loading) return;
                 
-                async loadConfig() {
-                    try {
-                        const response = await axios.get('/api/config');
-                        this.config = response.data;
-                    } catch (e) {
-                        console.error('Failed to load config:', e);
-                    }
-                },
+                const content = this.input.trim();
+                this.input = '';
                 
-                async loadSkills() {
-                    try {
-                        const response = await axios.get('/api/skills');
-                        this.skills = response.data;
-                    } catch (e) {
-                        console.error('Failed to load skills:', e);
-                    }
-                },
+                this.messages.push({
+                    id: Date.now(),
+                    type: 'user',
+                    content: content
+                });
                 
-                async sendMessage() {
-                    if (!this.input.trim() || this.loading) return;
-                    
-                    const content = this.input.trim();
-                    this.input = '';
-                    
-                    this.messages.push({
-                        id: Date.now(),
-                        type: 'user',
-                        content: content
+                this.loading = true;
+                
+                try {
+                    const response = await axios.post('/api/message', {
+                        content: content,
+                        user_id: 'web',
+                        channel: 'web'
                     });
                     
-                    this.loading = true;
+                    const data = response.data;
                     
-                    try {
-                        const response = await axios.post('/api/message', {
-                            content: content,
-                            user_id: 'web',
-                            channel: 'web'
-                        });
-                        
-                        const data = response.data;
-                        
-                        let responseText = data.message || 'Done';
-                        if (data.data && data.data.result) {
+                    let responseText = data.message || 'Done';
+                    if (data.data) {
+                        // Check if data contains step results
+                        const stepIds = Object.keys(data.data);
+                        if (stepIds.length > 0) {
+                            // Get the first step result
+                            const firstStepId = stepIds[0];
+                            const stepResult = data.data[firstStepId];
+                            if (stepResult && stepResult.result) {
+                                responseText = stepResult.result;
+                            } else if (stepResult && stepResult.message) {
+                                responseText = stepResult.message;
+                            } else if (stepResult && stepResult.files && stepResult.directories) {
+                                // Handle file listing result
+                                responseText = `文件列表:\n路径: ${stepResult.path}\n\n文件:\n${stepResult.files.map(file => `- ${file}`).join('\n')}\n\n目录:\n${stepResult.directories.map(dir => `- ${dir}`).join('\n')}`;
+                            }
+                        } else if (data.data.result) {
+                            // Handle direct result
                             responseText = data.data.result;
-                        } else if (data.data && data.data.message) {
+                        } else if (data.data.message) {
+                            // Handle direct message
                             responseText = data.data.message;
                         }
-                        
-                        this.messages.push({
-                            id: Date.now() + 1,
-                            type: data.status === 'failed' ? 'error' : 'system',
-                            content: responseText
-                        });
-                    } catch (e) {
-                        this.messages.push({
-                            id: Date.now() + 1,
-                            type: 'error',
-                            content: 'Error: ' + (e.response?.data?.detail || e.message)
-                        });
-                    } finally {
-                        this.loading = false;
-                        this.$nextTick(() => {
-                            this.$refs.messages.scrollTop = this.$refs.messages.scrollHeight;
-                        });
                     }
+                    
+                    this.messages.push({
+                        id: Date.now() + 1,
+                        type: data.status === 'failed' ? 'error' : 'system',
+                        content: responseText
+                    });
+                } catch (e) {
+                    this.messages.push({
+                        id: Date.now() + 1,
+                        type: 'error',
+                        content: 'Error: ' + (e.response?.data?.detail || e.message)
+                    });
+                } finally {
+                    this.loading = false;
+                    setTimeout(() => {
+                        const messagesElement = document.querySelector('.messages');
+                        if (messagesElement) {
+                            messagesElement.scrollTop = messagesElement.scrollHeight;
+                        }
+                    }, 100);
+                }
+            },
+            
+            async installSkill(skillId) {
+                try {
+                    // In real implementation, this would call ClawHub API to install the skill
+                    alert(`Installing skill ${skillId}...`);
+                    // Simulate installation
+                    setTimeout(() => {
+                        this.loadSkills();
+                        alert(`Skill ${skillId} installed successfully!`);
+                    }, 1000);
+                } catch (e) {
+                    console.error('Failed to install skill:', e);
+                    alert('Failed to install skill: ' + (e.message || 'Unknown error'));
+                }
+            },
+            
+            async uninstallSkill(skillName) {
+                try {
+                    // In real implementation, this would call ClawHub API to uninstall the skill
+                    alert(`Uninstalling skill ${skillName}...`);
+                    // Simulate uninstallation
+                    setTimeout(() => {
+                        this.loadSkills();
+                        alert(`Skill ${skillName} uninstalled successfully!`);
+                    }, 1000);
+                } catch (e) {
+                    console.error('Failed to uninstall skill:', e);
+                    alert('Failed to uninstall skill: ' + (e.message || 'Unknown error'));
                 }
             }
-        }
+        };
     </script>
     <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
 </body>

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from localclaw.core.models import Intent, Message
+from localclaw.llm.provider import get_llm_provider
 
 
 @dataclass
@@ -128,31 +129,14 @@ class DSLParser(ParserBackend):
 class LLMParser(ParserBackend):
     """Optional LLM-based parser for natural language understanding."""
     
-    def __init__(self, model: str = "llama2", base_url: Optional[str] = None) -> None:
-        self._model = model
-        self._base_url = base_url
-        self._client = None
-    
-    def _init_client(self) -> None:
-        """Initialize the LLM client lazily."""
-        if self._client is not None:
-            return
-        
-        try:
-            import ollama
-            self._client = ollama.Client(host=self._base_url) if self._base_url else ollama.Client()
-        except ImportError:
-            raise RuntimeError("ollama package not installed. Install with: pip install ollama")
+    def __init__(self) -> None:
+        pass
     
     async def parse(self, message: Message) -> Optional[Intent]:
         """Parse using LLM. Returns None if LLM is not available."""
-        self._init_client()
-        
-        if self._client is None:
-            return None
-        
         try:
-            import asyncio
+            llm_provider = get_llm_provider()
+            print(f"LLM provider: {llm_provider.__class__.__name__}")
             
             prompt = f"""Analyze the following user message and extract the intent and parameters.
 Return a JSON object with:
@@ -163,40 +147,49 @@ User message: {message.content}
 
 JSON response:"""
             
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self._client.chat(
-                    model=self._model,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-            )
+            print(f"Generating response with prompt: {prompt}")
+            response = await llm_provider.generate(prompt)
+            print(f"Response content: {response.content}")
             
             import json
-            content = response.get("message", {}).get("content", "{}")
+            content = response.content.strip()
+            print(f"Stripped content: {content}")
+            # Remove code fences if present
+            if content.startswith('```json') and '```' in content:
+                content = content.split('```json')[1].split('```')[0].strip()
+                print(f"Content after removing code fences: {content}")
             result = json.loads(content)
+            print(f"Parsed result: {result}")
+            
+            # Ensure params is a dictionary
+            params = result.get("params", {})
+            if not isinstance(params, dict):
+                params = {}
             
             return Intent(
                 intent=result.get("intent", "unknown"),
-                params=result.get("params", {}),
+                params=params,
                 confidence=0.8,
                 source="llm",
                 raw_message=message.content,
             )
-        except Exception:
+        except Exception as e:
+            print(f"LLM parsing error: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
 
 class Parser:
     """Main parser combining multiple backends."""
     
-    def __init__(self, llm_enabled: bool = False, llm_model: str = "llama2", llm_base_url: Optional[str] = None) -> None:
+    def __init__(self, llm_enabled: bool = False) -> None:
         self._rule_parser = RuleParser()
         self._dsl_parser = DSLParser()
         self._llm_parser: Optional[LLMParser] = None
         
         if llm_enabled:
-            self._llm_parser = LLMParser(model=llm_model, base_url=llm_base_url)
+            self._llm_parser = LLMParser()
         
         self._default_intent = "unknown"
     
@@ -243,9 +236,9 @@ class Parser:
         )
 
 
-def create_default_parser() -> Parser:
+def create_default_parser(llm_enabled: bool = False) -> Parser:
     """Create a parser with default rules."""
-    parser = Parser()
+    parser = Parser(llm_enabled=llm_enabled)
     
     default_rules = [
         ParseRule(

@@ -26,7 +26,7 @@ from localclaw.core.models import (
 from localclaw.core.parser import Parser, create_default_parser
 from localclaw.core.planner import Planner, create_default_planner
 from localclaw.core.verifier import VerificationDecision, Verifier, create_default_verifier
-from localclaw.skills.registry import SkillRegistry, get_skill_registry
+from localclaw.skills.registry.registry import SkillRegistry, get_skill_registry
 from localclaw.tools.base import ToolRegistry, get_tool_registry
 
 
@@ -54,7 +54,7 @@ class ExecutionEngine:
         skill_registry: Optional[SkillRegistry] = None,
     ) -> None:
         self._settings = settings or get_settings()
-        self._parser = parser or create_default_parser()
+        self._parser = parser or create_default_parser(llm_enabled=self._settings.llm_enabled)
         self._planner = planner or create_default_planner()
         self._verifier = verifier or create_default_verifier()
         self._tool_registry = tool_registry or get_tool_registry()

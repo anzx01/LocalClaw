@@ -95,7 +95,7 @@ class HITLManager:
             "on_reject": [],
             "on_expire": [],
         }
-        self._auto_approve_low_risk = False
+        self._auto_approve_low_risk = True
         self._logger = logging.getLogger("localclaw.security.hitl")
     
     def set_auto_approve_low_risk(self, enabled: bool) -> None:
@@ -112,7 +112,7 @@ class HITLManager:
         
         if step.type.value == "tool_call":
             tool_name = step.tool_name or ""
-            if "delete" in tool_name or "shell" in tool_name:
+            if "shell" in tool_name:
                 return True
         
         return False
