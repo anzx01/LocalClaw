@@ -1,0 +1,27 @@
+{
+  "name": "hello",
+  "version": "1.0.0",
+  "description": "Say hello to someone",
+  "type": "atomic",
+  "inputs": {
+    "name": "string"
+  },
+  "outputs": {
+    "message": "string"
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "template": "Hello, {{name}}! Welcome to LocalClaw."
+    }
+  ],
+  "permissions": {
+    "risk_level": "low"
+  },
+  "triggers": [
+    {
+      "type": "pattern",
+      "pattern": "^hello\\s+(?P<name>\\w+)$"
+    }
+  ]
+}

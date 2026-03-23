@@ -1,0 +1,13 @@
+{
+  "name": "assistant",
+  "description": "General assistant agent",
+  "version": "1.0.0",
+  "skills": ["hello", "echo"],
+  "tools": ["file_read", "file_write", "http_get"],
+  "max_risk_level": "medium",
+  "enabled": true,
+  "metadata": {
+    "author": "LocalClaw",
+    "tags": ["general", "assistant"]
+  }
+}
