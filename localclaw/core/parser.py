@@ -143,13 +143,22 @@ class LLMParser(ParserBackend):
 - file_list: 列出目录内容，参数: path (Windows路径如 "D:/", "C:/Users/用户名/Desktop", "桌面"表示桌面)
 - file_read: 读取文件，参数: path
 - file_write: 写入文件，参数: path, content
+- file_delete: 删除文件，参数: path
+- file_mkdir: 创建目录，参数: path
 - shell: 执行命令，参数: command
 - http_get: HTTP请求，参数: url
+- get_weather: 获取天气，参数: location (城市名，如"北京"、"Beijing")
+- web_search: 网络搜索，参数: query (搜索关键词)
 
 用户请求: {message.content}
 
 返回JSON格式:
 {{"tool": "工具名", "params": {{"参数": "值"}}}}
+
+注意：
+- 天气相关的问题（如"冷不"、"热不"、"下雨吗"、"天气"）使用 get_weather
+- 需要搜索网络信息时使用 web_search
+- 文件操作使用 file_* 系列工具
 
 JSON:"""
             
@@ -174,8 +183,16 @@ JSON:"""
                 params = {}
             
             tool_name = result.get("tool", "")
+            
+            if tool_name == "get_weather":
+                intent = "check_weather"
+            elif tool_name == "web_search":
+                intent = "web_search"
+            else:
+                intent = f"tool.{tool_name}" if tool_name else "unknown"
+            
             return Intent(
-                intent=f"tool.{tool_name}" if tool_name else "unknown",
+                intent=intent,
                 params=params,
                 confidence=0.9,
                 source="llm",
@@ -218,15 +235,11 @@ class Parser:
         
         Order of parsing:
         1. DSL commands (/skill_name params)
-        2. Rule-based matching
-        3. LLM parsing (if enabled)
+        2. LLM parsing (if enabled)
+        3. Rule-based matching
         4. Default intent
         """
         intent = await self._dsl_parser.parse(message)
-        if intent:
-            return intent
-        
-        intent = await self._rule_parser.parse(message)
         if intent:
             return intent
         
@@ -234,6 +247,10 @@ class Parser:
             intent = await self._llm_parser.parse(message)
             if intent:
                 return intent
+        
+        intent = await self._rule_parser.parse(message)
+        if intent:
+            return intent
         
         return Intent(
             intent=self._default_intent,
@@ -314,6 +331,21 @@ def create_default_parser(llm_enabled: bool = False) -> Parser:
         ParseRule(
             pattern=r'^what.*?(?:date|day|time)',
             intent="date_query",
+            priority=15,
+        ),
+        ParseRule(
+            pattern=r'^(?:今天|明天|后天).*?(?:天气|下雨|下雪|晴)',
+            intent="check_weather",
+            priority=15,
+        ),
+        ParseRule(
+            pattern=r'^(?:天气|下雨|下雪|晴)',
+            intent="check_weather",
+            priority=15,
+        ),
+        ParseRule(
+            pattern=r'^.*?(?:冷不|热不|冷吗|热吗|温度)',
+            intent="check_weather",
             priority=15,
         ),
     ]

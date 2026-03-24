@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -63,7 +64,7 @@ class ExecutionEngine:
         self._planner.set_skill_registry(self._skill_registry)
         
         self._tasks: Dict[str, Task] = {}
-        self._task_history: List[Task] = []
+        self._task_history: deque = deque(maxlen=1000)
         self._logger = logging.getLogger("localclaw.engine")
         
         self._on_step_start: Optional[Callable[[Step, Task], None]] = None

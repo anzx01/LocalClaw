@@ -1,19 +1,33 @@
 {
   "name": "weather",
-  "version": "1.0.0",
-  "description": "Check current weather conditions",
-  "type": "atomic",
+  "version": "2.0.0",
+  "description": "Get current weather and forecasts via wttr.in API. Use when user asks about weather, temperature, or forecasts for any location.",
+  "type": "workflow",
   "inputs": {
-    "location": "string"
+    "location": "string",
+    "format": "string",
+    "days": "integer"
   },
   "outputs": {
-    "weather": "string"
+    "weather": "string",
+    "location": "string",
+    "temperature": "string",
+    "condition": "string"
   },
   "actions": [
     {
+      "type": "tool_call",
+      "name": "get_weather",
+      "tool": "http_get",
+      "params": {
+        "url": "https://wttr.in/${location}?format=j1"
+      },
+      "timeout": 10
+    },
+    {
       "type": "transform",
-      "template": "今天天气晴朗，温度23°C，适合户外活动。",
-      "params": {}
+      "name": "format_weather",
+      "template": "天气查询结果：${weather_result}"
     }
   ],
   "permissions": {
@@ -27,6 +41,18 @@
     {
       "type": "intent",
       "pattern": "get_weather"
+    },
+    {
+      "type": "pattern",
+      "pattern": "^(?:今天|明天|后天).*?(?:天气|下雨|下雪|晴)"
+    },
+    {
+      "type": "pattern",
+      "pattern": "^(?:天气|下雨|下雪|晴)"
+    },
+    {
+      "type": "pattern",
+      "pattern": "^(?:what|how).*?(?:weather|temperature)"
     }
   ]
 }

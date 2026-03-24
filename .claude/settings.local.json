@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find . -iname *openclaw* -o -iname *open_claw*)",
+      "Bash(find g:/aiprj/openclaw -maxdepth 2 -name *.ts -o -name *.js -o -name *.py)"
+    ]
+  }
+}

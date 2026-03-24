@@ -182,9 +182,15 @@ def initialize_system() -> ExecutionEngine:
         llm_enabled=settings.llm_enabled,
     )
     
+    from localclaw.core.verifier import create_default_verifier
+    verifier = create_default_verifier()
+    verifier.set_auto_approve_low(True)
+    verifier.set_require_confirmation_high(False)
+
     engine = ExecutionEngine(
         settings=settings,
         parser=parser,
+        verifier=verifier,
     )
     
     def on_step_start(step, task):
@@ -348,6 +354,30 @@ def create_app() -> FastAPI:
         
         registry = get_tool_registry()
         return registry.get_all_info()
+    
+    @app.get("/api/clawhub/search")
+    async def clawhub_search(query: str = ""):
+        registry = get_tool_registry()
+        result = await registry.execute("clawhub_search", query=query)
+        if result.status == "success":
+            return {"skills": result.data.get("skills", [])}
+        return {"skills": [], "error": result.message}
+
+    @app.post("/api/clawhub/install")
+    async def clawhub_install(skill_id: str):
+        registry = get_tool_registry()
+        result = await registry.execute("clawhub_install", skill_id=skill_id)
+        if result.status == "success":
+            return {"installed": True, "skill_path": result.data.get("skill_path", "")}
+        return {"installed": False, "error": result.message}
+
+    @app.post("/api/clawhub/remove")
+    async def clawhub_remove(skill_id: str):
+        registry = get_tool_registry()
+        result = await registry.execute("clawhub_remove", skill_id=skill_id)
+        if result.status == "success":
+            return {"removed": True}
+        return {"removed": False, "error": result.message}
     
     @app.get("/api/config")
     async def get_config():
@@ -515,15 +545,26 @@ def get_web_ui_html() -> str:
                     </div>
                 </div>
                 <div>
-                    <h3>Available Skills</h3>
+                    <h3>ClawHub Skills</h3>
+                    <div class="search-box" style="margin-bottom: 15px;">
+                        <input type="text" x-model="searchQuery" placeholder="Search skills..." style="width: 70%; padding: 8px;">
+                        <button @click="searchClawHub(searchQuery)" style="padding: 8px 15px; margin-left: 5px;">Search</button>
+                    </div>
                     <div class="skill-list">
                         <template x-for="skill in availableSkills" :key="skill.id">
                             <div class="skill-card">
                                 <h4>{{ skill.name }} v{{ skill.version }}</h4>
                                 <p><strong>Description:</strong> {{ skill.description }}</p>
-                                <p><strong>Author:</strong> {{ skill.author }}</p>
+                                <p><strong>Author:</strong> {{ skill.author || 'Unknown' }}</p>
                                 <div class="skill-actions">
-                                    <button class="install" @click="installSkill(skill.id)">Install</button>
+                                    <template x-if="isSkillInstalled(skill.id)">
+                                        <button class="uninstall" @click="uninstallSkill(skill.id)">Uninstall</button>
+                                    </template>
+                                    <template x-if="!isSkillInstalled(skill.id)">
+                                        <button class="install" @click="installSkill(skill.id)" :disabled="installing === skill.id">
+                                            <span x-text="installing === skill.id ? 'Installing...' : 'Install'"></span>
+                                        </button>
+                                    </template>
                                 </div>
                             </div>
                         </template>
@@ -533,6 +574,12 @@ def get_web_ui_html() -> str:
         </div>
     </div>
     <script>
+        const _FALLBACK_SKILLS = [
+            { id: 'weather', name: 'Weather', version: '2.0.0', description: 'Get weather information from wttr.in', author: 'LocalClaw Team' },
+            { id: 'web_search', name: 'Web Search', version: '1.0.0', description: 'Search the web using DuckDuckGo', author: 'LocalClaw Team' },
+            { id: 'fs', name: 'File System', version: '2.0.0', description: 'File system operations', author: 'LocalClaw Team' }
+        ];
+
         window.app = function() {
             return {
                 activeTab: 'chat',
@@ -543,17 +590,15 @@ def get_web_ui_html() -> str:
                 availableSkills: [],
                 tasks: [],
                 config: {},
+                searchQuery: '',
+                installing: null,
                 
                 async init() {
                     await this.loadConfig();
-                    await this.loadSkills();
-                    await this.loadTasks();
-                    await this.loadAvailableSkills();
-                    
+                    await Promise.all([this.loadSkills(), this.loadTasks(), this.searchClawHub('')]);
+
                     setInterval(() => {
-                        this.loadSkills();
-                        this.loadTasks();
-                        this.loadAvailableSkills();
+                        Promise.all([this.loadSkills(), this.loadTasks()]);
                     }, 5000);
                 },
                 
@@ -584,17 +629,21 @@ def get_web_ui_html() -> str:
                     }
                 },
                 
-                async loadAvailableSkills() {
+                async searchClawHub(query) {
                     try {
-                        this.availableSkills = [
-                            { id: 'weather', name: 'Weather', version: '1.0.0', description: 'Get weather information', author: 'LocalClaw Team' },
-                            { id: 'date', name: 'Date', version: '1.0.0', description: 'Get current date and time', author: 'LocalClaw Team' },
-                            { id: 'calculator', name: 'Calculator', version: '1.0.0', description: 'Perform calculations', author: 'LocalClaw Team' },
-                            { id: 'translator', name: 'Translator', version: '1.0.0', description: 'Translate text', author: 'LocalClaw Team' }
-                        ];
+                        const response = await axios.get('/api/clawhub/search', { params: { query: query || '' } });
+                        this.availableSkills = response.data.skills || [];
+                        if (this.availableSkills.length === 0) {
+                            this.availableSkills = _FALLBACK_SKILLS;
+                        }
                     } catch (e) {
-                        console.error('Failed to load available skills:', e);
+                        console.error('Failed to search ClawHub:', e);
+                        this.availableSkills = _FALLBACK_SKILLS;
                     }
+                },
+                
+                isSkillInstalled(skillId) {
+                    return this.skills.some(s => s.name.toLowerCase() === skillId.toLowerCase());
                 },
                 
                 async sendMessage() {
@@ -626,12 +675,42 @@ def get_web_ui_html() -> str:
                             if (stepIds.length > 0) {
                                 const firstStepId = stepIds[0];
                                 const stepResult = data.data[firstStepId];
-                                if (stepResult && stepResult.result) {
+                                let weatherData = stepResult.body || stepResult.result;
+                                if (weatherData && typeof weatherData === 'object' && weatherData.current_condition) {
+                                    const weather = weatherData;
+                                    const current = weather.current_condition[0];
+                                    const location = weather.nearest_area[0];
+                                    responseText = '🌍 位置: ' + (location.areaName[0].value || '未知') + ', ' + (location.country[0].value || '') + '\\n';
+                                    responseText += '🌡️ 温度: ' + current.temp_C + '°C (体感 ' + current.FeelsLikeC + '°C)\\n';
+                                    responseText += '☁️ 天气: ' + current.weatherDesc[0].value + '\\n';
+                                    responseText += '💨 风速: ' + current.windspeedKmph + ' km/h\\n';
+                                    responseText += '💧 湿度: ' + current.humidity + '%';
+                                    if (weather.weather && weather.weather.length > 1) {
+                                        const tomorrow = weather.weather[1];
+                                        responseText += '\\n\\n📅 明天预报:\\n';
+                                        responseText += '🌡️ 温度: ' + tomorrow.mintempC + '°C ~ ' + tomorrow.maxtempC + '°C\\n';
+                                        responseText += '☁️ 天气: ' + tomorrow.hourly[4].weatherDesc[0].value;
+                                    }
+                                } else if (stepResult && stepResult.result) {
                                     responseText = stepResult.result;
                                 } else if (stepResult && stepResult.message) {
                                     responseText = stepResult.message;
                                 } else if (stepResult && stepResult.files && stepResult.directories) {
-                                    responseText = 'File list: ' + stepResult.path;
+                                    let fileList = '📁 目录: ' + stepResult.path + '\\n\\n';
+                                    if (stepResult.directories && stepResult.directories.length > 0) {
+                                        fileList += '📂 目录:\\n';
+                                        stepResult.directories.forEach(dir => {
+                                            fileList += '  📁 ' + dir + '\\n';
+                                        });
+                                        fileList += '\\n';
+                                    }
+                                    if (stepResult.files && stepResult.files.length > 0) {
+                                        fileList += '📄 文件:\\n';
+                                        stepResult.files.forEach(file => {
+                                            fileList += '  📄 ' + file + '\\n';
+                                        });
+                                    }
+                                    responseText = fileList;
                                 }
                             } else if (data.data.result) {
                                 responseText = data.data.result;
@@ -663,28 +742,36 @@ def get_web_ui_html() -> str:
                 },
                 
                 async installSkill(skillId) {
+                    if (this.installing === skillId) return;
+                    this.installing = skillId;
                     try {
-                        alert('Installing skill ' + skillId + '...');
-                        setTimeout(() => {
-                            this.loadSkills();
+                        const response = await axios.post('/api/clawhub/install?skill_id=' + encodeURIComponent(skillId));
+                        if (response.data.installed) {
                             alert('Skill ' + skillId + ' installed successfully!');
-                        }, 1000);
+                            await this.loadSkills();
+                        } else {
+                            alert('Failed to install skill: ' + (response.data.error || 'Unknown error'));
+                        }
                     } catch (e) {
                         console.error('Failed to install skill:', e);
-                        alert('Failed to install skill: ' + (e.message || 'Unknown error'));
+                        alert('Failed to install skill: ' + (e.response?.data?.error || e.message || 'Unknown error'));
+                    } finally {
+                        this.installing = null;
                     }
                 },
                 
                 async uninstallSkill(skillName) {
                     try {
-                        alert('Uninstalling skill ' + skillName + '...');
-                        setTimeout(() => {
-                            this.loadSkills();
+                        const response = await axios.post('/api/clawhub/remove?skill_id=' + encodeURIComponent(skillName));
+                        if (response.data.removed) {
                             alert('Skill ' + skillName + ' uninstalled successfully!');
-                        }, 1000);
+                            await this.loadSkills();
+                        } else {
+                            alert('Failed to uninstall skill: ' + (response.data.error || 'Unknown error'));
+                        }
                     } catch (e) {
                         console.error('Failed to uninstall skill:', e);
-                        alert('Failed to uninstall skill: ' + (e.message || 'Unknown error'));
+                        alert('Failed to uninstall skill: ' + (e.response?.data?.error || e.message || 'Unknown error'));
                     }
                 }
             };

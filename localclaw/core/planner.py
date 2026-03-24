@@ -71,7 +71,18 @@ class Planner:
         if intent.intent == "get_date":
             return self._plan_from_skill("date", intent.params, intent)
         if intent.intent == "check_weather" or intent.intent == "get_weather":
-            return self._plan_from_skill("weather", intent.params, intent)
+            location = intent.params.get("location", "Beijing")
+            plan = Plan(intent=intent)
+            plan.steps.append(
+                Step(
+                    type=StepType.TOOL_CALL,
+                    name="get_weather",
+                    tool_name="http_get",
+                    input={"url": f"https://wttr.in/{location}?format=j1"},
+                    timeout=10.0,
+                )
+            )
+            return plan
         if intent.intent == "query_capabilities":
             return self._plan_from_skill("list_skills", intent.params, intent)
         if intent.intent == "list_folders":
