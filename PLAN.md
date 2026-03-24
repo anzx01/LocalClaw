@@ -4,6 +4,8 @@
 
 LocalClaw 是一个兼容 OpenClaw 的**本地优先 Agent Runtime 系统**，核心目标是构建一个依赖本地 LLM 也能完整运行的 Agent 操作系统。
 
+- 架构参考：`OPENCLAW_LOCAL_REFERENCE.md`
+
 - 
 - **技术栈**：Python（生态丰富，LLM 库支持最佳，开发效率高）
 - **首选渠道**：Web UI（可视化验证，演示友好）
