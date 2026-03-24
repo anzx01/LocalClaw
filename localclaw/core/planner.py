@@ -1,17 +1,24 @@
 """Planner module for generating execution plans."""
 
+import json
+import logging
 from typing import Any, Dict, List, Optional
 
 from localclaw.core.models import (
     Context,
     ErrorPolicy,
     Intent,
+    Message,
     Plan,
     RetryPolicy,
     Step,
     StepType,
 )
+from localclaw.llm.provider import get_llm_provider
 from localclaw.skills.base import SkillState
+
+
+logger = logging.getLogger(__name__)
 
 
 class Planner:
@@ -28,6 +35,159 @@ class Planner:
     def register_intent_handler(self, intent: str, handler: callable) -> None:
         """Register a handler for a specific intent."""
         self._intent_handlers[intent] = handler
+
+    def _build_skill_catalog(self) -> str:
+        """Build a compact list of model-invocable skills for the planner prompt."""
+        if self._skill_registry is None:
+            return "- No external skills are currently available for model invocation."
+
+        try:
+            infos = self._skill_registry.get_model_invocable_info()
+        except Exception:
+            infos = []
+
+        lines: List[str] = []
+        for info in infos:
+            name = info.get("name", "unknown")
+            description = str(info.get("description", "")).strip()
+            inputs = info.get("inputs", {}) or {}
+
+            line = f"- {name}"
+            if description:
+                line += f": {description}"
+            if inputs:
+                line += f" | inputs: {', '.join(inputs.keys())}"
+            lines.append(line)
+
+        if not lines:
+            return "- No external skills are currently available for model invocation."
+        return "\n".join(lines)
+
+    def _build_understanding_prompt(self, message: Message) -> str:
+        """Build the local-model understanding prompt used before planning."""
+        skill_catalog = self._build_skill_catalog()
+        user_request = json.dumps(message.content, ensure_ascii=False)
+        return f"""Return JSON only.
+Classify the LocalClaw user request.
+
+Allowed intents:
+greeting, help, echo, list_skills, status, date_query, run_command, run_shell_command, file_list, read_file, write_file, append_file, delete_file, create_directory, check_weather, unknown
+
+Rules:
+- "/cmd <command>" -> {{"intent":"run_command","params":{{"command":"<command>"}}}}
+- "/shell <command>" -> {{"intent":"run_shell_command","params":{{"command":"<command>"}}}}
+- Chinese help/capability questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" -> {{"intent":"help","params":{{}}}}
+- Greetings like "hello", "hi", "你好" -> greeting
+- Weather questions -> check_weather
+- If an installed skill clearly fits better than a built-in intent, return "skill.<name>"
+- If nothing fits, return {{"intent":"unknown","params":{{}}}}
+
+Installed skills:
+{skill_catalog}
+
+User: {user_request}
+"""
+
+    def _build_understanding_retry_prompt(self, message: Message) -> str:
+        """Build a shorter retry prompt for smaller local models."""
+        user_request = json.dumps(message.content, ensure_ascii=False)
+        return f"""Return JSON only.
+Chinese help/capability questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" -> {{"intent":"help","params":{{}}}}.
+Greetings like "hello" or "你好" -> greeting.
+Weather questions -> check_weather.
+"/cmd <command>" -> run_command.
+"/shell <command>" -> run_shell_command.
+If unsure, return {{"intent":"unknown","params":{{}}}}.
+User: {user_request}
+"""
+
+    def _intent_from_model_output(self, content: str, raw_message: str) -> Intent:
+        """Parse a model response into an Intent object."""
+        content = content.strip()
+
+        if content.startswith("```json") and "```" in content:
+            content = content.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif content.startswith("```") and "```" in content:
+            content = content.split("```", 1)[1].split("```", 1)[0].strip()
+
+        json_start = content.find("{")
+        json_end = content.rfind("}") + 1
+        if json_start >= 0 and json_end > json_start:
+            content = content[json_start:json_end]
+
+        result = json.loads(content)
+        params = result.get("params", {})
+        if not isinstance(params, dict):
+            params = {}
+
+        intent_name = result.get("intent", "")
+        if intent_name:
+            return Intent(
+                intent=intent_name,
+                params=params,
+                confidence=0.9,
+                source="planner_llm",
+                raw_message=raw_message,
+            )
+
+        tool_name = result.get("tool", "")
+        resolved_intent = f"tool.{tool_name}" if tool_name else "unknown"
+        return Intent(
+            intent=resolved_intent,
+            params=params,
+            confidence=0.9,
+            source="planner_llm",
+            raw_message=raw_message,
+        )
+
+    async def _understand_message_with_llm(self, message: Message) -> Intent:
+        """Use the local model to understand a message before planning."""
+        llm_provider = get_llm_provider()
+        if not await llm_provider.is_available():
+            return Intent(
+                intent="unknown",
+                params={},
+                confidence=0.0,
+                source="planner_llm",
+                raw_message=message.content,
+            )
+
+        try:
+            response = await llm_provider.generate(
+                self._build_understanding_prompt(message),
+                max_tokens=96,
+                temperature=0.0,
+            )
+            intent = self._intent_from_model_output(response.content, message.content)
+            if intent.intent != "unknown":
+                return intent
+        except Exception as exc:
+            logger.debug("Primary planner LLM understanding failed: %s", exc)
+
+        try:
+            retry_response = await llm_provider.generate(
+                self._build_understanding_retry_prompt(message),
+                max_tokens=64,
+                temperature=0.0,
+            )
+            return self._intent_from_model_output(retry_response.content, message.content)
+        except Exception as exc:
+            logger.debug("Retry planner LLM understanding failed: %s", exc)
+            return Intent(
+                intent="unknown",
+                params={},
+                confidence=0.0,
+                source="planner_llm",
+                raw_message=message.content,
+            )
+
+    async def plan_from_message(self, message: Message, context: Optional[Context] = None) -> Plan:
+        """Understand a raw message with the local model and build a plan directly."""
+        intent = await self._understand_message_with_llm(message)
+        plan = await self.plan(intent, context)
+        if plan.intent is None:
+            plan.intent = intent
+        return plan
     
     async def plan(self, intent: Intent, context: Optional[Context] = None) -> Plan:
         """Generate an execution plan from an intent."""
@@ -433,15 +593,22 @@ class Planner:
     
     def _plan_help(self, intent: Intent) -> Plan:
         """Create a help plan."""
-        help_text = """LocalClaw Help:
-- hello [name]: Say hello
-- /skill_name [params]: Execute a skill
-- /cmd <command>: Execute a routine development command automatically
-- /shell <command>: Execute a raw shell command with approval
-- help: Show this help
-- list skills: List available skills
-- status: Show system status
-- echo <text>: Echo back text"""
+        help_text = """LocalClaw 可以帮你做这些事：
+- 直接聊天提问：例如“你会干啥”“今天几号”“后天天冷不冷”
+- 执行常规命令：`/cmd git status`
+- 执行高风险原始 shell：`/shell git pull`（会进入审批）
+- 调用 skill：`/skill_name key=value`
+- 查看技能：`list skills`
+- 查看状态：`status`
+- 回显测试：`echo 你好`
+
+常见自然语言示例：
+- “执行命令 pytest”
+- “总结这个目录里的文件”
+- “查看 README.md”
+- “帮我生成日报”
+
+如果你不确定怎么说，直接用自然语言描述任务也可以。"""
         return Plan(
             steps=[
                 Step(

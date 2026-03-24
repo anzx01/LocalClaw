@@ -43,6 +43,28 @@ class OllamaClient(LLMProvider):
         self._ollama_config = config or OllamaConfig()
         self._ollama_config.base_url = self._ollama_config.base_url.rstrip("/")
         self._session: Optional[aiohttp.ClientSession] = None
+
+    async def _maybe_fallback_to_installed_model(self, error_text: str) -> bool:
+        """Fallback to the first installed Ollama model when the configured one is missing."""
+        lowered = error_text.lower()
+        if "model" not in lowered or "not found" not in lowered:
+            return False
+
+        models = await self.list_models()
+        fallback_name = ""
+        if models:
+            fallback_name = str(models[0].get("name") or models[0].get("model") or "").strip()
+
+        if not fallback_name or fallback_name == self._ollama_config.model:
+            return False
+
+        self._logger.warning(
+            "Configured Ollama model '%s' is unavailable; falling back to installed model '%s'",
+            self._ollama_config.model,
+            fallback_name,
+        )
+        self.set_model(fallback_name)
+        return True
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
@@ -86,25 +108,30 @@ class OllamaClient(LLMProvider):
             payload["system"] = system_prompt
         
         try:
-            async with session.post(url, json=payload) as response:
-                if response.status != 200:
+            for attempt in range(2):
+                payload["model"] = self._ollama_config.model
+                async with session.post(url, json=payload) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        return LLMResponse(
+                            content=data.get("response", ""),
+                            model=self._ollama_config.model,
+                            provider="ollama",
+                            tokens_used=data.get("eval_count", 0) + data.get("prompt_eval_count", 0),
+                            metadata={
+                                "total_duration": data.get("total_duration"),
+                                "load_duration": data.get("load_duration"),
+                                "prompt_eval_count": data.get("prompt_eval_count"),
+                                "eval_count": data.get("eval_count"),
+                            },
+                        )
+
                     error_text = await response.text()
+                    if response.status == 404 and attempt == 0:
+                        if await self._maybe_fallback_to_installed_model(error_text):
+                            continue
                     raise RuntimeError(f"Ollama error: {response.status} - {error_text}")
-                
-                data = await response.json()
-                
-                return LLMResponse(
-                    content=data.get("response", ""),
-                    model=self._ollama_config.model,
-                    provider="ollama",
-                    tokens_used=data.get("eval_count", 0) + data.get("prompt_eval_count", 0),
-                    metadata={
-                        "total_duration": data.get("total_duration"),
-                        "load_duration": data.get("load_duration"),
-                        "prompt_eval_count": data.get("prompt_eval_count"),
-                        "eval_count": data.get("eval_count"),
-                    },
-                )
         except aiohttp.ClientError as e:
             self._logger.error(f"Ollama connection error: {e}")
             raise RuntimeError(f"Ollama connection error: {e}")
@@ -135,25 +162,30 @@ class OllamaClient(LLMProvider):
         }
         
         try:
-            async with session.post(url, json=payload) as response:
-                if response.status != 200:
+            for attempt in range(2):
+                payload["model"] = self._ollama_config.model
+                async with session.post(url, json=payload) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        message = data.get("message", {})
+
+                        return LLMResponse(
+                            content=message.get("content", ""),
+                            model=self._ollama_config.model,
+                            provider="ollama",
+                            tokens_used=data.get("eval_count", 0) + data.get("prompt_eval_count", 0),
+                            metadata={
+                                "total_duration": data.get("total_duration"),
+                                "role": message.get("role", "assistant"),
+                            },
+                        )
+
                     error_text = await response.text()
+                    if response.status == 404 and attempt == 0:
+                        if await self._maybe_fallback_to_installed_model(error_text):
+                            continue
                     raise RuntimeError(f"Ollama error: {response.status} - {error_text}")
-                
-                data = await response.json()
-                
-                message = data.get("message", {})
-                
-                return LLMResponse(
-                    content=message.get("content", ""),
-                    model=self._ollama_config.model,
-                    provider="ollama",
-                    tokens_used=data.get("eval_count", 0) + data.get("prompt_eval_count", 0),
-                    metadata={
-                        "total_duration": data.get("total_duration"),
-                        "role": message.get("role", "assistant"),
-                    },
-                )
         except aiohttp.ClientError as e:
             self._logger.error(f"Ollama connection error: {e}")
             raise RuntimeError(f"Ollama connection error: {e}")

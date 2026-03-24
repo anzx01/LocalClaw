@@ -45,6 +45,7 @@ LOCALCLAW_LLM_PARSE_ONLY=true
 - `/cmd`、`/shell` 等命令式输入也纳入统一解析链路
 - 模型会结合当前可用的 tools 和 skills 来决定下一步动作
 - 不再依赖传统规则解析器作为主入口
+- 如果关闭本地模型（`LOCALCLAW_LLM_ENABLED=false`），系统不会回退旧 parser 兼容链，而是直接提示你先安装并启用本地大模型
 
 ### 2. Web UI 控制台
 
@@ -216,9 +217,16 @@ pip install -r requirements.txt
 推荐 Ollama：
 
 ```bash
-ollama pull qwen2.5-coder:7b
+ollama pull qwen3:4b
 ollama serve
 ```
+
+如果你更看重中文理解，优先推荐：
+
+- `qwen3:4b`
+- `qwen2.5:7b`
+
+不建议把 `LOCALCLAW_LLM_ENABLED` 设成 `false` 作为日常运行方式。当前产品路线要求先装好本地大模型，再启动 LocalClaw。
 
 ### 3. 配置 `.env`
 
@@ -229,7 +237,7 @@ LOCALCLAW_MODE=local
 LOCALCLAW_LLM_ENABLED=true
 LOCALCLAW_LLM_PARSE_ONLY=true
 LOCALCLAW_MODEL_PROVIDER=ollama
-LOCALCLAW_MODEL_NAME=qwen2.5-coder:7b
+LOCALCLAW_MODEL_NAME=qwen3:4b
 LOCALCLAW_SERVER_HOST=127.0.0.1
 LOCALCLAW_SERVER_PORT=8000
 LOCALCLAW_SKILL_INSTALL_PROTECTION_MODE=disable_high_risk
@@ -250,6 +258,12 @@ LOCALCLAW_SKILL_ISOLATION_BLOCK_CRITICAL=true
 ```bash
 python run_server.py
 ```
+
+如果启动后提示“请先安装并启用本地大模型”，说明当前没有按默认路线配置好本地模型。先确认：
+
+- `ollama serve` 已经启动
+- 已拉取可用模型，例如 `ollama pull qwen3:4b`
+- `.env` 中保持 `LOCALCLAW_LLM_ENABLED=true`
 
 当前 `run_server.py` 默认监听：
 

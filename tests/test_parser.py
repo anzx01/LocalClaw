@@ -124,6 +124,17 @@ async def test_default_parser_help():
 
 
 @pytest.mark.asyncio
+async def test_default_parser_chinese_help_request():
+    """Chinese capability questions should map to help instead of unknown."""
+    parser = create_default_parser()
+
+    message = Message(content="你会干啥？")
+    intent = await parser.parse(message)
+
+    assert intent.intent == "help"
+
+
+@pytest.mark.asyncio
 async def test_default_parser_unknown():
     """Test default parser with unknown input."""
     parser = create_default_parser()
@@ -142,7 +153,7 @@ async def test_llm_parse_only_uses_local_model(monkeypatch):
         async def is_available(self):
             return True
 
-        async def generate(self, prompt, temperature=0.0):
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
             class Response:
                 content = (
                     '{"intent":"check_weather","params":{"location":"","day_offset":2,"day_label":"后天"}}'
@@ -206,7 +217,7 @@ async def test_llm_parser_can_select_skill_plugin(monkeypatch):
         async def is_available(self):
             return True
 
-        async def generate(self, prompt, temperature=0.0):
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
             captured["prompt"] = prompt
 
             class Response:
@@ -223,5 +234,65 @@ async def test_llm_parser_can_select_skill_plugin(monkeypatch):
     assert intent.intent == "skill.fs"
     assert intent.params["action"] == "list"
     assert intent.params["path"] == "."
-    assert "Installed model-invocable skills:" in captured["prompt"]
+    assert "Installed skills:" in captured["prompt"]
     assert "- fs: File system workflow plugin" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_llm_parser_retries_with_short_prompt_when_first_result_is_unknown(monkeypatch):
+    """Smaller local models should get a second shorter prompt before giving up."""
+
+    calls = {"count": 0}
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            calls["count"] += 1
+
+            class Response:
+                content = '{"intent":"unknown","params":{}}'
+
+            if calls["count"] == 2:
+                Response.content = '{"intent":"help","params":{}}'
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.parser.get_llm_provider", lambda: FakeProvider())
+
+    parser = create_default_parser(llm_enabled=True, llm_parse_only=True)
+    intent = await parser.parse(Message(content="你会干啥？"))
+
+    assert calls["count"] == 2
+    assert intent.intent == "help"
+    assert intent.source == "llm"
+
+
+@pytest.mark.asyncio
+async def test_llm_parser_retries_after_primary_prompt_failure(monkeypatch):
+    """If the primary local-model prompt fails, parser should still try the shorter retry prompt."""
+
+    calls = {"count": 0}
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError("timeout")
+
+            class Response:
+                content = '{"intent":"help","params":{}}'
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.parser.get_llm_provider", lambda: FakeProvider())
+
+    parser = create_default_parser(llm_enabled=True, llm_parse_only=True)
+    intent = await parser.parse(Message(content="你会干啥？"))
+
+    assert calls["count"] == 2
+    assert intent.intent == "help"
+    assert intent.source == "llm"

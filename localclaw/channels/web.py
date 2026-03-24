@@ -387,13 +387,6 @@ def initialize_system() -> ExecutionEngine:
     
     load_skills_from_settings(settings)
     
-    # Create engine with LLM-enabled parser
-    from localclaw.core.parser import create_default_parser
-    parser = create_default_parser(
-        llm_enabled=settings.llm_enabled,
-        llm_parse_only=settings.llm_parse_only,
-    )
-    
     from localclaw.core.verifier import create_default_verifier
     from localclaw.skills.registry import get_skill_registry
     verifier = create_default_verifier(settings=settings, skill_registry=get_skill_registry())
@@ -402,7 +395,6 @@ def initialize_system() -> ExecutionEngine:
 
     engine = ExecutionEngine(
         settings=settings,
-        parser=parser,
         verifier=verifier,
     )
     

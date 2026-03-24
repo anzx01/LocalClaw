@@ -48,10 +48,10 @@ class Settings(BaseSettings):
     )
 
     mode: Mode = Field(default=Mode.LOCAL, description="Execution mode: zero, local, or hybrid")
-    llm_enabled: bool = Field(default=True, description="Enable LLM integration")
+    llm_enabled: bool = Field(default=True, description="Enable the default local-model understanding flow")
     llm_parse_only: bool = Field(
         default=True,
-        description="Route all user input through the local LLM parser before any legacy fallback",
+        description="Route all user input through the local LLM understanding chain without automatic legacy parser fallback",
     )
 
     skills_dir: Path = Field(default=PROJECT_ROOT / "skills", description="Bundled skill definitions")
@@ -91,8 +91,8 @@ class Settings(BaseSettings):
         description="Base URL for the configured model provider",
     )
     model_api: str = Field(
-        default="openai-compatible",
-        description="Model API style, usually openai-compatible for local endpoints",
+        default="ollama",
+        description="Model API style, such as ollama or openai-compatible",
     )
     model_context_window: int = Field(default=32768, description="Configured context window")
     model_cost_input: float = Field(default=0.0, description="Input token cost")

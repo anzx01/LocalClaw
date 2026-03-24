@@ -55,6 +55,7 @@ class ExecutionEngine:
         skill_registry: Optional[SkillRegistry] = None,
     ) -> None:
         self._settings = settings or get_settings()
+        self._parser_override = parser is not None
         self._parser = parser or create_default_parser(
             llm_enabled=self._settings.llm_enabled,
             llm_parse_only=self._settings.llm_parse_only,
@@ -79,6 +80,14 @@ class ExecutionEngine:
         self._on_approval_required: Optional[Callable[[Step, Task], None]] = None
         
         self._state_file = self._settings.data_dir / "task_state.json"
+
+    def _build_local_model_required_message(self) -> str:
+        """Return the user-facing message shown when the local model is disabled."""
+        return (
+            "未启用本地大模型。LocalClaw 不再回退旧 parser 兼容链，"
+            "请先安装并启用本地大模型，例如执行 `ollama pull qwen3:4b`、`ollama serve`，"
+            "然后把 `LOCALCLAW_LLM_ENABLED=true`。"
+        )
     
     def set_callbacks(
         self,
@@ -105,22 +114,44 @@ class ExecutionEngine:
         
         try:
             task.advance_state(TaskState.PARSED)
-            intent = await self._parser.parse(message)
-            task.intent = intent
-            self._logger.info(f"Task {task.id}: Parsed intent '{intent.intent}'")
-            
+            if not self._settings.llm_enabled and not self._parser_override:
+                raise EngineError(
+                    self._build_local_model_required_message(),
+                    ErrorType.PARSE_ERROR,
+                )
+
+            if self._settings.llm_enabled and self._settings.llm_parse_only and not self._parser_override:
+                plan = await self._planner.plan_from_message(message, task.context)
+                task.plan = plan
+                task.intent = plan.intent
+                resolved_intent = plan.intent.intent if plan.intent else "unknown"
+                self._logger.info(
+                    "Task %s: Planned directly from local model with intent '%s'",
+                    task.id,
+                    resolved_intent,
+                )
+            else:
+                intent = await self._parser.parse(message)
+                task.intent = intent
+                self._logger.info(f"Task {task.id}: Parsed intent '{intent.intent}'")
+                plan = await self._planner.plan(intent, task.context)
+                task.plan = plan
+
             task.advance_state(TaskState.PLANNED)
-            plan = await self._planner.plan(intent, task.context)
-            task.plan = plan
-            self._logger.info(f"Task {task.id}: Created plan with {len(plan.steps)} steps")
+            if task.plan is not None:
+                self._logger.info(f"Task {task.id}: Created plan with {len(task.plan.steps)} steps")
             
             task.advance_state(TaskState.RUNNING)
             await self._execute_plan(task)
             
         except Exception as e:
             self._logger.error(f"Task {task.id} failed: {e}")
+            if isinstance(e, EngineError):
+                task.error_type = e.error_type
+            else:
+                task.error_type = ErrorType.SYSTEM_ERROR
             task.error = str(e)
-            task.error_type = ErrorType.SYSTEM_ERROR
+            task.result = ExecutionResult.from_error(task.error, task.error_type)
             task.advance_state(TaskState.FAILED)
 
         if task.state not in (TaskState.VERIFYING, TaskState.PAUSED):

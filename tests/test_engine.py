@@ -4,8 +4,9 @@ import pytest
 
 from localclaw.config.settings import Settings
 from localclaw.core.engine import ExecutionEngine, get_engine
-from localclaw.core.models import ExecutionResult, Intent, Message, TaskState
-from localclaw.core.planner import create_default_planner
+from localclaw.core.models import ExecutionResult, Intent, Message, Plan, Step, StepType, TaskState
+from localclaw.core.parser import create_default_parser
+from localclaw.core.planner import Planner, create_default_planner
 from localclaw.core.verifier import create_default_verifier
 from localclaw.skills.base import create_skill_from_dict
 from localclaw.skills.registry import SkillRegistry
@@ -35,6 +36,7 @@ def engine():
 
     return ExecutionEngine(
         settings=Settings(_env_file=None, llm_enabled=False, llm_parse_only=False),
+        parser=create_default_parser(llm_enabled=False, llm_parse_only=False),
     )
 
 
@@ -60,6 +62,78 @@ async def test_engine_process_help(engine):
     assert task.state == TaskState.COMPLETED
     assert task.intent is not None
     assert task.intent.intent == "help"
+
+
+@pytest.mark.asyncio
+async def test_engine_process_chinese_help(engine):
+    """Chinese help-style prompts should also map to the help plan."""
+    message = Message(content="你会干啥？", user_id="test", channel="test")
+
+    task = await engine.process_message(message)
+
+    assert task.state == TaskState.COMPLETED
+    assert task.intent is not None
+    assert task.intent.intent == "help"
+
+
+@pytest.mark.asyncio
+async def test_engine_local_model_mode_bypasses_parser():
+    """When local-model-only mode is enabled, engine should plan from the raw message directly."""
+
+    class DirectPlanner(Planner):
+        def __init__(self):
+            super().__init__()
+            self.called = False
+
+        async def plan_from_message(self, message, context=None):
+            self.called = True
+            intent = Intent(intent="help", params={}, source="planner_llm", raw_message=message.content)
+            return Plan(
+                intent=intent,
+                steps=[
+                    Step(
+                        type=StepType.TRANSFORM,
+                        name="help",
+                        template="Local model handled this message directly.",
+                    )
+                ],
+            )
+
+    planner = DirectPlanner()
+    engine = ExecutionEngine(
+        settings=Settings(_env_file=None, llm_enabled=True, llm_parse_only=True),
+        planner=planner,
+        verifier=create_default_verifier(),
+        tool_registry=ToolRegistry(),
+        skill_registry=SkillRegistry(),
+    )
+
+    task = await engine.process_message(Message(content="你会干啥？", user_id="u1", channel="test"))
+
+    assert planner.called is True
+    assert task.state == TaskState.COMPLETED
+    assert task.intent is not None
+    assert task.intent.intent == "help"
+
+
+@pytest.mark.asyncio
+async def test_engine_requires_local_model_when_llm_is_disabled():
+    """Without an explicit parser override, disabling the local model should hard-fail."""
+
+    engine = ExecutionEngine(
+        settings=Settings(_env_file=None, llm_enabled=False, llm_parse_only=False),
+        verifier=create_default_verifier(),
+        tool_registry=ToolRegistry(),
+        skill_registry=SkillRegistry(),
+    )
+
+    task = await engine.process_message(Message(content="help", user_id="u1", channel="test"))
+
+    assert task.state == TaskState.FAILED
+    assert task.error_type is not None
+    assert task.error_type.value == "parse_error"
+    assert task.error is not None
+    assert "请先安装并启用本地大模型" in task.error
 
 
 @pytest.mark.asyncio

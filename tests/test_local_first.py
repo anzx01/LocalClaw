@@ -1,6 +1,7 @@
 """Tests for local-first configuration and skill loading."""
 
 from localclaw.config.settings import ModelProvider, Mode, Settings, SkillInstallProtectionMode
+from localclaw.llm.ollama import OllamaClient
 from localclaw.llm.openai_compatible import OpenAICompatibleProvider
 from localclaw.llm.provider import LLMConfig, LLMProviderType, create_llm_provider
 from localclaw.skills.loader import SkillLoader, load_skills_from_settings
@@ -15,10 +16,20 @@ def test_settings_default_to_local_first():
     assert settings.llm_enabled is True
     assert settings.llm_parse_only is True
     assert settings.model_provider == ModelProvider.OLLAMA
-    assert settings.uses_openai_compatible_api is True
-    assert settings.get_model_base_url().endswith("/v1")
+    assert settings.uses_openai_compatible_api is False
+    assert not settings.get_model_base_url().endswith("/v1")
     assert settings.skill_install_protection_mode == SkillInstallProtectionMode.DISABLE_HIGH_RISK
     assert settings.skill_isolation_require_approval is True
+
+
+def test_create_ollama_provider_from_default_settings():
+    """Default Ollama settings should use the native Ollama provider."""
+    settings = Settings(_env_file=None)
+
+    provider = create_llm_provider(settings=settings)
+
+    assert isinstance(provider, OllamaClient)
+    assert provider.get_config().provider_type == LLMProviderType.OLLAMA
 
 
 def test_create_openai_compatible_provider_from_config():

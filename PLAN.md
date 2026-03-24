@@ -22,6 +22,7 @@ LocalClaw 当前的目标不是继续做“规则解析优先”的实验框架�
 - 所有输入优先交给本地大模型解析
 - `/cmd`、`/shell` 也纳入统一解析链路
 - 不再把规则解析器当作主产品路线
+- 如果 `LOCALCLAW_LLM_ENABLED=false`，默认产品链路直接报错并提示安装本地大模型，不再自动回退旧 parser 兼容链
 
 后续优化重点应该放在：
 
@@ -70,9 +71,16 @@ Skill 不是临时脚本集合，而是正式能力扩展层。
   - 默认 `mode=local`
   - 默认 `llm_enabled=true`
   - 默认 `llm_parse_only=true`
-- `localclaw/core/parser.py`
-  - 所有输入优先进入本地 LLM 解析
+- `localclaw/core/engine.py`
+  - 默认消息入口优先走本地模型理解链路
+  - 当本地模型关闭时，直接提示用户先安装并启用本地大模型
+  - 不再自动掉回旧 parser 兼容链
+- `localclaw/core/planner.py`
+  - 本地模型直接把原始输入理解成 `Intent`
   - prompt 会动态注入当前可用 skills
+- `localclaw/channels/cli.py` / `localclaw/channels/web.py`
+  - 默认初始化时不再显式注入兼容 parser
+  - 保证运行时行为与“本地模型必需”路线一致
 
 ### 3.2 Web UI 和基础 API
 
@@ -253,6 +261,7 @@ LOCALCLAW_SKILL_ISOLATION_BLOCK_CRITICAL=true
 - 不再以 Zero Mode 作为默认产品故事
 - 不再以规则解析优先作为主流程
 - 不再把“无 LLM 也能完整使用”当作第一卖点
+- 不再把“关闭本地模型后自动回退 parser”当作默认兼容能力
 - 不再把企业微信优先级放在个人微信前面
 
 当前主线已经变成：
@@ -264,6 +273,7 @@ LOCALCLAW_SKILL_ISOLATION_BLOCK_CRITICAL=true
 后续只要下面这些代码方向发生变化，文档就要同步更新：
 
 - `localclaw/config/settings.py`
+- `localclaw/core/engine.py`
 - `localclaw/core/parser.py`
 - `localclaw/core/planner.py`
 - `localclaw/core/verifier.py`

@@ -175,81 +175,79 @@ class LLMParser(ParserBackend):
     def _build_prompt(self, message: Message) -> str:
         """Build the local-LLM parsing prompt."""
         skill_catalog = self._build_skill_catalog()
-        return f"""You are the only input parser for LocalClaw.
-Every user message, including slash commands like /cmd and /shell, must be interpreted here.
+        user_request = json.dumps(message.content, ensure_ascii=False)
+        return f"""Return JSON only.
+Classify the user request for LocalClaw.
 
-Return JSON only in one of these forms:
-{{"intent":"intent_name","params":{{...}}}}
-{{"tool":"tool_name","params":{{...}}}}
-{{"intent":"skill.skill_name","params":{{...}}}}
-
-Prefer the "intent" form whenever an existing LocalClaw intent fits.
-If an installed skill is a better semantic match than a generic built-in intent, return "skill.<name>".
-
-Common intents:
-- greeting
-- help
-- echo
-- list_skills
-- status
-- date_query
-- run_command
-- run_shell_command
-- file_list
-- read_file
-- write_file
-- append_file
-- delete_file
-- create_directory
-- check_weather
-
-Direct tools may be used only when needed:
-- file_read(path)
-- file_write(path, content)
-- file_delete(path)
-- file_mkdir(path)
-- file_list(path)
-- safe_shell(command)
-- shell(command)
-- http_get(url)
-- http_post(url, json_data)
-
-Installed model-invocable skills:
-{skill_catalog}
+Allowed intents:
+greeting, help, echo, list_skills, status, date_query, run_command, run_shell_command, file_list, read_file, write_file, append_file, delete_file, create_directory, check_weather, unknown
 
 Rules:
 - "/cmd <command>" -> {{"intent":"run_command","params":{{"command":"<command>"}}}}
 - "/shell <command>" -> {{"intent":"run_shell_command","params":{{"command":"<command>"}}}}
-- When a listed skill clearly matches the request, prefer returning "skill.<name>" with extracted params.
-- Routine dev commands should use run_command or safe_shell.
-- Raw shell access should use run_shell_command or shell.
-- Weather questions such as "后天冷不？", "上海明天天气怎么样", or "Will it rain tomorrow?" should map to check_weather.
-- For weather params, include:
-  - "location": city or region string, or "" when the user did not specify a place
-  - "day_offset": 0 for today/current, 1 for tomorrow, 2 for the day after tomorrow
-  - "day_label": "今天", "明天", or "后天" when applicable
-- Help requests should map to help.
-- Greetings should map to greeting.
-- If nothing fits, return {{"intent":"unknown","params":{{}}}}.
+- Chinese help/capability questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" -> {{"intent":"help","params":{{}}}}
+- Greetings like "hello", "hi", "你好" -> greeting
+- Weather questions -> check_weather
+- If a listed skill is clearly a better match than a built-in intent, return "skill.<name>"
+- If nothing fits, return {{"intent":"unknown","params":{{}}}}
 
-Examples:
-User: /cmd git status
-{{"intent":"run_command","params":{{"command":"git status"}}}}
+Installed skills:
+{skill_catalog}
 
-User: /shell del /s /q temp
-{{"intent":"run_shell_command","params":{{"command":"del /s /q temp"}}}}
-
-User: 总结这个目录下的文件
-{{"intent":"skill.fs","params":{{"action":"list","path":"."}}}}
-
-User: 后天冷不？
-{{"intent":"check_weather","params":{{"location":"","day_offset":2,"day_label":"后天"}}}}
-
-User: 上海天气怎么样
-{{"intent":"check_weather","params":{{"location":"上海","day_offset":0,"day_label":"今天"}}}}
-
-User request: {message.content}
+User: {user_request}
 """
+
+    def _build_retry_prompt(self, message: Message) -> str:
+        """Build a shorter retry prompt for smaller local models."""
+        user_request = json.dumps(message.content, ensure_ascii=False)
+        return f"""Return JSON only.
+Chinese capability/help questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" must map to {{"intent":"help","params":{{}}}}.
+Greetings like "hello" or "你好" map to greeting.
+Weather questions map to check_weather.
+"/cmd <command>" maps to run_command.
+"/shell <command>" maps to run_shell_command.
+If unsure, return {{"intent":"unknown","params":{{}}}}.
+User: {user_request}
+"""
+
+    def _intent_from_model_output(self, content: str, raw_message: str) -> Optional[Intent]:
+        """Parse a model response into an Intent."""
+        content = content.strip()
+
+        if content.startswith("```json") and "```" in content:
+            content = content.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif content.startswith("```") and "```" in content:
+            content = content.split("```", 1)[1].split("```", 1)[0].strip()
+
+        json_start = content.find("{")
+        json_end = content.rfind("}") + 1
+        if json_start >= 0 and json_end > json_start:
+            content = content[json_start:json_end]
+
+        result = json.loads(content)
+        params = result.get("params", {})
+        if not isinstance(params, dict):
+            params = {}
+
+        intent_name = result.get("intent", "")
+        if intent_name:
+            return Intent(
+                intent=intent_name,
+                params=params,
+                confidence=0.9,
+                source="llm",
+                raw_message=raw_message,
+            )
+
+        tool_name = result.get("tool", "")
+        intent = f"tool.{tool_name}" if tool_name else "unknown"
+        return Intent(
+            intent=intent,
+            params=params,
+            confidence=0.9,
+            source="llm",
+            raw_message=raw_message,
+        )
 
     async def parse(self, message: Message) -> Optional[Intent]:
         """Parse using LLM. Returns None if LLM is not available."""
@@ -259,43 +257,21 @@ User request: {message.content}
                 return None
 
             prompt = self._build_prompt(message)
-            response = await llm_provider.generate(prompt, temperature=0.0)
-            content = response.content.strip()
+            try:
+                response = await llm_provider.generate(prompt, max_tokens=96, temperature=0.0)
+                intent = self._intent_from_model_output(response.content, message.content)
+                if intent and intent.intent != "unknown":
+                    return intent
+            except Exception as exc:
+                logger.debug("Primary LLM parsing prompt failed: %s", exc)
+                intent = None
 
-            if content.startswith("```json") and "```" in content:
-                content = content.split("```json", 1)[1].split("```", 1)[0].strip()
-            elif content.startswith("```") and "```" in content:
-                content = content.split("```", 1)[1].split("```", 1)[0].strip()
-
-            json_start = content.find("{")
-            json_end = content.rfind("}") + 1
-            if json_start >= 0 and json_end > json_start:
-                content = content[json_start:json_end]
-
-            result = json.loads(content)
-            params = result.get("params", {})
-            if not isinstance(params, dict):
-                params = {}
-
-            intent_name = result.get("intent", "")
-            if intent_name:
-                return Intent(
-                    intent=intent_name,
-                    params=params,
-                    confidence=0.9,
-                    source="llm",
-                    raw_message=message.content,
-                )
-
-            tool_name = result.get("tool", "")
-            intent = f"tool.{tool_name}" if tool_name else "unknown"
-            return Intent(
-                intent=intent,
-                params=params,
-                confidence=0.9,
-                source="llm",
-                raw_message=message.content,
-            )
+            retry_prompt = self._build_retry_prompt(message)
+            retry_response = await llm_provider.generate(retry_prompt, max_tokens=64, temperature=0.0)
+            retry_intent = self._intent_from_model_output(retry_response.content, message.content)
+            if retry_intent:
+                return retry_intent
+            return intent
         except Exception as exc:
             logger.debug("LLM parsing skipped: %s", exc)
             return None
@@ -375,6 +351,11 @@ def create_default_parser(llm_enabled: bool = False, llm_parse_only: bool = Fals
             pattern=r"^help$",
             intent="help",
             priority=20,
+        ),
+        ParseRule(
+            pattern=r"^(?:help|帮助|幫助|你会干啥|你会做什么|你会啥|你能干啥|你能干什么|你能做什么|你可以做什么|你能帮我做什么|你都会啥|你是做什么的|有啥功能|有什么功能|功能介绍)[\s\?\!？。！]*$",
+            intent="help",
+            priority=25,
         ),
         ParseRule(
             pattern=r"^list\s+skills$",
