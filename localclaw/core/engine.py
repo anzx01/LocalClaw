@@ -116,29 +116,37 @@ class ExecutionEngine:
             task.error = str(e)
             task.error_type = ErrorType.SYSTEM_ERROR
             task.advance_state(TaskState.FAILED)
-        
-        self._task_history.append(task)
-        if task.id in self._tasks:
-            del self._tasks[task.id]
-        
-        if self._on_task_complete:
+
+        if task.state not in (TaskState.VERIFYING, TaskState.PAUSED):
+            self._task_history.append(task)
+            if task.id in self._tasks:
+                del self._tasks[task.id]
+
+        if self._on_task_complete and task.state not in (TaskState.VERIFYING, TaskState.PAUSED):
             self._on_task_complete(task)
         
         return task
     
-    async def _execute_plan(self, task: Task) -> None:
+    async def _execute_plan(self, task: Task, start_index: int = 0) -> None:
         """Execute all steps in a plan."""
         if not task.plan:
             task.result = ExecutionResult.from_error("No plan to execute")
             task.advance_state(TaskState.FAILED)
             return
         
-        for step_index in range(len(task.plan.steps)):
+        for step_index in range(start_index, len(task.plan.steps)):
             task.current_step_index = step_index
             step = task.plan.steps[step_index]
             
             try:
                 result = await self._execute_step(step, task)
+
+                if step.status == StepStatus.PENDING and result.error_type == ErrorType.PERMISSION_ERROR:
+                    task.result = result
+                    task.error = None
+                    task.error_type = None
+                    task.advance_state(TaskState.VERIFYING)
+                    return
                 
                 if result.status == "error":
                     if step.error_policy.on_failure == "abort":
@@ -281,6 +289,16 @@ class ExecutionEngine:
         skill = self._skill_registry.get(skill_name)
         if skill is None:
             return ExecutionResult.from_error(f"Skill not found: {skill_name}", ErrorType.VALIDATION_ERROR)
+
+        from localclaw.skills.base import SkillState
+
+        if getattr(skill, "state", None) not in (SkillState.ENABLED, SkillState.RUNNING):
+            info = skill.get_definition().metadata.get("availability", {})
+            reason = info.get("reason") or "Skill is not enabled"
+            return ExecutionResult.from_error(
+                f"Skill '{skill_name}' is blocked: {reason}",
+                ErrorType.PERMISSION_ERROR,
+            )
         
         params = self._resolve_params(step.input, task.context)
         
@@ -426,6 +444,34 @@ class ExecutionEngine:
             return False
         
         return self._verifier.approve_step(step_id)
+
+    async def approve_and_resume_step(self, task_id: str, step_id: str) -> Optional[Task]:
+        """Approve a pending step and continue task execution."""
+        approved = self.approve_step(task_id, step_id)
+        if not approved:
+            return None
+        return await self.resume_task(task_id)
+
+    async def resume_task(self, task_id: str) -> Optional[Task]:
+        """Resume a task that is waiting for approval."""
+        task = self._tasks.get(task_id)
+        if task is None:
+            return None
+
+        if task.state not in (TaskState.VERIFYING, TaskState.PAUSED):
+            return task
+
+        task.advance_state(TaskState.RUNNING)
+        await self._execute_plan(task, start_index=task.current_step_index)
+
+        if task.state not in (TaskState.VERIFYING, TaskState.PAUSED):
+            self._task_history.append(task)
+            if task.id in self._tasks:
+                del self._tasks[task.id]
+            if self._on_task_complete:
+                self._on_task_complete(task)
+
+        return task
     
     def get_task(self, task_id: str) -> Optional[Task]:
         """Get a task by ID."""
@@ -437,13 +483,13 @@ class ExecutionEngine:
     
     def get_task_history(self, limit: int = 100) -> List[Task]:
         """Get task history."""
-        return self._task_history[-limit:]
+        return list(self._task_history)[-limit:]
     
     async def save_state(self) -> None:
         """Save current state to file."""
         state = {
             "tasks": {tid: t.model_dump() for tid, t in self._tasks.items()},
-            "history": [t.model_dump() for t in self._task_history[-100:]],
+            "history": [t.model_dump() for t in list(self._task_history)[-100:]],
         }
         
         self._state_file.parent.mkdir(parents=True, exist_ok=True)

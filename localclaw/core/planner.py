@@ -11,6 +11,7 @@ from localclaw.core.models import (
     Step,
     StepType,
 )
+from localclaw.skills.base import SkillState
 
 
 class Planner:
@@ -269,7 +270,23 @@ class Planner:
                 intent=intent,
                 skill_name=skill_name,
             )
-        
+
+        if getattr(skill, "state", None) not in (SkillState.ENABLED, SkillState.RUNNING):
+            definition = skill.get_definition() if hasattr(skill, "get_definition") else None
+            availability = definition.metadata.get("availability", {}) if definition else {}
+            blocked_reason = availability.get("reason") or "Skill is not currently enabled"
+            return Plan(
+                steps=[
+                    Step(
+                        type=StepType.TRANSFORM,
+                        name="skill_blocked",
+                        template=f"Skill '{skill_name}' is blocked: {blocked_reason}",
+                    )
+                ],
+                intent=intent,
+                skill_name=skill_name,
+            )
+
         steps = self._convert_skill_to_steps(skill, params)
         return Plan(steps=steps, intent=intent, skill_name=skill_name)
     

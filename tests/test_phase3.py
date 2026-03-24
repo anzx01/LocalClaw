@@ -466,7 +466,7 @@ class TestOllamaClient:
     
     @pytest.mark.asyncio
     async def test_ollama_is_available_mock(self):
-        client = OllamaClient()
+        client = OllamaClient(OllamaConfig(base_url="http://127.0.0.1:9"))
         
         available = await client.is_available()
         

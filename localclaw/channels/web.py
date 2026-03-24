@@ -14,8 +14,9 @@ from pydantic import BaseModel
 from localclaw.config.settings import get_settings
 from localclaw.core.engine import ExecutionEngine, get_engine
 from localclaw.core.models import Message, Task, TaskState, ExecutionResult
+from localclaw.llm.provider import initialize_llm_provider
 from localclaw.security.audit import configure_audit_logger
-from localclaw.skills.loader import load_skills_from_dir, register_builtin_skills
+from localclaw.skills.loader import load_skills_from_settings, register_builtin_skills
 from localclaw.tools.base import Tool, get_tool_registry
 from localclaw.tools.file_tool import register_file_tools
 from localclaw.tools.http_tool import register_http_tools
@@ -59,6 +60,8 @@ class SkillResponse(BaseModel):
     description: str
     type: str
     state: str
+    availability: str = "available"
+    availability_reason: Optional[str] = None
 
 
 class ConnectionManager:
@@ -148,18 +151,15 @@ def initialize_system() -> ExecutionEngine:
     
     # Initialize LLM provider if enabled
     if settings.llm_enabled:
-        logger.info("LLM enabled, initializing Ollama provider")
         try:
-            from localclaw.llm.ollama import initialize_ollama, OllamaConfig
-            ollama_config = OllamaConfig(
-                base_url=settings.ollama_base_url or "http://localhost:11434",
-                model="gemma3:4b",
+            provider = initialize_llm_provider(settings)
+            logger.info(
+                "LLM provider initialized: %s (%s)",
+                provider.get_config().provider_type.value,
+                provider.get_config().model,
             )
-            logger.info(f"Initializing Ollama with model: {ollama_config.model}")
-            initialize_ollama(ollama_config)
-            logger.info("Ollama LLM provider initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize Ollama LLM provider: {e}")
+            logger.error(f"Failed to initialize LLM provider: {e}")
     else:
         logger.info("LLM is disabled")
     
@@ -173,8 +173,7 @@ def initialize_system() -> ExecutionEngine:
     
     register_builtin_skills()
     
-    if settings.skills_dir.exists():
-        load_skills_from_dir(settings.skills_dir)
+    load_skills_from_settings(settings)
     
     # Create engine with LLM-enabled parser
     from localclaw.core.parser import create_default_parser
@@ -185,7 +184,7 @@ def initialize_system() -> ExecutionEngine:
     from localclaw.core.verifier import create_default_verifier
     verifier = create_default_verifier()
     verifier.set_auto_approve_low(True)
-    verifier.set_require_confirmation_high(False)
+    verifier.set_require_confirmation_high(True)
 
     engine = ExecutionEngine(
         settings=settings,
@@ -327,6 +326,24 @@ def create_app() -> FastAPI:
             result=task.result.data if task.result else {},
             error=task.error,
         )
+
+    @app.post("/api/tasks/{task_id}/approve/{step_id}", response_model=TaskResponse)
+    async def approve_task_step(task_id: str, step_id: str):
+        """Approve a waiting step and resume task execution."""
+        engine = get_engine()
+        task = await engine.approve_and_resume_step(task_id, step_id)
+
+        if not task:
+            raise HTTPException(status_code=404, detail="Task or step not found")
+
+        return TaskResponse(
+            id=task.id,
+            state=task.state.value,
+            created_at=task.created_at,
+            completed_at=task.completed_at,
+            result=task.result.data if task.result else {},
+            error=task.error,
+        )
     
     @app.get("/api/skills", response_model=List[SkillResponse])
     async def list_skills():
@@ -343,6 +360,8 @@ def create_app() -> FastAPI:
                 description=s["description"],
                 type=s["type"],
                 state=s["state"],
+                availability=s.get("availability", "available"),
+                availability_reason=s.get("availability_details", {}).get("reason"),
             )
             for s in skills
         ]
@@ -386,7 +405,12 @@ def create_app() -> FastAPI:
         return {
             "mode": settings.mode.value,
             "llm_enabled": settings.llm_enabled,
+            "model_provider": settings.model_provider.value,
+            "model_name": settings.model_name,
+            "model_base_url": settings.get_model_base_url(),
             "skills_dir": str(settings.skills_dir),
+            "managed_skills_dir": str(settings.managed_skills_dir),
+            "workspace_skills_dir": str(settings.workspace_skills_dir),
             "data_dir": str(settings.data_dir),
         }
     

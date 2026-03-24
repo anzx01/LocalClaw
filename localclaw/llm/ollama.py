@@ -1,20 +1,12 @@
 """Ollama LLM client integration."""
 
-import asyncio
-import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from localclaw.llm.provider import (
-    LLMConfig,
-    LLMProvider,
-    LLMProviderType,
-    LLMResponse,
-    set_llm_provider,
-)
+from localclaw.llm.provider import LLMConfig, LLMProvider, LLMProviderType, LLMResponse, set_llm_provider
 
 
 logger = logging.getLogger(__name__)
@@ -49,6 +41,7 @@ class OllamaClient(LLMProvider):
         super().__init__(llm_config)
         
         self._ollama_config = config or OllamaConfig()
+        self._ollama_config.base_url = self._ollama_config.base_url.rstrip("/")
         self._session: Optional[aiohttp.ClientSession] = None
     
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -167,19 +160,19 @@ class OllamaClient(LLMProvider):
     
     async def is_available(self) -> bool:
         """Check if Ollama is available."""
-        session = await self._get_session()
-        
         try:
             url = f"{self._ollama_config.base_url}/api/tags"
-            async with session.get(url) as response:
-                return response.status == 200
+            timeout = aiohttp.ClientTimeout(total=min(self._ollama_config.timeout, 5.0))
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as response:
+                    return response.status == 200
         except Exception:
             return False
-    
+
     async def list_models(self) -> List[Dict[str, Any]]:
         """List available models."""
         session = await self._get_session()
-        
+
         try:
             url = f"{self._ollama_config.base_url}/api/tags"
             async with session.get(url) as response:

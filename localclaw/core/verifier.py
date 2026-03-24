@@ -91,6 +91,9 @@ class PermissionVerifier(VerifierBackend):
     async def verify_step(self, step: Step, context: Context) -> VerificationResult:
         """Verify a step before execution."""
         risk_level = self.get_risk_level(step)
+
+        if self.is_approved(step.id):
+            return VerificationResult.pass_result("Operation approved by human")
         
         if risk_level == RiskLevel.LOW and self._auto_approve_low:
             return VerificationResult.pass_result(f"Auto-approved: low risk operation")

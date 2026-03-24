@@ -17,8 +17,13 @@ class SkillRegistry:
         self._triggers: Dict[str, List[str]] = {}
         self._logger = logging.getLogger("localclaw.skills.registry")
     
-    def register(self, skill: Skill) -> None:
+    def register(self, skill: Skill, enable: bool = True) -> None:
         """Register a skill."""
+        if enable:
+            skill.enable()
+        else:
+            skill.disable()
+
         self._skills[skill.name] = skill
         self._logger.info(f"Registered skill: {skill.name} v{skill.version}")
         
@@ -80,6 +85,7 @@ class SkillRegistry:
             return None
         
         definition = skill.get_definition()
+        availability = definition.metadata.get("availability", {})
         return {
             "name": skill.name,
             "version": skill.version,
@@ -90,6 +96,10 @@ class SkillRegistry:
             "outputs": skill.outputs,
             "tools": skill.tools,
             "permissions": definition.permissions,
+            "availability": availability.get("status", "available"),
+            "availability_details": availability,
+            "user_invocable": definition.metadata.get("user_invocable", True),
+            "metadata": definition.metadata,
         }
     
     def get_all_info(self) -> List[Dict[str, Any]]:
