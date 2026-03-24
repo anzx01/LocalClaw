@@ -1,19 +1,20 @@
 """Web channel for LocalClaw using FastAPI."""
 
+import json
 import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from localclaw.config.settings import get_settings
 from localclaw.core.engine import ExecutionEngine, get_engine
-from localclaw.core.models import Message, Task, TaskState, ExecutionResult
+from localclaw.core.models import ExecutionResult, Message, Step, Task, TaskState
 from localclaw.llm.provider import initialize_llm_provider
 from localclaw.security.audit import configure_audit_logger
 from localclaw.skills.loader import load_skills_from_settings, register_builtin_skills
@@ -22,6 +23,23 @@ from localclaw.tools.file_tool import register_file_tools
 from localclaw.tools.http_tool import register_http_tools
 from localclaw.tools.shell_tool import register_shell_tools
 from localclaw.tools.clawhub_tool import register_clawhub_tools
+from localclaw.channels.wechat_personal import (
+    PersonalWeChatEnvelope,
+    build_personal_wechat_message,
+    format_task_for_personal_wechat,
+    is_valid_personal_wechat_token,
+    normalize_personal_wechat_payload,
+    send_personal_wechat_reply,
+)
+from localclaw.channels.whatsapp import (
+    WhatsAppEnvelope,
+    build_whatsapp_message,
+    format_task_for_whatsapp,
+    is_valid_whatsapp_signature,
+    is_valid_whatsapp_verify_token,
+    normalize_whatsapp_webhook_payload,
+    send_whatsapp_text_reply,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -51,6 +69,27 @@ class TaskResponse(BaseModel):
     completed_at: Optional[datetime]
     result: Dict[str, Any] = {}
     error: Optional[str] = None
+    channel: Optional[str] = None
+    message: Optional[str] = None
+    current_step: Optional[Dict[str, Any]] = None
+
+
+class ApprovalItemResponse(BaseModel):
+    """Response model for a pending approval item."""
+
+    task_id: str
+    task_state: str
+    created_at: datetime
+    channel: str
+    user_id: str
+    message: Optional[str] = None
+    step: Dict[str, Any]
+
+
+class ApprovalsResponse(BaseModel):
+    """Collection of pending approvals."""
+
+    approvals: List[ApprovalItemResponse]
 
 
 class SkillResponse(BaseModel):
@@ -62,6 +101,97 @@ class SkillResponse(BaseModel):
     state: str
     availability: str = "available"
     availability_reason: Optional[str] = None
+
+
+class SkillSecurityReviewResponse(BaseModel):
+    """Response model for pre-install skill safety checks."""
+
+    skill_id: str
+    skill_name: str
+    version: str
+    risk_level: str
+    risk_label: str
+    risk_score: int
+    status: str
+    recommended_action: str
+    summary: str
+    findings: List[Dict[str, Any]]
+    recommendations: List[str]
+    install_options: List[Dict[str, Any]]
+    metadata_snapshot: Dict[str, Any]
+    checks: Dict[str, Any]
+    scan_version: int
+
+
+class PersonalWeChatWebhookResponse(BaseModel):
+    """Response model for the experimental personal WeChat bridge."""
+
+    accepted: bool
+    task_id: str
+    status: str
+    reply: Dict[str, Any]
+    bridge_delivery: Optional[Dict[str, Any]] = None
+
+
+class WhatsAppWebhookResponse(BaseModel):
+    """Response model for the WhatsApp Cloud API bridge."""
+
+    accepted: bool
+    event_type: str
+    task_id: Optional[str] = None
+    status: Optional[str] = None
+    reply: Optional[Dict[str, Any]] = None
+    outbound_delivery: Optional[Dict[str, Any]] = None
+
+
+class ChannelsOverviewResponse(BaseModel):
+    """Aggregated channel metadata used by the Web UI."""
+
+    channels: List[Dict[str, Any]]
+
+
+class PersonalWeChatTestRequest(BaseModel):
+    """Manual connectivity test request for the personal WeChat bridge."""
+
+    reply_target: Optional[str] = None
+    conversation_id: Optional[str] = None
+    sender_id: Optional[str] = None
+    sender_name: Optional[str] = None
+    message_id: Optional[str] = None
+    text: str = "LocalClaw connectivity test"
+
+
+class WhatsAppTestRequest(BaseModel):
+    """Manual connectivity test request for the WhatsApp channel."""
+
+    recipient: Optional[str] = None
+    phone_number_id: Optional[str] = None
+    reply_to_message_id: Optional[str] = None
+    sender_name: Optional[str] = None
+    text: str = "LocalClaw connectivity test"
+
+
+class ChannelTestResponse(BaseModel):
+    """Structured result for manual channel tests."""
+
+    ok: bool
+    mode: str
+    channel: str
+    summary: str
+    request: Dict[str, Any] = {}
+    missing: List[str] = []
+    delivery: Optional[Dict[str, Any]] = None
+
+
+class SkillInstallResponse(BaseModel):
+    """Structured result for skill installation with required review."""
+
+    installed: bool
+    skill_path: str = ""
+    requires_review: bool = False
+    error: Optional[str] = None
+    scan: Optional[SkillSecurityReviewResponse] = None
+    guard: Optional[Dict[str, Any]] = None
 
 
 class ConnectionManager:
@@ -90,6 +220,88 @@ class ConnectionManager:
 
 
 _manager = ConnectionManager()
+
+
+def _serialize_step(step: Optional[Step]) -> Optional[Dict[str, Any]]:
+    """Serialize step metadata for task and approval APIs."""
+
+    if step is None:
+        return None
+
+    command_preview = ""
+    if isinstance(step.input, dict):
+        command_preview = str(
+            step.input.get("command")
+            or step.input.get("url")
+            or step.input.get("path")
+            or step.input.get("query")
+            or ""
+        ).strip()
+
+    risk_level = "low"
+    if step.tool_name == "shell":
+        risk_level = "critical"
+    elif step.tool_name in {"http_post"}:
+        risk_level = "high"
+
+    return {
+        "id": step.id,
+        "name": step.name,
+        "tool_name": step.tool_name,
+        "status": step.status.value,
+        "input": step.input or {},
+        "error": step.error,
+        "started_at": step.started_at,
+        "completed_at": step.completed_at,
+        "risk_level": risk_level,
+        "command_preview": command_preview,
+    }
+
+
+def _task_result_data(task: Task) -> Dict[str, Any]:
+    """Extract a JSON-serializable result payload from a task."""
+
+    result = task.result
+    if isinstance(result, ExecutionResult):
+        return result.data or {}
+    if isinstance(result, dict):
+        return result
+    return {}
+
+
+def _serialize_task(task: Task) -> TaskResponse:
+    """Build the task response used by the API."""
+
+    return TaskResponse(
+        id=task.id,
+        state=task.state.value,
+        created_at=task.created_at,
+        completed_at=task.completed_at,
+        result=_task_result_data(task),
+        error=task.error,
+        channel=task.channel,
+        message=task.message.content if task.message else None,
+        current_step=_serialize_step(task.get_current_step()),
+    )
+
+
+def _serialize_approval(task: Task) -> Optional[ApprovalItemResponse]:
+    """Build a pending approval item from an active task."""
+
+    step = task.get_current_step()
+    serialized_step = _serialize_step(step)
+    if task.state != TaskState.VERIFYING or serialized_step is None:
+        return None
+
+    return ApprovalItemResponse(
+        task_id=task.id,
+        task_state=task.state.value,
+        created_at=task.created_at,
+        channel=task.channel,
+        user_id=task.user_id,
+        message=task.message.content if task.message else None,
+        step=serialized_step,
+    )
 
 
 class SystemStatusTool(Tool):
@@ -179,10 +391,12 @@ def initialize_system() -> ExecutionEngine:
     from localclaw.core.parser import create_default_parser
     parser = create_default_parser(
         llm_enabled=settings.llm_enabled,
+        llm_parse_only=settings.llm_parse_only,
     )
     
     from localclaw.core.verifier import create_default_verifier
-    verifier = create_default_verifier()
+    from localclaw.skills.registry import get_skill_registry
+    verifier = create_default_verifier(settings=settings, skill_registry=get_skill_registry())
     verifier.set_auto_approve_low(True)
     verifier.set_require_confirmation_high(True)
 
@@ -214,11 +428,21 @@ def initialize_system() -> ExecutionEngine:
             "task_id": task.id,
             "state": task.state.value,
         }))
+
+    def on_approval_required(step, task):
+        asyncio.create_task(_manager.broadcast({
+            "type": "approval_required",
+            "task_id": task.id,
+            "step_id": step.id,
+            "step_name": step.name,
+            "tool_name": step.tool_name,
+        }))
     
     engine.set_callbacks(
         on_step_start=on_step_start,
         on_step_complete=on_step_complete,
         on_task_complete=on_task_complete,
+        on_approval_required=on_approval_required,
     )
     
     # Set the global engine instance
@@ -291,19 +515,13 @@ def create_app() -> FastAPI:
     async def list_tasks(limit: int = 10):
         """List recent tasks."""
         engine = get_engine()
-        tasks = engine.get_task_history(limit)
-        
-        return [
-            TaskResponse(
-                id=t.id,
-                state=t.state.value,
-                created_at=t.created_at,
-                completed_at=t.completed_at,
-                result=t.result.data if t.result else {},
-                error=t.error,
-            )
-            for t in tasks
-        ]
+        task_map = {
+            task.id: task
+            for task in [*engine.get_active_tasks(), *engine.get_task_history(limit)]
+        }
+        tasks = sorted(task_map.values(), key=lambda task: task.created_at, reverse=True)[:limit]
+
+        return [_serialize_task(task) for task in tasks]
     
     @app.get("/api/tasks/{task_id}", response_model=TaskResponse)
     async def get_task(task_id: str):
@@ -317,15 +535,23 @@ def create_app() -> FastAPI:
         
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        
-        return TaskResponse(
-            id=task.id,
-            state=task.state.value,
-            created_at=task.created_at,
-            completed_at=task.completed_at,
-            result=task.result.data if task.result else {},
-            error=task.error,
-        )
+
+        return _serialize_task(task)
+
+    @app.get("/api/approvals", response_model=ApprovalsResponse)
+    async def list_approvals():
+        """List tasks that are currently waiting for human approval."""
+
+        engine = get_engine()
+        approvals = [
+            approval
+            for approval in (
+                _serialize_approval(task) for task in engine.get_active_tasks()
+            )
+            if approval is not None
+        ]
+        approvals.sort(key=lambda approval: approval.created_at, reverse=True)
+        return ApprovalsResponse(approvals=approvals)
 
     @app.post("/api/tasks/{task_id}/approve/{step_id}", response_model=TaskResponse)
     async def approve_task_step(task_id: str, step_id: str):
@@ -336,14 +562,7 @@ def create_app() -> FastAPI:
         if not task:
             raise HTTPException(status_code=404, detail="Task or step not found")
 
-        return TaskResponse(
-            id=task.id,
-            state=task.state.value,
-            created_at=task.created_at,
-            completed_at=task.completed_at,
-            result=task.result.data if task.result else {},
-            error=task.error,
-        )
+        return _serialize_task(task)
     
     @app.get("/api/skills", response_model=List[SkillResponse])
     async def list_skills():
@@ -382,13 +601,32 @@ def create_app() -> FastAPI:
             return {"skills": result.data.get("skills", [])}
         return {"skills": [], "error": result.message}
 
-    @app.post("/api/clawhub/install")
-    async def clawhub_install(skill_id: str):
+    @app.get("/api/clawhub/scan", response_model=SkillSecurityReviewResponse)
+    async def clawhub_scan(skill_id: str):
         registry = get_tool_registry()
-        result = await registry.execute("clawhub_install", skill_id=skill_id)
+        result = await registry.execute("clawhub_scan", skill_id=skill_id)
+        if result.status != "success":
+            raise HTTPException(status_code=502, detail=result.message)
+        return result.data.get("scan", {})
+
+    @app.post("/api/clawhub/install", response_model=SkillInstallResponse)
+    async def clawhub_install(skill_id: str, decision: Optional[str] = None):
+        registry = get_tool_registry()
+        result = await registry.execute("clawhub_install", skill_id=skill_id, decision=decision)
         if result.status == "success":
-            return {"installed": True, "skill_path": result.data.get("skill_path", "")}
-        return {"installed": False, "error": result.message}
+            return {
+                "installed": True,
+                "skill_path": result.data.get("skill_path", ""),
+                "scan": result.data.get("scan"),
+                "guard": result.data.get("guard"),
+            }
+        return {
+            "installed": False,
+            "requires_review": bool(result.data.get("requires_review")),
+            "error": result.message,
+            "scan": result.data.get("scan"),
+            "guard": result.data.get("guard"),
+        }
 
     @app.post("/api/clawhub/remove")
     async def clawhub_remove(skill_id: str):
@@ -405,6 +643,7 @@ def create_app() -> FastAPI:
         return {
             "mode": settings.mode.value,
             "llm_enabled": settings.llm_enabled,
+            "llm_parse_only": settings.llm_parse_only,
             "model_provider": settings.model_provider.value,
             "model_name": settings.model_name,
             "model_base_url": settings.get_model_base_url(),
@@ -412,7 +651,376 @@ def create_app() -> FastAPI:
             "managed_skills_dir": str(settings.managed_skills_dir),
             "workspace_skills_dir": str(settings.workspace_skills_dir),
             "data_dir": str(settings.data_dir),
+            "wechat_personal_enabled": settings.wechat_personal_enabled,
+            "wechat_personal_reply_via_proxy": settings.wechat_personal_reply_via_proxy,
+            "wechat_personal_has_proxy_url": bool(settings.wechat_personal_proxy_url),
+            "whatsapp_enabled": settings.whatsapp_enabled,
+            "whatsapp_reply_via_cloud_api": settings.whatsapp_reply_via_cloud_api,
+            "whatsapp_has_phone_number_id": bool(settings.whatsapp_phone_number_id),
+            "skill_install_protection_mode": settings.skill_install_protection_mode.value,
+            "skill_isolation_require_approval": settings.skill_isolation_require_approval,
+            "skill_isolation_block_critical": settings.skill_isolation_block_critical,
         }
+
+    @app.get("/api/channels/wechat-personal/status")
+    async def get_personal_wechat_status():
+        """Return status information for the experimental personal WeChat bridge."""
+        settings = get_settings()
+        return {
+            "enabled": settings.wechat_personal_enabled,
+            "reply_via_proxy": settings.wechat_personal_reply_via_proxy,
+            "has_inbound_token": bool(settings.wechat_personal_inbound_token),
+            "has_proxy_url": bool(settings.wechat_personal_proxy_url),
+            "has_api_key": bool(settings.wechat_personal_api_key),
+        }
+
+    @app.get("/api/channels/whatsapp/status")
+    async def get_whatsapp_status():
+        """Return status information for the WhatsApp Cloud API channel."""
+        settings = get_settings()
+        return {
+            "enabled": settings.whatsapp_enabled,
+            "reply_via_cloud_api": settings.whatsapp_reply_via_cloud_api,
+            "has_verify_token": bool(settings.whatsapp_verify_token),
+            "has_app_secret": bool(settings.whatsapp_app_secret),
+            "has_access_token": bool(settings.whatsapp_access_token),
+            "has_phone_number_id": bool(settings.whatsapp_phone_number_id),
+            "graph_base_url": settings.whatsapp_graph_base_url,
+            "graph_api_version": settings.whatsapp_graph_api_version,
+        }
+
+    @app.post("/api/channels/wechat-personal/test", response_model=ChannelTestResponse)
+    async def test_personal_wechat_channel(request: PersonalWeChatTestRequest):
+        """Run a manual connectivity test against the personal WeChat bridge."""
+
+        settings = get_settings()
+        reply_target = (request.reply_target or "").strip()
+        sender_id = (request.sender_id or reply_target or "wechat-test-user").strip()
+        conversation_id = (request.conversation_id or reply_target or sender_id).strip()
+        request_preview = {
+            "reply_target": reply_target,
+            "conversation_id": conversation_id,
+            "sender_id": sender_id,
+            "sender_name": request.sender_name or "",
+            "message_id": request.message_id or "",
+            "text": request.text,
+        }
+
+        missing: List[str] = []
+        if not settings.wechat_personal_enabled:
+            missing.append("LOCALCLAW_WECHAT_PERSONAL_ENABLED")
+        if not settings.wechat_personal_reply_via_proxy:
+            missing.append("LOCALCLAW_WECHAT_PERSONAL_REPLY_VIA_PROXY")
+        if not settings.wechat_personal_proxy_url:
+            missing.append("LOCALCLAW_WECHAT_PERSONAL_PROXY_URL")
+        if not reply_target:
+            missing.append("reply_target")
+
+        if missing:
+            return ChannelTestResponse(
+                ok=True,
+                mode="dry_run",
+                channel="wechat_personal",
+                summary=(
+                    "Dry run only. Enable the personal WeChat bridge proxy path and "
+                    "provide a reply target to send a live test."
+                ),
+                request=request_preview,
+                missing=missing,
+            )
+
+        envelope = PersonalWeChatEnvelope(
+            content=request.text,
+            sender_id=sender_id,
+            conversation_id=conversation_id,
+            reply_target=reply_target,
+            sender_name=request.sender_name,
+            message_id=request.message_id,
+            bridge_name="manual-test",
+            raw_payload={"manual_test": True},
+        )
+        delivery = await send_personal_wechat_reply(
+            envelope=envelope,
+            reply_text=request.text,
+            settings=settings,
+        )
+        status_code = int((delivery or {}).get("status_code", 0))
+        ok = 200 <= status_code < 300
+        summary = (
+            f"Live bridge test delivered with HTTP {status_code}."
+            if ok
+            else f"Bridge proxy returned HTTP {status_code or 'unknown'}."
+        )
+        return ChannelTestResponse(
+            ok=ok,
+            mode="live",
+            channel="wechat_personal",
+            summary=summary,
+            request=request_preview,
+            delivery=delivery,
+        )
+
+    @app.post("/api/channels/whatsapp/test", response_model=ChannelTestResponse)
+    async def test_whatsapp_channel(request: WhatsAppTestRequest):
+        """Run a manual connectivity test against the WhatsApp Cloud API."""
+
+        settings = get_settings()
+        recipient = (request.recipient or "").strip()
+        phone_number_id = (request.phone_number_id or settings.whatsapp_phone_number_id or "").strip()
+        request_preview = {
+            "recipient": recipient,
+            "phone_number_id": phone_number_id,
+            "reply_to_message_id": request.reply_to_message_id or "",
+            "sender_name": request.sender_name or "",
+            "text": request.text,
+        }
+
+        missing: List[str] = []
+        if not settings.whatsapp_enabled:
+            missing.append("LOCALCLAW_WHATSAPP_ENABLED")
+        if not settings.whatsapp_reply_via_cloud_api:
+            missing.append("LOCALCLAW_WHATSAPP_REPLY_VIA_CLOUD_API")
+        if not settings.whatsapp_access_token:
+            missing.append("LOCALCLAW_WHATSAPP_ACCESS_TOKEN")
+        if not phone_number_id:
+            missing.append("LOCALCLAW_WHATSAPP_PHONE_NUMBER_ID")
+        if not recipient:
+            missing.append("recipient")
+
+        if missing:
+            return ChannelTestResponse(
+                ok=True,
+                mode="dry_run",
+                channel="whatsapp",
+                summary=(
+                    "Dry run only. Add Cloud API credentials and a target recipient "
+                    "to send a live WhatsApp test."
+                ),
+                request=request_preview,
+                missing=missing,
+            )
+
+        envelope = WhatsAppEnvelope(
+            content=request.text,
+            sender_id=recipient,
+            sender_name=request.sender_name,
+            message_id=(request.reply_to_message_id or "").strip(),
+            phone_number_id=phone_number_id,
+            display_phone_number=None,
+            raw_payload={"manual_test": True},
+        )
+        delivery = await send_whatsapp_text_reply(
+            envelope=envelope,
+            reply_text=request.text,
+            settings=settings,
+        )
+        status_code = int((delivery or {}).get("status_code", 0))
+        ok = 200 <= status_code < 300
+        summary = (
+            f"Live WhatsApp test delivered with HTTP {status_code}."
+            if ok
+            else f"WhatsApp Cloud API returned HTTP {status_code or 'unknown'}."
+        )
+        return ChannelTestResponse(
+            ok=ok,
+            mode="live",
+            channel="whatsapp",
+            summary=summary,
+            request=request_preview,
+            delivery=delivery,
+        )
+
+    @app.get("/api/channels", response_model=ChannelsOverviewResponse)
+    async def get_channels_overview():
+        """Return a UI-friendly overview of supported chat channels."""
+        settings = get_settings()
+        return ChannelsOverviewResponse(
+            channels=[
+                {
+                    "key": "wechat_personal",
+                    "name": "Personal WeChat",
+                    "kind": "bridge",
+                    "enabled": settings.wechat_personal_enabled,
+                    "reply_mode": (
+                        "bridge_proxy"
+                        if settings.wechat_personal_reply_via_proxy
+                        else "inline_response"
+                    ),
+                    "webhook_path": "/api/channels/wechat-personal/webhook",
+                    "status_path": "/api/channels/wechat-personal/status",
+                    "test_path": "/api/channels/wechat-personal/test",
+                    "required_env": [
+                        "LOCALCLAW_WECHAT_PERSONAL_ENABLED",
+                        "LOCALCLAW_WECHAT_PERSONAL_INBOUND_TOKEN",
+                    ],
+                    "optional_env": [
+                        "LOCALCLAW_WECHAT_PERSONAL_PROXY_URL",
+                        "LOCALCLAW_WECHAT_PERSONAL_API_KEY",
+                        "LOCALCLAW_WECHAT_PERSONAL_REPLY_VIA_PROXY",
+                    ],
+                    "checks": {
+                        "has_inbound_token": bool(settings.wechat_personal_inbound_token),
+                        "has_proxy_url": bool(settings.wechat_personal_proxy_url),
+                        "has_api_key": bool(settings.wechat_personal_api_key),
+                    },
+                    "summary": "Experimental bridge for personal WeChat webhook adapters.",
+                    "notes": [
+                        "Bridge must POST JSON to the webhook URL.",
+                        "Use X-LocalClaw-Token or Authorization: Bearer <token>.",
+                        "Routine commands can use /cmd and safe_shell automatically.",
+                    ],
+                },
+                {
+                    "key": "whatsapp",
+                    "name": "WhatsApp Cloud API",
+                    "kind": "official",
+                    "enabled": settings.whatsapp_enabled,
+                    "reply_mode": (
+                        "cloud_api"
+                        if settings.whatsapp_reply_via_cloud_api
+                        else "inline_response"
+                    ),
+                    "webhook_path": "/api/channels/whatsapp/webhook",
+                    "verify_path": "/api/channels/whatsapp/webhook",
+                    "status_path": "/api/channels/whatsapp/status",
+                    "test_path": "/api/channels/whatsapp/test",
+                    "required_env": [
+                        "LOCALCLAW_WHATSAPP_ENABLED",
+                        "LOCALCLAW_WHATSAPP_VERIFY_TOKEN",
+                    ],
+                    "optional_env": [
+                        "LOCALCLAW_WHATSAPP_APP_SECRET",
+                        "LOCALCLAW_WHATSAPP_ACCESS_TOKEN",
+                        "LOCALCLAW_WHATSAPP_PHONE_NUMBER_ID",
+                        "LOCALCLAW_WHATSAPP_REPLY_VIA_CLOUD_API",
+                    ],
+                    "checks": {
+                        "has_verify_token": bool(settings.whatsapp_verify_token),
+                        "has_app_secret": bool(settings.whatsapp_app_secret),
+                        "has_access_token": bool(settings.whatsapp_access_token),
+                        "has_phone_number_id": bool(settings.whatsapp_phone_number_id),
+                    },
+                    "summary": "Official WhatsApp Cloud API inbound webhook and optional outbound reply channel.",
+                    "notes": [
+                        "Meta verification uses the same webhook URL.",
+                        "GET verify must receive hub.mode=subscribe, hub.verify_token and hub.challenge.",
+                        "POST webhook validates X-Hub-Signature-256 when app secret is configured.",
+                    ],
+                },
+            ]
+        )
+
+    @app.get("/api/channels/whatsapp/webhook")
+    async def verify_whatsapp_webhook(request: Request):
+        """Verify the WhatsApp Cloud API webhook subscription."""
+        settings = get_settings()
+        if not settings.whatsapp_enabled:
+            raise HTTPException(status_code=503, detail="WhatsApp channel is disabled")
+
+        hub_mode = request.query_params.get("hub.mode")
+        hub_verify_token = request.query_params.get("hub.verify_token")
+        hub_challenge = request.query_params.get("hub.challenge", "")
+
+        if hub_mode != "subscribe":
+            raise HTTPException(status_code=400, detail="Invalid hub.mode")
+        if not is_valid_whatsapp_verify_token(settings.whatsapp_verify_token, hub_verify_token):
+            raise HTTPException(status_code=401, detail="Invalid WhatsApp verify token")
+
+        return PlainTextResponse(content=hub_challenge)
+
+    @app.post("/api/channels/whatsapp/webhook", response_model=WhatsAppWebhookResponse)
+    async def whatsapp_webhook(request: Request):
+        """Receive WhatsApp Cloud API webhook events."""
+        settings = get_settings()
+        if not settings.whatsapp_enabled:
+            raise HTTPException(status_code=503, detail="WhatsApp channel is disabled")
+
+        body = await request.body()
+        signature = request.headers.get("X-Hub-Signature-256")
+        if not is_valid_whatsapp_signature(settings.whatsapp_app_secret, body, signature):
+            raise HTTPException(status_code=401, detail="Invalid WhatsApp signature")
+
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Invalid WhatsApp webhook payload") from exc
+
+        envelope = normalize_whatsapp_webhook_payload(payload)
+        if envelope is None:
+            return WhatsAppWebhookResponse(
+                accepted=True,
+                event_type="status",
+                status="ignored",
+            )
+
+        engine = get_engine()
+        task = await engine.process_message(build_whatsapp_message(envelope))
+        reply_text = format_task_for_whatsapp(task)
+        outbound_delivery = await send_whatsapp_text_reply(
+            envelope=envelope,
+            reply_text=reply_text,
+            settings=settings,
+        )
+
+        return WhatsAppWebhookResponse(
+            accepted=True,
+            event_type="message",
+            task_id=task.id,
+            status=task.state.value,
+            reply={
+                "type": "text",
+                "text": reply_text,
+                "to": envelope.sender_id,
+                "reply_to_message_id": envelope.message_id,
+            },
+            outbound_delivery=outbound_delivery,
+        )
+
+    @app.post(
+        "/api/channels/wechat-personal/webhook",
+        response_model=PersonalWeChatWebhookResponse,
+    )
+    async def personal_wechat_webhook(payload: Dict[str, Any], request: Request):
+        """Receive messages from an experimental personal WeChat bridge."""
+        settings = get_settings()
+        if not settings.wechat_personal_enabled:
+            raise HTTPException(status_code=503, detail="Personal WeChat bridge is disabled")
+
+        inbound_token = request.headers.get("X-LocalClaw-Token")
+        authorization = request.headers.get("Authorization")
+        if not is_valid_personal_wechat_token(
+            settings.wechat_personal_inbound_token,
+            inbound_token,
+            authorization,
+        ):
+            raise HTTPException(status_code=401, detail="Invalid personal WeChat bridge token")
+
+        try:
+            envelope = normalize_personal_wechat_payload(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        engine = get_engine()
+        task = await engine.process_message(build_personal_wechat_message(envelope))
+        reply_text = format_task_for_personal_wechat(task)
+        bridge_delivery = await send_personal_wechat_reply(
+            envelope=envelope,
+            reply_text=reply_text,
+            settings=settings,
+        )
+
+        return PersonalWeChatWebhookResponse(
+            accepted=True,
+            task_id=task.id,
+            status=task.state.value,
+            reply={
+                "type": "text",
+                "text": reply_text,
+                "conversation_id": envelope.conversation_id,
+                "reply_target": envelope.reply_target,
+            },
+            bridge_delivery=bridge_delivery,
+        )
     
     @app.get("/health")
     async def health_check():

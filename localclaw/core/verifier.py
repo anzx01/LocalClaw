@@ -4,12 +4,14 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from localclaw.config.settings import Settings, get_settings
 from localclaw.core.models import (
     Context,
     ExecutionResult,
     RiskLevel,
     Step,
 )
+from localclaw.skills.registry.registry import SkillRegistry, get_skill_registry
 
 
 class VerificationDecision(str, Enum):
@@ -68,10 +70,34 @@ class PermissionVerifier(VerifierBackend):
     HIGH_RISK_TOOLS = {"shell", "http_post"}
     CRITICAL_TOOLS = {"shell"}
     
-    def __init__(self, auto_approve_low: bool = True, require_confirmation_high: bool = True) -> None:
+    def __init__(
+        self,
+        auto_approve_low: bool = True,
+        require_confirmation_high: bool = True,
+        settings: Optional[Settings] = None,
+        skill_registry: Optional[SkillRegistry] = None,
+    ) -> None:
         self._auto_approve_low = auto_approve_low
         self._require_confirmation_high = require_confirmation_high
         self._approved_operations: set = set()
+        self._settings = settings or get_settings()
+        self._skill_registry = skill_registry or get_skill_registry()
+
+    def _get_skill_guard(self, step: Step) -> Dict[str, Any]:
+        """Return post-install guard metadata for the source skill if present."""
+
+        skill_name = (step.source_skill_name or "").strip()
+        if not skill_name:
+            return {}
+
+        skill = self._skill_registry.get(skill_name)
+        if skill is None:
+            return {}
+
+        definition = skill.get_definition() if hasattr(skill, "get_definition") else None
+        metadata = definition.metadata if definition is not None else {}
+        guard = metadata.get("localclaw_guard", {})
+        return dict(guard) if isinstance(guard, dict) else {}
     
     def get_risk_level(self, step: Step) -> RiskLevel:
         """Determine the risk level of a step."""
@@ -90,6 +116,32 @@ class PermissionVerifier(VerifierBackend):
     
     async def verify_step(self, step: Step, context: Context) -> VerificationResult:
         """Verify a step before execution."""
+        guard = self._get_skill_guard(step)
+        if step.type.value == "tool_call" and guard:
+            tool_name = (step.tool_name or "").strip()
+            blocked_tools = set(guard.get("blocked_tools", []) or [])
+            approval_required_tools = set(guard.get("approval_required_tools", []) or [])
+
+            if tool_name in blocked_tools:
+                return VerificationResult.reject_result(
+                    f"Tool '{tool_name}' is blocked by post-install protection for skill '{step.source_skill_name}'",
+                    {
+                        "tool_name": tool_name,
+                        "source_skill_name": step.source_skill_name,
+                        "guard_mode": guard.get("mode", "off"),
+                    },
+                )
+
+            if tool_name in approval_required_tools and not self.is_approved(step.id):
+                return VerificationResult.ask_human_result(
+                    f"Isolated skill '{step.source_skill_name}' requires approval before running '{tool_name}'",
+                    {
+                        "tool_name": tool_name,
+                        "source_skill_name": step.source_skill_name,
+                        "guard_mode": guard.get("mode", "isolate"),
+                    },
+                )
+
         risk_level = self.get_risk_level(step)
 
         if self.is_approved(step.id):
@@ -169,8 +221,15 @@ class SchemaVerifier(VerifierBackend):
 class Verifier:
     """Main verifier combining multiple verification backends."""
     
-    def __init__(self) -> None:
-        self._permission_verifier = PermissionVerifier()
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        skill_registry: Optional[SkillRegistry] = None,
+    ) -> None:
+        self._permission_verifier = PermissionVerifier(
+            settings=settings,
+            skill_registry=skill_registry,
+        )
         self._schema_verifier = SchemaVerifier()
         self._pending_approvals: Dict[str, Step] = {}
     
@@ -230,6 +289,9 @@ class Verifier:
         self._permission_verifier._require_confirmation_high = value
 
 
-def create_default_verifier() -> Verifier:
+def create_default_verifier(
+    settings: Optional[Settings] = None,
+    skill_registry: Optional[SkillRegistry] = None,
+) -> Verifier:
     """Create a verifier with default configuration."""
-    return Verifier()
+    return Verifier(settings=settings, skill_registry=skill_registry)

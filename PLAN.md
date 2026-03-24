@@ -1,295 +1,277 @@
-# LocalClaw 开发计划
-
-## Context
-
-LocalClaw 是一个兼容 OpenClaw 的**本地优先 Agent Runtime 系统**，核心目标是构建一个依赖本地 LLM 也能完整运行的 Agent 操作系统。
-
-- 架构参考：`OPENCLAW_LOCAL_REFERENCE.md`
-
-- 
-- **技术栈**：Python（生态丰富，LLM 库支持最佳，开发效率高）
-- **首选渠道**：Web UI（可视化验证，演示友好）
-- **交付节奏**：3 阶段渐进式
-
----
-
-## 项目结构
-
-```
-G:\myaist\LocalClaw\
-├── localclaw/
-│   ├── __init__.py
-│   ├── core/
-│   │   ├── models.py          # 核心数据模型 (Message, Intent, Step, Context, Task)
-│   │   ├── parser.py          # Parser 模块（规则/DSL/可选LLM）
-│   │   ├── planner.py         # Planner 模块（模板规划）
-│   │   ├── engine.py          # Execution Engine（状态机核心）
-│   │   └── verifier.py        # Verifier 校验模块
-│   ├── channels/
-│   │   ├── base.py            # Channel 抽象基类
-│   │   ├── cli.py             # CLI 渠道
-│   │   └── web.py             # Web UI 渠道（FastAPI）
-│   ├── gateway/
-│   │   ├── gateway.py         # Communication Gateway（消息收发/会话/队列）
-│   │   └── router.py          # Agent Router（用户绑定/关键词路由/fallback）
-│   ├── skills/
-│   │   ├── base.py            # Skill 抽象基类
-│   │   ├── loader.py          # Skill 加载器（含 OpenClaw 兼容导入）
-│   │   └── registry.py        # Skill 注册表
-│   ├── tools/
-│   │   ├── base.py            # Tool 抽象基类（输入/输出声明 + 日志 + 权限）
-│   │   ├── file_tool.py       # 文件操作 Tool
-│   │   ├── shell_tool.py      # Shell 命令 Tool
-│   │   └── http_tool.py       # HTTP 请求 Tool
-│   ├── memory/
-│   │   ├── short_term.py      # 短期记忆（会话内）
-│   │   ├── long_term.py       # 长期记忆（持久化，SQLite）
-│   │   └── cache.py           # 缓存记忆
-│   ├── security/
-│   │   ├── permissions.py     # 权限控制 + 风险拦截（HITL）
-│   │   └── audit.py           # 审计日志
-│   └── config/
-│       └── settings.py        # 全局配置（mode: zero/local/hybrid）
-├── skills/                    # 内置/用户 Skill 目录（JSON/YAML 定义）
-├── tests/
-│   ├── test_parser.py
-│   ├── test_engine.py
-│   ├── test_tools.py
-│   └── test_skills.py
-├── main.py                    # 入口文件
-├── requirements.txt
-└── pyproject.toml
-```
-
----
+# LocalClaw 当前计划
 
-## 核心数据模型（localclaw/core/models.py）
+## 1. 产品目标
 
-```python
-# 统一消息格式
-Message: { user_id, channel, message, timestamp }
+LocalClaw 当前的目标不是继续做“规则解析优先”的实验框架，而是做成一个真正可本地落地使用的 Agent 控制台：
 
-# Parser 输出
-Intent: { intent: str, params: dict }
-
-# Planner 输出
-Plan: { steps: List[Step] }
+- 尽量零成本、尽量本地优先
+- 通过 Web UI、个人微信、WhatsApp 给本机发任务
+- 用自然语言指挥 IDE 辅助编程、执行命令、整理文件
+- 生成日报、周报、项目总结、文件摘要和报表
+- 用 OpenClaw 风格的 skills 扩展能力
+- 对高风险动作保留审批、隔离或禁用策略
 
-# 执行步骤
-Step: { id, type, status, input, output }
-# type: tool_call | skill_call | agent_call | condition | loop | transform
-# status: pending | running | completed | failed
+## 2. 已经确定的产品决策
 
-# 执行上下文
-Context: { inputs, memory, step_outputs }
+### 2.1 统一解析策略
 
-# 任务状态机
-TaskState: INIT → PARSED → PLANNED → RUNNING → VERIFYING → COMPLETED / FAILED
-```
+当前路线已经明确：
 
----
+- 默认启用本地大模型
+- 默认启用 `LOCALCLAW_LLM_PARSE_ONLY=true`
+- 所有输入优先交给本地大模型解析
+- `/cmd`、`/shell` 也纳入统一解析链路
+- 不再把规则解析器当作主产品路线
 
-## Phase 1：核心引擎 MVP（约 2 周）
+后续优化重点应该放在：
 
-**目标**：无 LLM 可完整执行任务链，CLI 可交互验证
+- 提升本地模型提示词和参数抽取质量
+- 提升 tools / skills 暴露给模型的可理解性
+- 补失败回退和错误提示
 
-### 1.1 基础设施
+而不是继续堆更多 parser 规则。
 
-- [ ] `pyproject.toml` + `requirements.txt` 初始化（fastapi, uvicorn, pydantic, sqlite3, click）
-- [ ] `localclaw/config/settings.py`：全局配置加载，支持 `mode: zero/local/hybrid`，`llm_enabled: false`
+### 2.2 主入口和执行原则
 
-### 1.2 核心模型
+当前入口分工：
 
-- [ ] `localclaw/core/models.py`：定义 Message、Intent、Step、Context、TaskState 数据类（Pydantic BaseModel）
+- Web UI 是主控制台
+- CLI 是调试入口
+- 个人微信是实验性个人入口
+- WhatsApp 是标准化外部入口
 
-### 1.3 Parser 模块
+当前执行原则：
 
-- [ ] `localclaw/core/parser.py`
-  - 规则解析（正则关键词匹配 → Intent）
-  - DSL 解析（`/skill_name param1 param2` 格式）
-  - 可选：本地 LLM 接口（仅 mode=local/hybrid 启用）
+- Tool 是唯一执行入口
+- 常规命令走 `safe_shell`
+- 原始命令走 `shell`
+- 高风险步骤进入审批中心
+- 第三方 skill 先体检，再安装，再继续受保护
 
-### 1.4 Planner 模块
+### 2.3 Skill 路线
 
-- [ ] `localclaw/core/planner.py`
-  - 模板规划：Intent → Plan（从 Skill 的 `actions` 字段生成 steps 列表）
-  - Workflow Skill 直接映射为多步 Plan
+当前已经明确采用 OpenClaw 风格的 skills 路线：
 
-### 1.5 Execution Engine（核心）
+- 支持 `SKILL.md`
+- 支持 `.json` / `.yaml`
+- 支持 metadata / requirements / availability
+- 支持模型直接返回 `skill.<name>`
+- 支持多目录加载和能力暴露过滤
 
-- [ ] `localclaw/core/engine.py`
-  - 状态机实现：INIT → PARSED → PLANNED → RUNNING → VERIFYING → COMPLETED/FAILED
-  - FOR each step：权限检查 → 执行 → 获取结果 → 更新 Context → 决策下一步
-  - 支持 condition / loop step 类型
-  - 错误处理：retry → fallback → abort
-  - 中断/恢复：状态持久化（JSON 文件或 SQLite）
-  - 执行日志：每步记录 `{ step, status, input, output }`
+Skill 不是临时脚本集合，而是正式能力扩展层。
 
-### 1.6 Verifier 模块
+## 3. 当前已经落地的能力
 
-- [ ] `localclaw/core/verifier.py`
-  - 风险检查（对比权限声明）
-  - 数据校验（输出格式匹配 Skill 的 outputs schema）
-  - 执行决策：pass / reject / ask_human
+### 3.1 本地模型统一解析
 
-### 1.7 Tool 系统
+已落地：
 
-- [ ] `localclaw/tools/base.py`：Tool 基类，必须声明 `inputs`/`outputs`，自动记录日志，权限控制
-- [ ] `localclaw/tools/file_tool.py`：读写文件
-- [ ] `localclaw/tools/shell_tool.py`：Shell 命令执行（高风险，需 HITL 确认）
-- [ ] `localclaw/tools/http_tool.py`：HTTP GET/POST
+- `localclaw/config/settings.py`
+  - 默认 `mode=local`
+  - 默认 `llm_enabled=true`
+  - 默认 `llm_parse_only=true`
+- `localclaw/core/parser.py`
+  - 所有输入优先进入本地 LLM 解析
+  - prompt 会动态注入当前可用 skills
 
-### 1.8 Skill 系统
+### 3.2 Web UI 和基础 API
 
-- [ ] `localclaw/skills/base.py`：Skill 基类，标准结构：`{ name, version, description, type, inputs, outputs, actions, tools, permissions, triggers, metadata }`
-- [ ] `localclaw/skills/registry.py`：Skill 注册表（内存 + 磁盘扫描）
-- [ ] `localclaw/skills/loader.py`：从 `skills/` 目录加载 JSON/YAML Skill 定义
-- [ ] Skill 生命周期：installed → enabled → running → stopped
-- [ ] Skill 执行规则：不直接执行系统操作，必须通过 Tool，必须可审计
+已落地：
 
-### 1.9 CLI 渠道
+- `Chat`
+- `Tasks`
+- `Approvals`
+- `Skills`
+- `Channels`
 
-- [ ] `localclaw/channels/cli.py`：使用 `click` 实现交互式命令行
-- [ ] `main.py`：CLI 入口，支持 `python main.py run "查询天气"`
+已落地接口：
 
-### 1.10 基础安全层
+- `POST /api/message`
+- `GET /api/tasks`
+- `GET /api/tasks/{task_id}`
+- `GET /api/approvals`
+- `POST /api/tasks/{task_id}/approve/{step_id}`
+- `GET /api/skills`
+- `GET /api/channels`
+- `GET /api/config`
 
-- [ ] `localclaw/security/permissions.py`：权限级别定义 + 执行前检查
-- [ ] `localclaw/security/audit.py`：审计日志写入（JSON Lines 格式）
+### 3.3 自动化执行命令
 
----
+已落地：
 
-## Phase 2：Web UI 渠道 + Memory + Gateway（约 2 周）
-
-**目标**：浏览器可访问，支持多轮会话，Gateway 统一消息分发
-
-### 2.1 Web UI 渠道
-
-- [ ] `localclaw/channels/web.py`：FastAPI 应用
-  - `POST /api/message`：接收用户消息，返回执行结果
-  - `GET /api/tasks`：查询任务列表与状态
-  - `GET /api/skills`：列出已注册 Skill
-  - WebSocket `/ws`：实时推送执行过程
-- [ ] 前端：简洁聊天界面（HTML + Alpine.js，内嵌于 FastAPI static）
-
-### 2.2 Memory 系统
-
-- [ ] `localclaw/memory/short_term.py`：会话内内存（dict，Task 生命周期内有效）
-- [ ] `localclaw/memory/long_term.py`：SQLite 持久化，支持 key-value + 向量检索预留接口
-- [ ] `localclaw/memory/cache.py`：结果缓存（减少重复 Tool 调用）
-
-### 2.3 Communication Gateway
-
-- [ ] `localclaw/gateway/gateway.py`：消息接收分发、会话管理、异步队列（asyncio Queue）
-- [ ] `localclaw/gateway/router.py`：用户绑定 Agent、关键词路由规则、默认 fallback Agent
-
-### 2.4 Telegram 渠道（选做）
-
-- [ ] `localclaw/channels/telegram.py`：使用 `python-telegram-bot` 库接入
-
----
-
-## Phase 3：安全加固 + 多 Agent + 生态（约 2 周）
-
-**���标**：生产级安全，多 Agent 协同，OpenClaw 兼容，可选 LLM
-
-### 3.1 多 Agent 支持
-
-- [ ] Agent 配置文件（`agents/` 目录，每个 Agent 独立 skills/权限/策略）
-- [ ] agent_call step 类型实现：主 Agent → 子 Agent → 返回结果
-
-### 3.2 事件系统
-
-- [ ] 定时任务（APScheduler 集成）
-- [ ] 条件触发（基于 Memory/外部事件）
-- [ ] 自动执行链
-
-### 3.3 OpenClaw 兼容层
-
-- [ ] `localclaw/skills/loader.py` 扩展：识别并导入 OpenClaw Skill 格式
-- [ ] 自动字段映射规则
-- [ ] 不兼容字段 fallback 处理
-
-### 3.4 安全加固
-
-- [ ] Skill 沙箱执行（subprocess isolation）
-- [ ] HITL（Human-In-The-Loop）：高风险操作暂停等待用户确认
-- [ ] 审计日志完善：可查询、可导出
-
-### 3.5 Local LLM 接入
-
-- [ ] Ollama 接口集成（`mode=local` 时启用）
-- [ ] 云 LLM 接口（OpenAI compatible API，`mode=hybrid` 时启用）
-
-### 3.6 WhatsApp / 企业微信渠道（选做）
-
----
-
-## 关键配置文件
-
-### `localclaw/config/settings.py`
-
-```python
-{
-  "mode": "zero",          # zero | local | hybrid
-  "llm_enabled": False,
-  "skills_dir": "./skills",
-  "memory_db": "./data/memory.db",
-  "audit_log": "./data/audit.jsonl"
-}
+- `/cmd <command>` -> `safe_shell`
+- 自然语言 `执行命令 xxx` -> `safe_shell`
+- `/shell <command>` -> `shell`
+- 高风险 shell 进入审批中心等待批准
+
+这条链路已经满足“可以自动化执行命令”的核心要求。
+
+### 3.4 OpenClaw 风格 skills
+
+已落地：
+
+- 本地 skill 加载与注册
+- `SKILL.md` / JSON / YAML 支持
+- metadata / requirements / availability 检查
+- 对模型可调用 skill 的过滤暴露
+- 将 skill workflow 转成 step 执行链路
+
+### 3.5 第三方 skill 安装前安全体检
+
+已落地：
+
+- ClawHub 安装前必须先 scan
+- 用户必须显式选择 `proceed` 才允许继续安装
+- Web UI 改为“体检后安装”
+
+当前安装前体检覆盖：
+
+- 8 类恶意 / 可疑插件风险
+  - 密钥收割型
+  - 挖矿注入型
+  - 动态拉取型
+  - 越权访问型
+  - 仿冒官方型
+  - 无作者溯源型
+  - 第三方内容抓取型
+  - 无评分无维护型
+- 6 类高危能力型 skill
+  - 要输入密钥
+  - 能执行命令
+  - 能控制浏览器
+  - 能读取文件
+  - 能发起网络请求
+  - 能设置定时任务 / 后台运行
+
+### 3.6 第三方 skill 安装后保护策略
+
+这一项现在也已经落地，不只是计划。
+
+已落地：
+
+- 安装时自动根据 skill 声明的工具能力写入 `metadata.localclaw_guard`
+- 运行时 verifier 会基于 `source_skill_name` 读取 guard
+- 被禁用的高危工具会直接拦截
+- 隔离模式下的受保护工具会先进入审批
+- 触发器可在安装后自动禁用，避免后台静默运行
+
+当前支持的模式：
+
+- `off`
+  - 不做安装后保护
+- `disable_high_risk`
+  - 默认模式
+  - 直接禁用高危工具
+  - 同时禁用 trigger
+- `isolate`
+  - 隔离运行
+  - 受保护工具默认审批
+  - 可继续阻断关键危险工具，如 `shell`
+  - 同时禁用 trigger
+
+相关配置：
+
+```env
+LOCALCLAW_SKILL_INSTALL_PROTECTION_MODE=disable_high_risk
+LOCALCLAW_SKILL_ISOLATION_REQUIRE_APPROVAL=true
+LOCALCLAW_SKILL_ISOLATION_BLOCK_CRITICAL=true
 ```
 
-### Skill 定义示例（`skills/hello.json`）
+这满足了“安装后默认禁用高危权限”或“隔离运行”，并且“可设置”的要求。
 
-```json
-{
-  "name": "hello",
-  "version": "1.0.0",
-  "type": "atomic",
-  "inputs": { "name": "string" },
-  "outputs": { "message": "string" },
-  "actions": [{ "type": "transform", "template": "Hello, {{name}}!" }],
-  "permissions": { "risk_level": "low" }
-}
-```
+### 3.7 个人微信接入
 
----
+已落地接口：
 
-## 输出规范
+- `POST /api/channels/wechat-personal/webhook`
+- `GET /api/channels/wechat-personal/status`
+- `POST /api/channels/wechat-personal/test`
 
-所有 Tool / Skill / Engine 统一输出格式：
+当前定位：
 
-```json
-{ "status": "success|error", "message": "", "data": {} }
-```
+- 面向“自己给自己的电脑发消息”
+- 依赖桥接器转发到 LocalClaw
+- 支持代理回推结果
 
----
+### 3.8 WhatsApp 接入
 
-## 验收标准
+已落地接口：
 
-| 阶段    | 验收条件                                                                     |
-| ------- | ---------------------------------------------------------------------------- |
-| Phase 1 | `python main.py run "hello world"` → CLI 执行完整任务链，无 LLM，日志可查 |
-| Phase 2 | 浏览器访问 `http://localhost:8000`，多轮对话，任务状态实时展示             |
-| Phase 3 | 多 Agent 协同执行，OpenClaw Skill 可导入，高风险操作触发 HITL 确认           |
+- `GET /api/channels/whatsapp/webhook`
+- `POST /api/channels/whatsapp/webhook`
+- `GET /api/channels/whatsapp/status`
+- `POST /api/channels/whatsapp/test`
 
----
+当前定位：
 
-## 依赖清单（requirements.txt）
+- 更标准化
+- 更适合稳定外部接入
+- 支持 Cloud API 风格回复
 
-```
-pydantic>=2.0
-fastapi>=0.110
-uvicorn>=0.29
-click>=8.1
-python-dotenv>=1.0
-aiosqlite>=0.20
-apscheduler>=3.10
-httpx>=0.27
-pyyaml>=6.0
-# Phase 2+ 可选
-python-telegram-bot>=21.0
-# Phase 3 可选
-ollama>=0.2
-openai>=1.0
-```
+## 4. 当前能力边界
+
+为了防止文档和现实脱节，这里明确当前还没完全做完的部分：
+
+- 还没有完整的桌面 GUI 自动化
+  - 例如鼠标点击、窗口切换、图像识别、桌面录制等
+- 还没有完整的 IDE 编程产品化工作流
+  - 例如“自动读项目 -> 改代码 -> 跑测试 -> 汇总 patch”的成熟多步技能包
+- 报表模板中心还不完整
+- 个人微信桥接器本体仍需要你自己部署或接第三方方案
+- 第三方 skill 的权限保护已落地，但更细粒度沙箱仍值得继续补
+
+## 5. 近期优先级
+
+### P0：先把“稳定可用”继续补齐
+
+- 把个人微信桥接接入文档写完整
+- 增加文件总结、目录汇总、日报、周报、项目总结类 skills
+- 把 Web UI 里的技能安装说明继续补清楚
+- 把审批中心提示文案做得更直观
+- 把安装后保护模式在 UI 中显示得更清楚
+
+### P1：把“指挥 IDE 编程”做得更像产品
+
+- 增加代码库分析 skill
+- 增加变更总结 skill
+- 增加测试执行与结果汇总 skill
+- 增加面向 IDE 场景的多步 workflow skill
+- 增加更明确的命令白名单和权限模板
+
+### P2：把“操作电脑”从半自动推进到完整自动化
+
+- 增加桌面 GUI 控制能力
+- 增加窗口 / 应用感知
+- 增加定时任务和目录监听
+- 增加更强的多 Agent / 子任务能力
+- 增加报表模板中心和输出格式模板
+
+## 6. 暂不继续作为主线推进的旧方向
+
+以下方向不是完全放弃，但不再作为当前主线叙事：
+
+- 不再以 Zero Mode 作为默认产品故事
+- 不再以规则解析优先作为主流程
+- 不再把“无 LLM 也能完整使用”当作第一卖点
+- 不再把企业微信优先级放在个人微信前面
+
+当前主线已经变成：
+
+> 用本地大模型 + Web UI + 个人微信 / WhatsApp + OpenClaw 风格 skills，先把真正可用的本地自动化体验做出来。
+
+## 7. 文档同步要求
+
+后续只要下面这些代码方向发生变化，文档就要同步更新：
+
+- `localclaw/config/settings.py`
+- `localclaw/core/parser.py`
+- `localclaw/core/planner.py`
+- `localclaw/core/verifier.py`
+- `localclaw/tools/clawhub_tool.py`
+- `localclaw/skills/security_review.py`
+- `localclaw/channels/web.py`
+- `.env.example`
+- `README.md`
+- `PLAN.md`
+
+避免再次出现“代码已经变了，README 和 PLAN 还是旧路线”的情况。

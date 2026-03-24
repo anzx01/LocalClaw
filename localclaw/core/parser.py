@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from localclaw.core.models import Intent, Message
 from localclaw.llm.provider import get_llm_provider
+from localclaw.skills.registry import get_skill_registry
 
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ class RuleParser(ParserBackend):
     def add_rule(self, rule: ParseRule) -> None:
         """Add a parsing rule."""
         self._rules.append(rule)
-        self._rules.sort(key=lambda r: r.priority, reverse=True)
+        self._rules.sort(key=lambda item: item.priority, reverse=True)
 
     def add_rules(self, rules: List[ParseRule]) -> None:
         """Add multiple parsing rules."""
@@ -78,18 +79,17 @@ class RuleParser(ParserBackend):
     async def parse(self, message: Message) -> Optional[Intent]:
         """Parse a message using rules."""
         text = message.content.strip()
-
         for rule in self._rules:
             params = rule.match(text)
-            if params is not None:
-                return Intent(
-                    intent=rule.intent,
-                    params=params,
-                    confidence=1.0,
-                    source="rule",
-                    raw_message=text,
-                )
-
+            if params is None:
+                continue
+            return Intent(
+                intent=rule.intent,
+                params=params,
+                confidence=1.0,
+                source="rule",
+                raw_message=text,
+            )
         return None
 
 
@@ -103,16 +103,34 @@ class DSLParser(ParserBackend):
         """Parse a DSL command."""
         text = message.content.strip()
         match = self.DSL_PATTERN.match(text)
-
         if not match:
             return None
 
         skill_name = match.group(1)
         params_str = match.group(2) or ""
+        normalized_name = skill_name.lower()
+        raw_command = params_str.strip()
+
+        if normalized_name in {"cmd", "run", "safe_shell"}:
+            return Intent(
+                intent="tool.safe_shell",
+                params={"command": raw_command},
+                confidence=1.0,
+                source="dsl",
+                raw_message=text,
+            )
+
+        if normalized_name in {"shell", "sh"}:
+            return Intent(
+                intent="tool.shell",
+                params={"command": raw_command},
+                confidence=1.0,
+                source="dsl",
+                raw_message=text,
+            )
 
         params: Dict[str, Any] = {}
         positional_args: List[str] = []
-
         for param_match in self.PARAM_PATTERN.finditer(params_str):
             if param_match.group(1) and param_match.group(2):
                 params[param_match.group(1)] = param_match.group(2)
@@ -134,6 +152,105 @@ class DSLParser(ParserBackend):
 class LLMParser(ParserBackend):
     """Optional LLM-based parser for natural language understanding."""
 
+    def _build_skill_catalog(self) -> str:
+        """Build a compact list of model-invocable skills for the prompt."""
+        registry = get_skill_registry()
+        lines: List[str] = []
+        for info in registry.get_model_invocable_info():
+            name = info.get("name", "unknown")
+            description = str(info.get("description", "")).strip()
+            inputs = info.get("inputs", {}) or {}
+
+            line = f"- {name}"
+            if description:
+                line += f": {description}"
+            if inputs:
+                line += f" | inputs: {', '.join(inputs.keys())}"
+            lines.append(line)
+
+        if not lines:
+            return "- No external skills are currently available for model invocation."
+        return "\n".join(lines)
+
+    def _build_prompt(self, message: Message) -> str:
+        """Build the local-LLM parsing prompt."""
+        skill_catalog = self._build_skill_catalog()
+        return f"""You are the only input parser for LocalClaw.
+Every user message, including slash commands like /cmd and /shell, must be interpreted here.
+
+Return JSON only in one of these forms:
+{{"intent":"intent_name","params":{{...}}}}
+{{"tool":"tool_name","params":{{...}}}}
+{{"intent":"skill.skill_name","params":{{...}}}}
+
+Prefer the "intent" form whenever an existing LocalClaw intent fits.
+If an installed skill is a better semantic match than a generic built-in intent, return "skill.<name>".
+
+Common intents:
+- greeting
+- help
+- echo
+- list_skills
+- status
+- date_query
+- run_command
+- run_shell_command
+- file_list
+- read_file
+- write_file
+- append_file
+- delete_file
+- create_directory
+- check_weather
+
+Direct tools may be used only when needed:
+- file_read(path)
+- file_write(path, content)
+- file_delete(path)
+- file_mkdir(path)
+- file_list(path)
+- safe_shell(command)
+- shell(command)
+- http_get(url)
+- http_post(url, json_data)
+
+Installed model-invocable skills:
+{skill_catalog}
+
+Rules:
+- "/cmd <command>" -> {{"intent":"run_command","params":{{"command":"<command>"}}}}
+- "/shell <command>" -> {{"intent":"run_shell_command","params":{{"command":"<command>"}}}}
+- When a listed skill clearly matches the request, prefer returning "skill.<name>" with extracted params.
+- Routine dev commands should use run_command or safe_shell.
+- Raw shell access should use run_shell_command or shell.
+- Weather questions such as "后天冷不？", "上海明天天气怎么样", or "Will it rain tomorrow?" should map to check_weather.
+- For weather params, include:
+  - "location": city or region string, or "" when the user did not specify a place
+  - "day_offset": 0 for today/current, 1 for tomorrow, 2 for the day after tomorrow
+  - "day_label": "今天", "明天", or "后天" when applicable
+- Help requests should map to help.
+- Greetings should map to greeting.
+- If nothing fits, return {{"intent":"unknown","params":{{}}}}.
+
+Examples:
+User: /cmd git status
+{{"intent":"run_command","params":{{"command":"git status"}}}}
+
+User: /shell del /s /q temp
+{{"intent":"run_shell_command","params":{{"command":"del /s /q temp"}}}}
+
+User: 总结这个目录下的文件
+{{"intent":"skill.fs","params":{{"action":"list","path":"."}}}}
+
+User: 后天冷不？
+{{"intent":"check_weather","params":{{"location":"","day_offset":2,"day_label":"后天"}}}}
+
+User: 上海天气怎么样
+{{"intent":"check_weather","params":{{"location":"上海","day_offset":0,"day_label":"今天"}}}}
+
+User request: {message.content}
+"""
+
     async def parse(self, message: Message) -> Optional[Intent]:
         """Parse using LLM. Returns None if LLM is not available."""
         try:
@@ -141,29 +258,7 @@ class LLMParser(ParserBackend):
             if not await llm_provider.is_available():
                 return None
 
-            prompt = f"""You map user requests to LocalClaw tools.
-Return JSON only in the form {{"tool":"tool_name","params":{{...}}}}.
-
-Available tools:
-- file_list(path)
-- file_read(path)
-- file_write(path, content)
-- file_delete(path)
-- file_mkdir(path)
-- shell(command)
-- http_get(url)
-- get_weather(location)
-- web_search(query)
-
-Rules:
-- Use get_weather for weather, temperature, rain, or forecast questions.
-- Use web_search when the user explicitly asks to search the web.
-- Use file_* tools for filesystem requests.
-- If nothing fits, return {{"tool":"","params":{{}}}}.
-
-User request: {message.content}
-"""
-
+            prompt = self._build_prompt(message)
             response = await llm_provider.generate(prompt, temperature=0.0)
             content = response.content.strip()
 
@@ -182,14 +277,18 @@ User request: {message.content}
             if not isinstance(params, dict):
                 params = {}
 
-            tool_name = result.get("tool", "")
-            if tool_name == "get_weather":
-                intent = "check_weather"
-            elif tool_name == "web_search":
-                intent = "web_search"
-            else:
-                intent = f"tool.{tool_name}" if tool_name else "unknown"
+            intent_name = result.get("intent", "")
+            if intent_name:
+                return Intent(
+                    intent=intent_name,
+                    params=params,
+                    confidence=0.9,
+                    source="llm",
+                    raw_message=message.content,
+                )
 
+            tool_name = result.get("tool", "")
+            intent = f"tool.{tool_name}" if tool_name else "unknown"
             return Intent(
                 intent=intent,
                 params=params,
@@ -205,10 +304,11 @@ User request: {message.content}
 class Parser:
     """Main parser combining multiple backends."""
 
-    def __init__(self, llm_enabled: bool = False) -> None:
+    def __init__(self, llm_enabled: bool = False, llm_parse_only: bool = False) -> None:
         self._rule_parser = RuleParser()
         self._dsl_parser = DSLParser()
         self._llm_parser: Optional[LLMParser] = LLMParser() if llm_enabled else None
+        self._llm_parse_only = llm_parse_only
         self._default_intent = "unknown"
 
     def add_rule(self, rule: ParseRule) -> None:
@@ -224,14 +324,20 @@ class Parser:
         self._default_intent = intent
 
     async def parse(self, message: Message) -> Intent:
-        """Parse a message and return an intent.
+        """Parse a message and return an intent."""
+        if self._llm_parser:
+            intent = await self._llm_parser.parse(message)
+            if intent and intent.intent != "unknown":
+                return intent
+            if self._llm_parse_only:
+                return Intent(
+                    intent=self._default_intent,
+                    params={"text": message.content},
+                    confidence=0.0,
+                    source="llm",
+                    raw_message=message.content,
+                )
 
-        Order of parsing:
-        1. DSL commands (/skill_name params)
-        2. Rule-based matching
-        3. LLM parsing (if enabled)
-        4. Default intent
-        """
         intent = await self._dsl_parser.parse(message)
         if intent:
             return intent
@@ -239,11 +345,6 @@ class Parser:
         intent = await self._rule_parser.parse(message)
         if intent:
             return intent
-
-        if self._llm_parser:
-            intent = await self._llm_parser.parse(message)
-            if intent:
-                return intent
 
         return Intent(
             intent=self._default_intent,
@@ -254,10 +355,9 @@ class Parser:
         )
 
 
-def create_default_parser(llm_enabled: bool = False) -> Parser:
+def create_default_parser(llm_enabled: bool = False, llm_parse_only: bool = False) -> Parser:
     """Create a parser with default rules."""
-    parser = Parser(llm_enabled=llm_enabled)
-
+    parser = Parser(llm_enabled=llm_enabled, llm_parse_only=llm_parse_only)
     default_rules = [
         ParseRule(
             pattern=r"^hello\s*(?P<name>\w+)?$",
@@ -293,7 +393,25 @@ def create_default_parser(llm_enabled: bool = False) -> Parser:
             priority=5,
         ),
         ParseRule(
-            pattern=r"^(?:列出|看看|查看|显示).*?(?:桌面|文件夹|目录|文件)",
+            pattern=r"^(?:执行|运行|自动执行|帮我执行|帮我运行)(?:命令)?(?:[:：\s]+)(?P<command>.+)$",
+            intent="run_command",
+            params_template={"command": "$command"},
+            priority=30,
+        ),
+        ParseRule(
+            pattern=r"^(?:run|exec)(?:\s+command)?\s+(?P<command>.+)$",
+            intent="run_command",
+            params_template={"command": "$command"},
+            priority=30,
+        ),
+        ParseRule(
+            pattern=r"^(?:shell执行|用shell执行|raw shell)\s+(?P<command>.+)$",
+            intent="run_shell_command",
+            params_template={"command": "$command"},
+            priority=30,
+        ),
+        ParseRule(
+            pattern=r"^(?:列出|看看|查看|显示).*?(?:桌面|文件夹|目录|文件)$",
             intent="file_list",
             params_template={"path": "~/Desktop"},
             priority=15,
@@ -342,6 +460,5 @@ def create_default_parser(llm_enabled: bool = False) -> Parser:
             priority=15,
         ),
     ]
-
     parser.add_rules(default_rules)
     return parser

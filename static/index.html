@@ -7,6 +7,7 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%23007bff' d='M8 0C3.58 0 0 3.58 0 8s3.58 8 8 8 8-3.58 8-8-3.58-8-8-8zm0 14.5c-3.59 0-6.5-2.91-6.5-6.5S4.41 1.5 8 1.5 14.5 4.41 14.5 8 11.59 14.5 8 14.5zm-1.5-8c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5-.67-1.5-1.5-1.5-1.5.67-1.5 1.5zm0 5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5-.67-1.5-1.5-1.5-1.5.67-1.5 1.5z'/%3E%3C/svg%3E" type="image/svg+xml">
     <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
     <style>
+        [x-cloak] { display: none !important; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
         .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
@@ -18,7 +19,7 @@
         .tab-content { background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 20px; }
         .chat-container { background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
         .messages { height: 400px; overflow-y: auto; padding: 20px; border-bottom: 1px solid #eee; }
-        .message { margin-bottom: 15px; padding: 10px 15px; border-radius: 8px; }
+        .message { margin-bottom: 15px; padding: 10px 15px; border-radius: 8px; white-space: pre-wrap; }
         .message.user { background: #007bff; color: white; margin-left: 20%; }
         .message.system { background: #f0f0f0; margin-right: 20%; }
         .message.error { background: #f8d7da; color: #721c24; }
@@ -39,6 +40,7 @@
         .task-status.completed { background-color: #d4edda; color: #155724; }
         .task-status.failed { background-color: #f8d7da; color: #721c24; }
         .task-status.running { background-color: #d1ecf1; color: #0c5460; }
+        .task-status.verifying { background-color: #fff4e5; color: #9a6700; }
         .skill-card { border: 1px solid #eee; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
         .skill-card h4 { margin-bottom: 10px; color: #333; }
         .skill-card p { margin-bottom: 5px; font-size: 14px; }
@@ -47,6 +49,77 @@
         .skill-actions button.install { background: #28a745; color: white; }
         .skill-actions button.uninstall { background: #dc3545; color: white; }
         .skill-actions button:hover { opacity: 0.8; }
+        .section-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
+        .section-header p { color: #667085; line-height: 1.5; }
+        .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .ghost-btn { padding: 10px 14px; border: 1px solid #d0dae7; background: white; border-radius: 10px; cursor: pointer; }
+        .ghost-btn:hover { background: #f8fbff; }
+        .hint { font-size: 12px; color: #667085; }
+        .empty-state { padding: 28px 16px; text-align: center; color: #667085; }
+        .channel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+        .channel-card { border: 1px solid #e3ebf5; border-radius: 16px; padding: 18px; background: linear-gradient(180deg, #fff, #f8fbff); box-shadow: 0 8px 24px rgba(15,23,42,0.04); }
+        .channel-header { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 12px; }
+        .channel-summary { color: #667085; font-size: 14px; line-height: 1.5; margin-bottom: 14px; }
+        .pill { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+        .pill.enabled { background: #e8f7ef; color: #0f8a4f; }
+        .pill.disabled { background: #fdecec; color: #c24136; }
+        .pill.mode { background: #eef4ff; color: #1f5eff; }
+        .channel-block { margin-bottom: 14px; }
+        .channel-block h4 { margin-bottom: 8px; color: #334155; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; }
+        .code-block { position: relative; padding: 12px; border-radius: 12px; border: 1px solid #dbe5f0; background: #f8fbff; font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+        .mini-btn { margin-top: 8px; padding: 7px 10px; border: none; border-radius: 8px; background: #eef4ff; color: #1f5eff; cursor: pointer; font-size: 12px; font-weight: 700; }
+        .mini-btn:hover { opacity: 0.9; }
+        .channel-list { list-style: none; }
+        .channel-list li { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid #eef2f6; font-size: 14px; }
+        .channel-list li:last-child { border-bottom: none; }
+        .note-list { list-style: disc; padding-left: 18px; color: #667085; display: grid; gap: 8px; }
+        .notice { margin-bottom: 16px; padding: 14px 16px; border-radius: 12px; border: 1px solid #f5c9c9; background: #fff4f4; color: #b42318; }
+        .approval-list { display: grid; gap: 16px; }
+        .approval-card { border: 1px solid #eadfc3; border-radius: 16px; padding: 18px; background: linear-gradient(180deg, #fffdf7, #fff7e8); box-shadow: 0 8px 24px rgba(146, 101, 0, 0.08); }
+        .approval-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 14px; }
+        .approval-head h3 { color: #7a5200; margin-bottom: 6px; }
+        .approval-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px; color: #7c6f57; margin-bottom: 12px; }
+        .approval-card p { margin-bottom: 8px; color: #4b5563; line-height: 1.5; }
+        .approval-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; align-items: center; }
+        .primary-btn { padding: 10px 14px; border: none; border-radius: 10px; background: #0f766e; color: white; font-weight: 700; cursor: pointer; }
+        .secondary-btn { padding: 10px 14px; border: 1px solid #d0dae7; border-radius: 10px; background: white; color: #344054; font-weight: 700; cursor: pointer; }
+        .danger-btn { padding: 10px 14px; border: none; border-radius: 10px; background: #b42318; color: white; font-weight: 700; cursor: pointer; }
+        .primary-btn:hover { opacity: 0.92; }
+        .secondary-btn:hover, .danger-btn:hover { opacity: 0.92; }
+        .primary-btn:disabled, .secondary-btn:disabled, .danger-btn:disabled, .mini-btn:disabled, .ghost-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .test-form { display: grid; gap: 10px; }
+        .test-form label { display: grid; gap: 6px; font-size: 13px; color: #475467; font-weight: 600; }
+        .test-form input, .test-form textarea { width: 100%; padding: 10px 12px; border: 1px solid #d6e1ec; border-radius: 10px; font: inherit; background: white; color: #101828; }
+        .test-form textarea { min-height: 92px; resize: vertical; }
+        .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+        .result-note { font-size: 12px; color: #667085; }
+        .skill-note { margin-top: 8px; color: #667085; font-size: 13px; line-height: 1.5; }
+        .modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.52); display: flex; justify-content: center; align-items: flex-start; padding: 32px 16px; z-index: 50; overflow-y: auto; }
+        .modal-card { width: min(860px, 100%); background: white; border-radius: 20px; padding: 22px; box-shadow: 0 20px 60px rgba(15, 23, 42, 0.22); }
+        .modal-header { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 16px; }
+        .modal-header h2 { margin-bottom: 6px; color: #101828; }
+        .risk-chip { display: inline-flex; align-items: center; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+        .risk-low { background: #e8f7ef; color: #0f8a4f; }
+        .risk-medium { background: #fff4e5; color: #9a6700; }
+        .risk-high { background: #ffe5d8; color: #c2410c; }
+        .risk-critical { background: #fdecec; color: #b42318; }
+        .finding-list { display: grid; gap: 12px; margin-top: 14px; }
+        .finding-card { border: 1px solid #e5e7eb; border-radius: 14px; padding: 14px; background: #fcfcfd; }
+        .finding-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+        .finding-card p { color: #475467; line-height: 1.55; margin-bottom: 8px; }
+        .choice-list { display: grid; gap: 10px; margin-top: 14px; }
+        .choice-item { border: 1px solid #e5e7eb; border-radius: 14px; padding: 12px 14px; background: #fff; }
+        .choice-item strong { display: block; margin-bottom: 6px; color: #101828; }
+        .choice-item p { color: #667085; font-size: 13px; line-height: 1.45; }
+        .choice-item .pill { margin-top: 8px; }
+        .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 14px; }
+        .meta-item { border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px 12px; background: #f8fafc; }
+        .meta-item strong { display: block; margin-bottom: 4px; color: #344054; font-size: 12px; text-transform: uppercase; }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+        @media (max-width: 900px) {
+            .section-header { flex-direction: column; align-items: start; }
+            .modal-header { flex-direction: column; }
+        }
     </style>
 </head>
 <body>
@@ -59,7 +132,9 @@
         <div class="tabs">
             <div class="tab" :class="{active: activeTab === 'chat'}" @click="activeTab = 'chat'">Chat</div>
             <div class="tab" :class="{active: activeTab === 'tasks'}" @click="activeTab = 'tasks'">Tasks</div>
+            <div class="tab" :class="{active: activeTab === 'approvals'}" @click="activeTab = 'approvals'">Approvals</div>
             <div class="tab" :class="{active: activeTab === 'skills'}" @click="activeTab = 'skills'">Skills</div>
+            <div class="tab" :class="{active: activeTab === 'channels'}" @click="activeTab = 'channels'">Channels</div>
         </div>
         
         <div class="tab-content" x-show="activeTab === 'chat'">
@@ -71,30 +146,111 @@
                 </div>
                 
                 <div class="input-area">
-                    <input type="text" x-model="input" @keyup.enter="sendMessage()" placeholder="Type a message...">
+                    <input type="text" x-model="input" @keyup.enter="sendMessage()" placeholder="Type a message or /cmd git status">
                     <button @click="sendMessage()" :disabled="loading">Send</button>
                 </div>
             </div>
         </div>
         
         <div class="tab-content" x-show="activeTab === 'tasks'">
-            <h2>Task History</h2>
+            <div class="section-header">
+                <div>
+                    <h2>Task History</h2>
+                    <p>Review recent executions, failures, and tool output snapshots.</p>
+                </div>
+                <div class="toolbar">
+                    <button class="ghost-btn" @click="loadTasks()">Refresh</button>
+                </div>
+            </div>
             <div class="task-list">
+                <template x-if="tasks.length === 0">
+                    <div class="empty-state">No tasks yet.</div>
+                </template>
                 <template x-for="task in tasks" :key="task.id">
                     <div class="task">
                         <h4 x-text="'Task ' + task.id"></h4>
                         <p><strong>Status:</strong> <span class="task-status" :class="task.state.toLowerCase()" x-text="task.state"></span></p>
+                        <p><strong>Prompt:</strong> <span x-text="task.message || 'N/A'"></span></p>
+                        <p><strong>Channel:</strong> <span x-text="task.channel || 'N/A'"></span></p>
                         <p><strong>Created:</strong> <span x-text="new Date(task.created_at).toLocaleString()"></span></p>
                         <p><strong>Completed:</strong> <span x-text="task.completed_at ? new Date(task.completed_at).toLocaleString() : 'N/A'"></span></p>
+                        <template x-if="task.current_step">
+                            <p><strong>Current Step:</strong> <span x-text="task.current_step.tool_name || task.current_step.name || task.current_step.id"></span></p>
+                        </template>
                         <p><strong>Result:</strong> <span x-text="JSON.stringify(task.result)"></span></p>
                         <p><strong>Error:</strong> <span x-text="task.error || 'N/A'"></span></p>
                     </div>
                 </template>
             </div>
         </div>
+
+        <div class="tab-content" x-show="activeTab === 'approvals'">
+            <div class="section-header">
+                <div>
+                    <h2>Approval Center</h2>
+                    <p>High-risk steps such as raw shell execution pause here until you explicitly allow them to continue.</p>
+                </div>
+                <div class="toolbar">
+                    <button class="ghost-btn" @click="loadApprovals()">Refresh</button>
+                </div>
+            </div>
+
+            <template x-if="approvalLoadError">
+                <div class="notice" x-text="approvalLoadError"></div>
+            </template>
+
+            <div class="approval-list">
+                <template x-if="approvals.length === 0">
+                    <div class="empty-state">No pending approvals.</div>
+                </template>
+                <template x-for="approval in approvals" :key="approval.task_id + ':' + approval.step.id">
+                    <div class="approval-card">
+                        <div class="approval-head">
+                            <div>
+                                <h3 x-text="approval.step.command_preview || approval.step.tool_name || approval.step.name || 'Pending step'"></h3>
+                                <div class="approval-meta">
+                                    <span x-text="'Task ' + approval.task_id"></span>
+                                    <span x-text="'Risk: ' + (approval.step.risk_level || 'unknown')"></span>
+                                    <span x-text="'Channel: ' + approval.channel"></span>
+                                    <span x-text="'User: ' + approval.user_id"></span>
+                                </div>
+                            </div>
+                            <span class="pill disabled" x-text="approval.task_state"></span>
+                        </div>
+
+                        <p><strong>Prompt:</strong> <span x-text="approval.message || 'N/A'"></span></p>
+                        <p><strong>Step:</strong> <span x-text="approval.step.tool_name || approval.step.name || approval.step.id"></span></p>
+                        <p><strong>Created:</strong> <span x-text="new Date(approval.created_at).toLocaleString()"></span></p>
+
+                        <div class="channel-block">
+                            <h4>Step Input</h4>
+                            <div class="code-block" x-text="formatJson(approval.step.input)"></div>
+                        </div>
+
+                        <div class="approval-actions">
+                            <button
+                                class="primary-btn"
+                                @click="approveTaskStep(approval)"
+                                :disabled="approvingStepKey === approval.task_id + ':' + approval.step.id"
+                                x-text="approvingStepKey === approval.task_id + ':' + approval.step.id ? 'Approving...' : 'Approve & Resume'">
+                            </button>
+                            <span class="result-note">Routine commands can use <code>/cmd</code>; raw <code>/shell</code> stays gated here.</span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
         
         <div class="tab-content" x-show="activeTab === 'skills'">
-            <h2>Skill Management</h2>
+            <div class="section-header">
+                <div>
+                    <h2>Skill Management</h2>
+                    <p>Every installation now runs a safety review first, covering malicious plugin patterns and high-risk capabilities such as secrets, shell, browser, file, network, and scheduled tasks.</p>
+                </div>
+                <div class="toolbar">
+                    <button class="ghost-btn" @click="loadSkills()">Refresh</button>
+                </div>
+            </div>
             <div class="grid">
                 <div>
                     <h3>Installed Skills</h3>
@@ -114,19 +270,295 @@
                 </div>
                 <div>
                     <h3>Available Skills</h3>
+                    <template x-if="availableSkillsLoadError">
+                        <div class="notice" x-text="availableSkillsLoadError"></div>
+                    </template>
                     <div class="skill-list">
+                        <template x-if="availableSkills.length === 0">
+                            <div class="empty-state">暂无可安装的第三方 Skill。</div>
+                        </template>
                         <template x-for="skill in availableSkills" :key="skill.id">
                             <div class="skill-card">
                                 <h4 x-text="skill.name + ' v' + skill.version"></h4>
                                 <p><strong>Description:</strong> <span x-text="skill.description"></span></p>
                                 <p><strong>Author:</strong> <span x-text="skill.author"></span></p>
+                                <p class="skill-note">安装前会自动检查密钥输入、命令执行、浏览器控制、文件访问、网络请求、定时任务以及常见恶意插件特征。</p>
                                 <div class="skill-actions">
-                                    <button class="install" @click="installSkill(skill.id)">Install</button>
+                                    <button
+                                        class="install"
+                                        @click="openInstallReview(skill)"
+                                        :disabled="installing === skill.id || reviewLoading === skill.id"
+                                        x-text="reviewLoading === skill.id ? '体检中...' : (installing === skill.id ? '安装中...' : '体检后安装')">
+                                    </button>
                                 </div>
                             </div>
                         </template>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <div class="tab-content" x-show="activeTab === 'channels'">
+            <div class="section-header">
+                <div>
+                    <h2>Channel Configuration</h2>
+                    <p>Connect personal WeChat bridges and WhatsApp Cloud API with the exact webhook paths, readiness checks, and sample requests below.</p>
+                </div>
+                <div class="toolbar">
+                    <button class="ghost-btn" @click="loadChannels()">Refresh</button>
+                    <span class="hint" x-text="copyStatus || ('Enabled channels: ' + enabledChannelCount() + ' / ' + channels.length)"></span>
+                </div>
+            </div>
+
+            <template x-if="channelLoadError">
+                <div class="notice" x-text="channelLoadError"></div>
+            </template>
+
+            <div class="channel-grid">
+                <template x-if="channels.length === 0">
+                    <div class="empty-state">No channel metadata loaded.</div>
+                </template>
+                <template x-for="channel in channels" :key="channel.key">
+                    <div class="channel-card">
+                        <div class="channel-header">
+                            <div>
+                                <h3 x-text="channel.name"></h3>
+                                <p class="channel-summary" x-text="channel.summary"></p>
+                            </div>
+                            <div class="toolbar">
+                                <span class="pill" :class="channel.enabled ? 'enabled' : 'disabled'" x-text="channel.enabled ? 'Enabled' : 'Disabled'"></span>
+                                <span class="pill mode" x-text="channel.reply_mode_label"></span>
+                            </div>
+                        </div>
+
+                        <div class="channel-block">
+                            <h4>Webhook URL</h4>
+                            <div class="code-block" x-text="channel.webhook_url"></div>
+                            <button class="mini-btn" @click="copyText(channel.webhook_url)">Copy URL</button>
+                        </div>
+
+                        <template x-if="channel.verify_url">
+                            <div class="channel-block">
+                                <h4>Verification URL</h4>
+                                <div class="code-block" x-text="channel.verify_url"></div>
+                                <button class="mini-btn" @click="copyText(channel.verify_url)">Copy Verify URL</button>
+                            </div>
+                        </template>
+
+                        <div class="channel-block">
+                            <h4>Readiness Checks</h4>
+                            <ul class="channel-list">
+                                <template x-for="entry in channelCheckEntries(channel)" :key="entry.key">
+                                    <li>
+                                        <span x-text="entry.label"></span>
+                                        <span class="pill" :class="entry.value ? 'enabled' : 'disabled'" x-text="entry.value ? 'Present' : 'Missing'"></span>
+                                    </li>
+                                </template>
+                            </ul>
+                        </div>
+
+                        <div class="channel-block">
+                            <h4>Required Env</h4>
+                            <ul class="channel-list">
+                                <template x-for="envVar in channel.required_env" :key="envVar">
+                                    <li>
+                                        <code x-text="envVar"></code>
+                                        <button class="mini-btn" @click="copyText(envVar)">Copy</button>
+                                    </li>
+                                </template>
+                            </ul>
+                        </div>
+
+                        <template x-if="channel.optional_env && channel.optional_env.length">
+                            <div class="channel-block">
+                                <h4>Optional Env</h4>
+                                <ul class="channel-list">
+                                    <template x-for="envVar in channel.optional_env" :key="envVar">
+                                        <li>
+                                            <code x-text="envVar"></code>
+                                            <button class="mini-btn" @click="copyText(envVar)">Copy</button>
+                                        </li>
+                                    </template>
+                                </ul>
+                            </div>
+                        </template>
+
+                        <div class="channel-block">
+                            <h4>Sample Request</h4>
+                            <div class="code-block" x-text="buildChannelRequestExample(channel)"></div>
+                            <button class="mini-btn" @click="copyText(buildChannelRequestExample(channel))">Copy Example</button>
+                        </div>
+
+                        <template x-if="channel.key === 'whatsapp'">
+                            <div class="channel-block">
+                                <h4>Verify Example</h4>
+                                <div class="code-block" x-text="buildChannelVerifyExample(channel)"></div>
+                                <button class="mini-btn" @click="copyText(buildChannelVerifyExample(channel))">Copy Verify Call</button>
+                            </div>
+                        </template>
+
+                        <div class="channel-block">
+                            <h4>Connectivity Test</h4>
+                            <div class="test-form">
+                                <template x-if="channel.key === 'wechat_personal'">
+                                    <div class="test-form">
+                                        <div class="form-grid">
+                                            <label>
+                                                Reply Target
+                                                <input type="text" x-model="channelTests.wechat_personal.reply_target" placeholder="room-1 or wxid_user">
+                                            </label>
+                                            <label>
+                                                Sender ID
+                                                <input type="text" x-model="channelTests.wechat_personal.sender_id" placeholder="Optional override">
+                                            </label>
+                                        </div>
+                                        <label>
+                                            Test Message
+                                            <textarea x-model="channelTests.wechat_personal.text" placeholder="LocalClaw connectivity test"></textarea>
+                                        </label>
+                                    </div>
+                                </template>
+
+                                <template x-if="channel.key === 'whatsapp'">
+                                    <div class="test-form">
+                                        <div class="form-grid">
+                                            <label>
+                                                Recipient
+                                                <input type="text" x-model="channelTests.whatsapp.recipient" placeholder="15551234567">
+                                            </label>
+                                            <label>
+                                                Phone Number ID
+                                                <input type="text" x-model="channelTests.whatsapp.phone_number_id" placeholder="Optional override">
+                                            </label>
+                                        </div>
+                                        <label>
+                                            Test Message
+                                            <textarea x-model="channelTests.whatsapp.text" placeholder="LocalClaw connectivity test"></textarea>
+                                        </label>
+                                    </div>
+                                </template>
+
+                                <div class="toolbar">
+                                    <button class="primary-btn" @click="runChannelTest(channel)" :disabled="Boolean(channelTestLoading[channel.key])" x-text="channelTestLoading[channel.key] ? 'Testing...' : 'Run Test'"></button>
+                                    <span class="result-note">Live send runs only when the required outbound config is present. Otherwise the API returns a dry run preview.</span>
+                                </div>
+
+                                <template x-if="channelTestResults[channel.key]">
+                                    <div class="code-block" x-text="formatJson(channelTestResults[channel.key])"></div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <div class="channel-block">
+                            <h4>Notes</h4>
+                            <ul class="note-list">
+                                <template x-for="note in channel.notes" :key="note">
+                                    <li x-text="note"></li>
+                                </template>
+                            </ul>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <div class="modal-overlay" x-show="installReviewOpen" x-cloak>
+            <div class="modal-card">
+                <div class="modal-header">
+                    <div>
+                        <h2>Skill 安装前安全体检</h2>
+                        <p class="channel-summary">重点识别密钥收割、挖矿注入、动态拉取、越权访问、仿冒官方、无作者溯源、第三方内容抓取、无评分无维护等恶意特征，同时检查输入密钥、执行命令、控制浏览器、读取文件、发起网络请求、设置定时任务这类高危能力。</p>
+                    </div>
+                    <button class="ghost-btn" @click="closeInstallReview()">关闭</button>
+                </div>
+
+                <template x-if="installReview && installReview.report">
+                    <div>
+                        <div class="toolbar">
+                            <span class="risk-chip" :class="'risk-' + (installReview.report.risk_level || 'low')" x-text="'风险等级：' + (installReview.report.risk_label || '低')"></span>
+                            <span class="pill mode" x-text="'建议：' + installActionLabel(installReview.report.recommended_action)"></span>
+                        </div>
+
+                        <p class="channel-summary" x-text="installReview.report.summary"></p>
+
+                        <div class="meta-grid">
+                            <div class="meta-item">
+                                <strong>Skill</strong>
+                                <span x-text="installReview.report.skill_name || installReview.skill.name"></span>
+                            </div>
+                            <div class="meta-item">
+                                <strong>Author</strong>
+                                <span x-text="installReview.report.metadata_snapshot.author || '未提供'"></span>
+                            </div>
+                            <div class="meta-item">
+                                <strong>Homepage</strong>
+                                <span x-text="installReview.report.metadata_snapshot.homepage || '未提供'"></span>
+                            </div>
+                            <div class="meta-item">
+                                <strong>Repository</strong>
+                                <span x-text="installReview.report.metadata_snapshot.repository || '未提供'"></span>
+                            </div>
+                        </div>
+
+                        <div class="channel-block">
+                            <h4>体检发现</h4>
+                            <template x-if="(installReview.report.findings || []).length === 0">
+                                <div class="empty-state">这次扫描没有发现明显高危信号，但仍建议核对作者、主页和源码。</div>
+                            </template>
+                            <div class="finding-list">
+                                <template x-for="finding in installReview.report.findings" :key="finding.key">
+                                    <div class="finding-card">
+                                        <div class="finding-head">
+                                            <strong x-text="finding.title"></strong>
+                                            <span class="risk-chip" :class="'risk-' + finding.severity" x-text="finding.severity_label"></span>
+                                        </div>
+                                        <p x-text="finding.summary"></p>
+                                        <div class="code-block" x-text="finding.evidence.join('\n')"></div>
+                                        <p><strong>建议：</strong><span x-text="finding.advice"></span></p>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <div class="channel-block">
+                            <h4>建议与选择</h4>
+                            <div class="choice-list">
+                                <template x-for="option in installReview.report.install_options" :key="option.id">
+                                    <div class="choice-item">
+                                        <strong x-text="option.label"></strong>
+                                        <p x-text="option.description"></p>
+                                        <template x-if="option.recommended">
+                                            <span class="pill mode">推荐</span>
+                                        </template>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <div class="channel-block">
+                            <h4>额外建议</h4>
+                            <ul class="note-list">
+                                <template x-for="item in installReview.report.recommendations" :key="item">
+                                    <li x-text="item"></li>
+                                </template>
+                            </ul>
+                        </div>
+
+                        <template x-if="installReviewError">
+                            <div class="notice" x-text="installReviewError"></div>
+                        </template>
+
+                        <div class="modal-actions">
+                            <button class="secondary-btn" @click="closeInstallReview()">取消安装</button>
+                            <button
+                                :class="installProceedButtonClass()"
+                                @click="confirmInstallSkill()"
+                                :disabled="!installReview || installing === installReview.skill.id"
+                                x-text="installProceedLabel()">
+                            </button>
+                        </div>
+                    </div>
+                </template>
             </div>
         </div>
     </div>
@@ -140,20 +572,204 @@
                 loading: false,
                 skills: [],
                 availableSkills: [],
+                availableSkillsLoadError: '',
                 tasks: [],
+                approvals: [],
                 config: {},
+                channels: [],
+                approvalLoadError: '',
+                channelLoadError: '',
+                copyStatus: '',
+                approvingStepKey: '',
+                installing: '',
+                reviewLoading: '',
+                installReviewOpen: false,
+                installReview: null,
+                installReviewError: '',
+                channelTests: {
+                    wechat_personal: {
+                        reply_target: '',
+                        sender_id: '',
+                        text: 'LocalClaw connectivity test'
+                    },
+                    whatsapp: {
+                        recipient: '',
+                        phone_number_id: '',
+                        text: 'LocalClaw connectivity test'
+                    }
+                },
+                channelTestResults: {},
+                channelTestLoading: {},
                 
                 async init() {
                     await this.loadConfig();
                     await this.loadSkills();
                     await this.loadTasks();
+                    await this.loadApprovals();
                     await this.loadAvailableSkills();
+                    await this.loadChannels();
                     
                     setInterval(() => {
                         this.loadSkills();
                         this.loadTasks();
+                        this.loadApprovals();
                         this.loadAvailableSkills();
+                        this.loadChannels();
                     }, 5000);
+                },
+
+                enabledChannelCount() {
+                    return this.channels.filter(channel => channel.enabled).length;
+                },
+
+                absoluteUrl(path) {
+                    return new URL(path, window.location.origin).toString();
+                },
+
+                decorateChannel(channel) {
+                    const replyModeLabels = {
+                        bridge_proxy: 'Bridge proxy',
+                        inline_response: 'Inline response',
+                        cloud_api: 'Cloud API'
+                    };
+
+                    return {
+                        ...channel,
+                        webhook_url: this.absoluteUrl(channel.webhook_path),
+                        test_url: channel.test_path ? this.absoluteUrl(channel.test_path) : '',
+                        verify_url: channel.verify_path ? this.absoluteUrl(channel.verify_path) : '',
+                        reply_mode_label: replyModeLabels[channel.reply_mode] || channel.reply_mode
+                    };
+                },
+
+                channelCheckEntries(channel) {
+                    return Object.entries(channel.checks || {}).map(([key, value]) => ({
+                        key,
+                        value,
+                        label: key.replace(/^has_/, '').split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ')
+                    }));
+                },
+
+                buildChannelRequestExample(channel) {
+                    if (channel.key === 'wechat_personal') {
+                        return [
+                            'curl -X POST ' + channel.webhook_url + ' \\',
+                            '  -H "Content-Type: application/json" \\',
+                            '  -H "X-LocalClaw-Token: <shared-token>" \\',
+                            "  -d '{",
+                            '    "bridge": "openclaw-wechat",',
+                            '    "data": {',
+                            '      "text": "执行命令 git status",',
+                            '      "fromUser": "wxid_alice",',
+                            '      "roomId": "room-1"',
+                            '    }',
+                            "  }'"
+                        ].join('\n');
+                    }
+
+                    return [
+                        'curl -X POST ' + channel.webhook_url + ' \\',
+                        '  -H "Content-Type: application/json" \\',
+                        '  -H "X-Hub-Signature-256: sha256=<meta-signature>" \\',
+                        "  -d '{",
+                        '    "object": "whatsapp_business_account",',
+                        '    "entry": [{',
+                        '      "changes": [{',
+                        '        "field": "messages",',
+                        '        "value": {',
+                        '          "metadata": {',
+                        '            "display_phone_number": "15550001111",',
+                        '            "phone_number_id": "1234567890"',
+                        '          },',
+                        '          "contacts": [{"profile": {"name": "Alice"}, "wa_id": "15551234567"}],',
+                        '          "messages": [{',
+                        '            "from": "15551234567",',
+                        '            "id": "wamid.abc123",',
+                        '            "type": "text",',
+                        '            "text": {"body": "执行命令 git status"}',
+                        '          }]',
+                        '        }',
+                        '      }]',
+                        '    }]',
+                        "  }'"
+                    ].join('\n');
+                },
+
+                buildChannelVerifyExample(channel) {
+                    if (channel.key !== 'whatsapp') {
+                        return '';
+                    }
+
+                    return 'GET ' + channel.verify_url + '?hub.mode=subscribe&hub.verify_token=<verify-token>&hub.challenge=<challenge>';
+                },
+
+                formatJson(value) {
+                    return JSON.stringify(value || {}, null, 2);
+                },
+
+                installActionLabel(action) {
+                    if (action === 'block') {
+                        return '建议取消安装';
+                    }
+                    if (action === 'review') {
+                        return '建议先人工审查';
+                    }
+                    return '可以继续安装';
+                },
+
+                installProceedButtonClass() {
+                    const report = this.installReview && this.installReview.report ? this.installReview.report : null;
+                    if (!report) {
+                        return 'primary-btn';
+                    }
+                    if (report.risk_level === 'high' || report.risk_level === 'critical') {
+                        return 'danger-btn';
+                    }
+                    return 'primary-btn';
+                },
+
+                installProceedLabel() {
+                    const report = this.installReview && this.installReview.report ? this.installReview.report : null;
+                    if (!report) {
+                        return '继续安装';
+                    }
+                    if (this.installReview && this.installing === this.installReview.skill.id) {
+                        return '安装中...';
+                    }
+                    if (report.risk_level === 'high' || report.risk_level === 'critical') {
+                        return '我已知风险，仍然安装';
+                    }
+                    if (report.risk_level === 'medium') {
+                        return '我已审查，继续安装';
+                    }
+                    return '继续安装';
+                },
+
+                async copyText(text) {
+                    if (!text) {
+                        return;
+                    }
+
+                    try {
+                        await navigator.clipboard.writeText(text);
+                        this.copyStatus = 'Copied to clipboard.';
+                    } catch (e) {
+                        this.copyStatus = 'Copy failed. Clipboard permission may be blocked.';
+                        return;
+                        const detail = e.response && e.response.data
+                            ? (e.response.data.detail || JSON.stringify(e.response.data))
+                            : e.message;
+                        const friendlyMessage = String(detail).includes('Failed to fetch skill metadata')
+                            ? '安全体检失败：后端仓库里没有找到这个 Skill 的元数据。它可能是旧的演示项，或者 ClawHub 当前不可用。请刷新 Available Skills 后重试。'
+                            : '安全体检失败：' + detail;
+                        alert(friendlyMessage);
+                        return;
+                        this.copyStatus = 'Copy failed. Clipboard permission may be blocked.';
+                    }
+
+                    setTimeout(() => {
+                        this.copyStatus = '';
+                    }, 1800);
                 },
                 
                 async loadConfig() {
@@ -162,6 +778,28 @@
                         this.config = response.data;
                     } catch (e) {
                         console.error('Failed to load config:', e);
+                    }
+                },
+
+                async loadChannels() {
+                    try {
+                        const response = await axios.get('/api/channels');
+                        this.channels = (response.data.channels || []).map(channel => this.decorateChannel(channel));
+                        this.channelLoadError = '';
+                    } catch (e) {
+                        console.error('Failed to load channels:', e);
+                        this.channelLoadError = 'Failed to load channels: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message);
+                    }
+                },
+
+                async loadApprovals() {
+                    try {
+                        const response = await axios.get('/api/approvals');
+                        this.approvals = response.data.approvals || [];
+                        this.approvalLoadError = '';
+                    } catch (e) {
+                        console.error('Failed to load approvals:', e);
+                        this.approvalLoadError = 'Failed to load approvals: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message);
                     }
                 },
                 
@@ -182,14 +820,106 @@
                         console.error('Failed to load tasks:', e);
                     }
                 },
+
+                async approveTaskStep(approval) {
+                    const stepKey = approval.task_id + ':' + approval.step.id;
+                    this.approvingStepKey = stepKey;
+
+                    try {
+                        const response = await axios.post('/api/tasks/' + approval.task_id + '/approve/' + approval.step.id);
+                        const task = response.data;
+                        await this.loadApprovals();
+                        await this.loadTasks();
+
+                        this.messages.push({
+                            id: Date.now(),
+                            type: task.state === 'failed' ? 'error' : 'system',
+                            content: 'Approved ' + (approval.step.command_preview || approval.step.tool_name || approval.step.id) + '. Task ' + task.id + ' is now ' + task.state + '.'
+                        });
+                    } catch (e) {
+                        alert('Approval failed: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message));
+                    } finally {
+                        this.approvingStepKey = '';
+                    }
+                },
+
+                async runChannelTest(channel) {
+                    const payload = this.channelTests[channel.key] || {};
+                    this.channelTestLoading[channel.key] = true;
+
+                    try {
+                        const response = await axios.post(channel.test_path, payload);
+                        this.channelTestResults[channel.key] = response.data;
+                        await this.loadChannels();
+                    } catch (e) {
+                        this.channelTestResults[channel.key] = {
+                            ok: false,
+                            mode: 'error',
+                            summary: e.response && e.response.data ? e.response.data.detail || JSON.stringify(e.response.data) : e.message
+                        };
+                    } finally {
+                        this.channelTestLoading[channel.key] = false;
+                    }
+                },
                 
                 async loadAvailableSkills() {
-                    this.availableSkills = [
-                        { id: 'weather', name: 'Weather', version: '1.0.0', description: 'Get weather information', author: 'LocalClaw Team' },
-                        { id: 'date', name: 'Date', version: '1.0.0', description: 'Get current date and time', author: 'LocalClaw Team' },
-                        { id: 'calculator', name: 'Calculator', version: '1.0.0', description: 'Perform calculations', author: 'LocalClaw Team' },
-                        { id: 'translator', name: 'Translator', version: '1.0.0', description: 'Translate text', author: 'LocalClaw Team' }
-                    ];
+                    try {
+                        const response = await axios.get('/api/clawhub/search');
+                        const payload = response.data || {};
+                        const skills = Array.isArray(payload.skills) ? payload.skills : [];
+
+                        this.availableSkills = skills.filter(skill => {
+                            const skillId = skill.id || skill.name || '';
+                            return !this.isSkillInstalled(skillId);
+                        });
+                        this.availableSkillsLoadError = payload.error || '';
+
+                        if (this.availableSkills.length === 0 && !this.availableSkillsLoadError) {
+                            this.availableSkillsLoadError = '当前没有可安装的第三方 Skill，或者 ClawHub 仓库暂时不可用。';
+                        }
+                    } catch (e) {
+                        console.error('Failed to load available skills:', e);
+                        this.availableSkills = [];
+                        this.availableSkillsLoadError = '无法加载可安装 Skill。请检查 ClawHub 服务是否可用，然后刷新重试。';
+                    }
+                },
+
+                async openInstallReview(skill) {
+                    if (this.reviewLoading === skill.id || this.installing === skill.id) {
+                        return;
+                    }
+
+                    this.reviewLoading = skill.id;
+                    this.installReviewError = '';
+
+                    try {
+                        const response = await axios.get('/api/clawhub/scan', {
+                            params: { skill_id: skill.id }
+                        });
+                        this.installReview = {
+                            skill: skill,
+                            report: response.data
+                        };
+                        this.installReviewOpen = true;
+                    } catch (e) {
+                        const detail = e.response && e.response.data
+                            ? (e.response.data.detail || JSON.stringify(e.response.data))
+                            : e.message;
+                        const friendlyMessage = String(detail).includes('Failed to fetch skill metadata')
+                            ? '安全体检失败：后端仓库里没有找到这个 Skill 的元数据。它可能是旧的演示项，或者 ClawHub 当前不可用。请刷新 Available Skills 后重试。'
+                            : '安全体检失败：' + detail;
+                        alert(friendlyMessage);
+                        return;
+                        alert('安全体检失败: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message));
+                    } finally {
+                        this.reviewLoading = '';
+                    }
+                },
+
+                closeInstallReview() {
+                    this.installReviewOpen = false;
+                    this.installReview = null;
+                    this.installReviewError = '';
                 },
                 
                 async sendMessage() {
@@ -222,7 +952,22 @@
                                 const firstStepId = stepIds[0];
                                 const stepResult = data.data[firstStepId];
                                 if (stepResult) {
-                                    if (stepResult.files && stepResult.directories) {
+                                    if (typeof stepResult.stdout === 'string' || typeof stepResult.stderr === 'string') {
+                                        const parts = [];
+                                        if (stepResult.command) {
+                                            parts.push('Command: ' + stepResult.command);
+                                        }
+                                        if (typeof stepResult.exit_code !== 'undefined') {
+                                            parts.push('Exit code: ' + stepResult.exit_code);
+                                        }
+                                        if (stepResult.stdout) {
+                                            parts.push('STDOUT:\n' + stepResult.stdout);
+                                        }
+                                        if (stepResult.stderr) {
+                                            parts.push('STDERR:\n' + stepResult.stderr);
+                                        }
+                                        responseText = parts.join('\n\n');
+                                    } else if (stepResult.files && stepResult.directories) {
                                         responseText = 'Path: ' + stepResult.path + '\n';
                                         if (stepResult.directories.length > 0) {
                                             responseText += 'Directories:\n' + stepResult.directories.map(d => '  [DIR] ' + d).join('\n') + '\n';
@@ -247,12 +992,22 @@
                                 responseText = data.data.message;
                             }
                         }
+
+                        if (data.status === 'verifying' && responseText === 'Waiting for approval') {
+                            responseText = 'Waiting for approval.\nOpen the Approvals tab to resume this raw shell task.';
+                        }
                         
                         this.messages.push({
                             id: Date.now() + 1,
                             type: data.status === 'failed' ? 'error' : 'system',
                             content: responseText
                         });
+
+                        await this.loadTasks();
+                        if (data.status === 'verifying') {
+                            await this.loadApprovals();
+                            this.activeTab = 'approvals';
+                        }
                     } catch (e) {
                         this.messages.push({
                             id: Date.now() + 1,
@@ -270,12 +1025,36 @@
                     }
                 },
                 
-                async installSkill(skillId) {
-                    alert('Installing skill ' + skillId + '...');
-                    setTimeout(() => {
-                        this.loadSkills();
-                        alert('Skill ' + skillId + ' installed successfully!');
-                    }, 1000);
+                async confirmInstallSkill() {
+                    if (!this.installReview || !this.installReview.skill) {
+                        return;
+                    }
+
+                    const skillId = this.installReview.skill.id;
+                    this.installing = skillId;
+                    this.installReviewError = '';
+
+                    try {
+                        const response = await axios.post(
+                            '/api/clawhub/install?skill_id=' + encodeURIComponent(skillId) + '&decision=proceed'
+                        );
+
+                        if (response.data.installed) {
+                            await this.loadSkills();
+                            this.closeInstallReview();
+                            alert('Skill ' + skillId + ' installed successfully!');
+                        } else if (response.data.requires_review && response.data.scan) {
+                            this.installReview.report = response.data.scan;
+                            this.installReviewError = response.data.error || '安装前仍需你确认本次体检结果。';
+                        } else {
+                            this.installReviewError = response.data.error || 'Unknown install error';
+                        }
+                    } catch (e) {
+                        console.error('Failed to install skill:', e);
+                        this.installReviewError = e.response && e.response.data ? JSON.stringify(e.response.data) : e.message;
+                    } finally {
+                        this.installing = '';
+                    }
                 },
                 
                 async uninstallSkill(skillName) {

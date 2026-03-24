@@ -49,7 +49,10 @@ class ShellTool(Tool):
                 raise ToolError(f"Blocked command detected: {blocked}", ErrorType.PERMISSION_ERROR)
         
         if self._allowed_commands is not None:
-            cmd_parts = shlex.split(command)
+            try:
+                cmd_parts = shlex.split(command, posix=platform.system() != "Windows")
+            except ValueError:
+                cmd_parts = command.strip().split()
             if cmd_parts:
                 base_cmd = cmd_parts[0]
                 if base_cmd not in self._allowed_commands:
@@ -127,9 +130,10 @@ class SafeShellTool(Tool):
     
     SAFE_COMMANDS = {
         "echo", "pwd", "whoami", "date", "hostname", "uname",
-        "ls", "dir", "cat", "head", "tail", "wc", "grep",
-        "python", "python3", "pip", "pip3",
-        "git", "npm", "node",
+        "ls", "dir", "cat", "type", "head", "tail", "wc", "grep", "findstr",
+        "python", "python3", "pip", "pip3", "pytest", "uv", "poetry",
+        "git", "npm", "npx", "pnpm", "yarn", "node",
+        "ruff", "mypy", "powershell", "pwsh",
     }
     
     def __init__(self, timeout: float = 30.0) -> None:

@@ -1,10 +1,15 @@
 """ClawHub tool for skill management."""
 
 import logging
-from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+from localclaw.config.settings import get_settings
 from localclaw.core.models import ErrorType, ExecutionResult, RiskLevel
+from localclaw.skills.security_review import (
+    apply_post_install_guard,
+    build_post_install_guard,
+    review_skill_installation,
+)
 from localclaw.tools.base import Tool, register_tool
 from localclaw.skills.registry.clawhub import get_clawhub_client, get_local_registry
 from localclaw.skills.loader import SkillLoader
@@ -38,6 +43,38 @@ class ClawHubSearchTool(Tool):
             return ExecutionResult.from_error(str(e), ErrorType.SYSTEM_ERROR)
 
 
+class ClawHubScanTool(Tool):
+    """Tool for performing a safety review before skill installation."""
+
+    name = "clawhub_scan"
+    description = "Review a ClawHub skill for risky installation patterns"
+    risk_level = RiskLevel.LOW
+    inputs = {"skill_id": "string"}
+    outputs = {"scan": "dict"}
+
+    async def execute(self, skill_id: str, **kwargs) -> ExecutionResult:
+        """Execute a pre-installation security scan."""
+        try:
+            client = get_clawhub_client()
+            detail = await client.get_skill_detail(skill_id)
+            bundle = await client.fetch_skill_bundle(skill_id)
+            await client.close()
+
+            if detail is None and bundle is None:
+                return ExecutionResult.from_error(
+                    f"Failed to fetch skill metadata for {skill_id}",
+                    ErrorType.SYSTEM_ERROR,
+                )
+
+            scan = review_skill_installation(skill_id=skill_id, detail=detail, bundle=bundle)
+            return ExecutionResult.success(
+                message="Skill security review completed",
+                data={"scan": scan},
+            )
+        except Exception as e:
+            return ExecutionResult.from_error(str(e), ErrorType.SYSTEM_ERROR)
+
+
 class ClawHubInstallTool(Tool):
     """Tool for installing skills from ClawHub."""
 
@@ -45,9 +82,9 @@ class ClawHubInstallTool(Tool):
     description = "Install a skill from ClawHub"
     risk_level = RiskLevel.MEDIUM
     inputs = {"skill_id": "string"}
-    outputs = {"installed": "boolean", "skill_path": "string"}
+    outputs = {"installed": "boolean", "skill_path": "string", "scan": "dict"}
 
-    async def execute(self, skill_id: str, **kwargs) -> ExecutionResult:
+    async def execute(self, skill_id: str, decision: Optional[str] = None, **kwargs) -> ExecutionResult:
         """Execute ClawHub install."""
         try:
             local_registry = get_local_registry()
@@ -58,32 +95,74 @@ class ClawHubInstallTool(Tool):
                 )
 
             client = get_clawhub_client()
-            success = await client.download_skill(skill_id, local_registry.skills_dir)
-            await client.close()
+            detail = await client.get_skill_detail(skill_id)
+            bundle = await client.fetch_skill_bundle(skill_id)
+            if detail is None and bundle is None:
+                await client.close()
+                return ExecutionResult.from_error(
+                    f"Failed to fetch skill metadata for {skill_id}",
+                    ErrorType.SYSTEM_ERROR,
+                )
+            scan = review_skill_installation(skill_id=skill_id, detail=detail, bundle=bundle)
 
-            if success:
-                # Load the skill into the registry
-                skill_path = local_registry.get_skill_path(skill_id)
-                loader = SkillLoader()
-                skills = loader.load_from_directory(skill_path, recursive=True)
-                if skills:
-                    for skill in skills:
-                        availability = skill.get_definition().metadata.get("availability", {})
-                        get_skill_registry().register(skill, enable=availability.get("status") != "blocked")
-                    return ExecutionResult.success(
-                        message=f"Skill {skill_id} installed successfully",
-                        data={"installed": True, "skill_path": str(skill_path)},
-                    )
-                else:
-                    return ExecutionResult.from_error(
-                        f"Failed to load skill {skill_id}",
-                        ErrorType.SYSTEM_ERROR,
-                    )
-            else:
+            normalized_decision = (decision or "").strip().lower()
+            if normalized_decision != "proceed":
+                await client.close()
+                return ExecutionResult.from_error(
+                    f"Skill {skill_id} requires a security review decision before installation",
+                    ErrorType.VALIDATION_ERROR,
+                    data={
+                        "installed": False,
+                        "requires_review": True,
+                        "scan": scan,
+                        "allowed_decisions": ["cancel", "proceed"],
+                    },
+                )
+
+            if bundle is None:
+                await client.close()
                 return ExecutionResult.from_error(
                     f"Failed to download skill {skill_id}",
                     ErrorType.SYSTEM_ERROR,
+                    data={"scan": scan},
                 )
+
+            settings = get_settings()
+            guard = build_post_install_guard(
+                bundle=bundle,
+                scan=scan,
+                protection_mode=settings.skill_install_protection_mode.value,
+                isolation_require_approval=settings.skill_isolation_require_approval,
+                isolation_block_critical=settings.skill_isolation_block_critical,
+            )
+            protected_bundle = apply_post_install_guard(bundle, guard)
+
+            saved = client.save_skill_bundle(skill_id, protected_bundle, local_registry.skills_dir)
+            await client.close()
+            if not saved:
+                return ExecutionResult.from_error(
+                    f"Failed to save skill {skill_id}",
+                    ErrorType.SYSTEM_ERROR,
+                    data={"scan": scan, "guard": guard},
+                )
+
+            skill_path = local_registry.get_skill_path(skill_id)
+            loader = SkillLoader()
+            skills = loader.load_from_directory(skill_path, recursive=True)
+            if skills:
+                for skill in skills:
+                    availability = skill.get_definition().metadata.get("availability", {})
+                    get_skill_registry().register(skill, enable=availability.get("status") != "blocked")
+                return ExecutionResult.success(
+                    message=f"Skill {skill_id} installed successfully",
+                    data={"installed": True, "skill_path": str(skill_path), "scan": scan, "guard": guard},
+                )
+
+            return ExecutionResult.from_error(
+                f"Failed to load skill {skill_id}",
+                ErrorType.SYSTEM_ERROR,
+                data={"scan": scan, "guard": guard},
+            )
         except Exception as e:
             return ExecutionResult.from_error(str(e), ErrorType.SYSTEM_ERROR)
 
@@ -153,6 +232,7 @@ class ClawHubListTool(Tool):
 def register_clawhub_tools() -> None:
     """Register ClawHub tools."""
     register_tool(ClawHubSearchTool())
+    register_tool(ClawHubScanTool())
     register_tool(ClawHubInstallTool())
     register_tool(ClawHubRemoveTool())
     register_tool(ClawHubListTool())

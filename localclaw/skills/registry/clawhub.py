@@ -70,32 +70,45 @@ class ClawHubClient:
 
     async def download_skill(self, skill_id: str, target_dir: Path) -> bool:
         """Download a skill from ClawHub."""
+        skill_data = await self.fetch_skill_bundle(skill_id)
+        if skill_data is None:
+            return False
+        return self.save_skill_bundle(skill_id, skill_data, target_dir)
+
+    async def fetch_skill_bundle(self, skill_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch the installable skill bundle without writing it locally."""
         try:
             session = await self._ensure_session()
             async with session.get(f"{self.base_url}/api/skills/{skill_id}/download") as response:
                 if response.status == 200:
-                    # Save the skill files
-                    skill_data = await response.json()
-                    skill_dir = target_dir / skill_id
-                    skill_dir.mkdir(parents=True, exist_ok=True)
-
-                    # Save skill definition
-                    with open(skill_dir / f"{skill_id}.json", "w", encoding="utf-8") as f:
-                        json.dump(skill_data, f, indent=2)
-
-                    # Save other files if any
-                    if "files" in skill_data:
-                        for file_name, file_content in skill_data["files"].items():
-                            file_path = skill_dir / file_name
-                            with open(file_path, "w", encoding="utf-8") as f:
-                                f.write(file_content)
-
-                    return True
+                    return await response.json()
                 else:
                     logger.error(f"Failed to download skill: {response.status}")
-                    return False
+                    return None
         except Exception as e:
             logger.error(f"Error downloading skill: {e}")
+            return None
+
+    def save_skill_bundle(self, skill_id: str, skill_data: Dict[str, Any], target_dir: Path) -> bool:
+        """Save a fetched skill bundle into the local skills directory."""
+        try:
+            skill_dir = target_dir / skill_id
+            skill_dir.mkdir(parents=True, exist_ok=True)
+
+            with open(skill_dir / f"{skill_id}.json", "w", encoding="utf-8") as f:
+                json.dump(skill_data, f, indent=2)
+
+            files = skill_data.get("files", {})
+            if isinstance(files, dict):
+                for file_name, file_content in files.items():
+                    file_path = skill_dir / file_name
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(str(file_content))
+
+            return True
+        except Exception as e:
+            logger.error(f"Error saving skill bundle: {e}")
             return False
 
     async def get_categories(self) -> List[str]:

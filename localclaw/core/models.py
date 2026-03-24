@@ -105,6 +105,7 @@ class Step(BaseModel):
     tool_name: Optional[str] = None
     skill_name: Optional[str] = None
     agent_name: Optional[str] = None
+    source_skill_name: Optional[str] = None
     
     condition: Optional[str] = None
     loop_var: Optional[str] = None

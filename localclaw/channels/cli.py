@@ -111,7 +111,29 @@ def initialize_system() -> ExecutionEngine:
 
     load_skills_from_settings(settings)
 
-    return get_engine()
+    from localclaw.core.parser import create_default_parser
+    from localclaw.core.verifier import create_default_verifier
+
+    parser = create_default_parser(
+        llm_enabled=settings.llm_enabled,
+        llm_parse_only=settings.llm_parse_only,
+    )
+    from localclaw.skills.registry import get_skill_registry
+    verifier = create_default_verifier(settings=settings, skill_registry=get_skill_registry())
+    verifier.set_auto_approve_low(True)
+    verifier.set_require_confirmation_high(True)
+
+    engine = ExecutionEngine(
+        settings=settings,
+        parser=parser,
+        verifier=verifier,
+    )
+
+    from localclaw.core.engine import _engine
+    import localclaw.core.engine as engine_module
+
+    engine_module._engine = engine
+    return engine
 
 
 def format_task_result(task: Task) -> str:

@@ -42,6 +42,20 @@ class Planner:
         if intent.intent.startswith("tool."):
             tool_name = intent.intent[5:]
             return self._plan_tool_call(tool_name, intent.params, intent)
+
+        if intent.intent == "run_command":
+            return self._plan_tool_call(
+                "safe_shell",
+                {"command": intent.params.get("command", "")},
+                intent,
+            )
+
+        if intent.intent == "run_shell_command":
+            return self._plan_tool_call(
+                "shell",
+                {"command": intent.params.get("command", "")},
+                intent,
+            )
         
         if intent.intent == "greeting":
             return self._plan_greeting(intent)
@@ -287,10 +301,10 @@ class Planner:
                 skill_name=skill_name,
             )
 
-        steps = self._convert_skill_to_steps(skill, params)
+        steps = self._convert_skill_to_steps(skill, params, source_skill_name=skill_name)
         return Plan(steps=steps, intent=intent, skill_name=skill_name)
     
-    def _convert_skill_to_steps(self, skill: Any, params: Dict[str, Any]) -> List[Step]:
+    def _convert_skill_to_steps(self, skill: Any, params: Dict[str, Any], source_skill_name: Optional[str] = None) -> List[Step]:
         """Convert a skill definition to execution steps."""
         steps: List[Step] = []
         
@@ -312,6 +326,7 @@ class Planner:
                     type=StepType.TOOL_CALL,
                     name=f"step_{i}_{action.get('tool', 'unknown')}",
                     tool_name=action.get("tool"),
+                    source_skill_name=source_skill_name,
                     input=self._resolve_params(action.get("params", {}), params),
                     timeout=action.get("timeout", 30.0),
                 )
@@ -320,6 +335,7 @@ class Planner:
                     type=StepType.SKILL_CALL,
                     name=f"step_{i}_{action.get('skill', 'unknown')}",
                     skill_name=action.get("skill"),
+                    source_skill_name=source_skill_name,
                     input=self._resolve_params(action.get("params", {}), params),
                 )
             elif action_type == "condition":
@@ -327,7 +343,8 @@ class Planner:
                     type=StepType.CONDITION,
                     name=f"step_{i}_condition",
                     condition=action.get("condition"),
-                    sub_steps=self._convert_actions_to_steps(action.get("then", []), params),
+                    source_skill_name=source_skill_name,
+                    sub_steps=self._convert_actions_to_steps(action.get("then", []), params, source_skill_name),
                 )
             elif action_type == "loop":
                 step = Step(
@@ -335,19 +352,22 @@ class Planner:
                     name=f"step_{i}_loop",
                     loop_var=action.get("var", "item"),
                     loop_over=action.get("over"),
-                    sub_steps=self._convert_actions_to_steps(action.get("actions", []), params),
+                    source_skill_name=source_skill_name,
+                    sub_steps=self._convert_actions_to_steps(action.get("actions", []), params, source_skill_name),
                 )
             elif action_type == "parallel":
                 step = Step(
                     type=StepType.PARALLEL,
                     name=f"step_{i}_parallel",
-                    parallel_steps=self._convert_actions_to_steps(action.get("actions", []), params),
+                    source_skill_name=source_skill_name,
+                    parallel_steps=self._convert_actions_to_steps(action.get("actions", []), params, source_skill_name),
                 )
             else:
                 step = Step(
                     type=StepType.TRANSFORM,
                     name=f"step_{i}_transform",
                     template=action.get("template", ""),
+                    source_skill_name=source_skill_name,
                     input=params,
                 )
             
@@ -371,9 +391,14 @@ class Planner:
         
         return steps
     
-    def _convert_actions_to_steps(self, actions: List[Dict], params: Dict[str, Any]) -> List[Step]:
+    def _convert_actions_to_steps(
+        self,
+        actions: List[Dict],
+        params: Dict[str, Any],
+        source_skill_name: Optional[str] = None,
+    ) -> List[Step]:
         """Convert a list of action definitions to steps."""
-        return self._convert_skill_to_steps({"actions": actions}, params)
+        return self._convert_skill_to_steps({"actions": actions}, params, source_skill_name=source_skill_name)
     
     def _resolve_params(self, template_params: Dict[str, Any], input_params: Dict[str, Any]) -> Dict[str, Any]:
         """Resolve parameter templates with actual values."""
@@ -411,6 +436,8 @@ class Planner:
         help_text = """LocalClaw Help:
 - hello [name]: Say hello
 - /skill_name [params]: Execute a skill
+- /cmd <command>: Execute a routine development command automatically
+- /shell <command>: Execute a raw shell command with approval
 - help: Show this help
 - list skills: List available skills
 - status: Show system status

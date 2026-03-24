@@ -29,6 +29,14 @@ class ModelProvider(str, Enum):
     MOCK = "mock"
 
 
+class SkillInstallProtectionMode(str, Enum):
+    """Post-install protection policy for third-party skills."""
+
+    OFF = "off"
+    DISABLE_HIGH_RISK = "disable_high_risk"
+    ISOLATE = "isolate"
+
+
 class Settings(BaseSettings):
     """Global settings for LocalClaw."""
 
@@ -41,6 +49,10 @@ class Settings(BaseSettings):
 
     mode: Mode = Field(default=Mode.LOCAL, description="Execution mode: zero, local, or hybrid")
     llm_enabled: bool = Field(default=True, description="Enable LLM integration")
+    llm_parse_only: bool = Field(
+        default=True,
+        description="Route all user input through the local LLM parser before any legacy fallback",
+    )
 
     skills_dir: Path = Field(default=PROJECT_ROOT / "skills", description="Bundled skill definitions")
     managed_skills_dir: Path = Field(
@@ -90,6 +102,73 @@ class Settings(BaseSettings):
     ollama_base_url: Optional[str] = Field(default=None, description="Ollama API base URL")
     openai_api_key: Optional[str] = Field(default=None, description="OpenAI-compatible API key")
     openai_base_url: Optional[str] = Field(default=None, description="OpenAI-compatible API base URL")
+
+    wechat_personal_enabled: bool = Field(
+        default=False,
+        description="Enable the experimental personal WeChat bridge webhook",
+    )
+    wechat_personal_inbound_token: Optional[str] = Field(
+        default=None,
+        description="Shared secret expected from the personal WeChat bridge",
+    )
+    wechat_personal_proxy_url: Optional[str] = Field(
+        default=None,
+        description="Optional bridge proxy endpoint used to push replies back out",
+    )
+    wechat_personal_api_key: Optional[str] = Field(
+        default=None,
+        description="Optional API key sent to the personal WeChat bridge proxy",
+    )
+    wechat_personal_reply_via_proxy: bool = Field(
+        default=False,
+        description="Whether replies should also be posted to the configured bridge proxy URL",
+    )
+
+    whatsapp_enabled: bool = Field(
+        default=False,
+        description="Enable the WhatsApp Cloud API webhook channel",
+    )
+    whatsapp_verify_token: Optional[str] = Field(
+        default=None,
+        description="Webhook verification token for the WhatsApp Cloud API",
+    )
+    whatsapp_app_secret: Optional[str] = Field(
+        default=None,
+        description="Meta app secret used for x-hub-signature-256 verification",
+    )
+    whatsapp_access_token: Optional[str] = Field(
+        default=None,
+        description="System user access token for sending WhatsApp Cloud API replies",
+    )
+    whatsapp_phone_number_id: Optional[str] = Field(
+        default=None,
+        description="WhatsApp Cloud API phone number ID used for outbound replies",
+    )
+    whatsapp_graph_base_url: str = Field(
+        default="https://graph.facebook.com",
+        description="Base URL for the WhatsApp Cloud API Graph endpoint",
+    )
+    whatsapp_graph_api_version: str = Field(
+        default="v23.0",
+        description="Graph API version for WhatsApp Cloud API calls",
+    )
+    whatsapp_reply_via_cloud_api: bool = Field(
+        default=False,
+        description="Whether LocalClaw should send WhatsApp text replies via the Cloud API",
+    )
+
+    skill_install_protection_mode: SkillInstallProtectionMode = Field(
+        default=SkillInstallProtectionMode.DISABLE_HIGH_RISK,
+        description="Protection mode automatically applied to newly installed third-party skills",
+    )
+    skill_isolation_require_approval: bool = Field(
+        default=True,
+        description="Whether isolated skills must ask for approval before protected tool execution",
+    )
+    skill_isolation_block_critical: bool = Field(
+        default=True,
+        description="Whether isolated skills should still block critical tools such as raw shell execution",
+    )
 
     def ensure_directories(self) -> None:
         """Ensure all required directories exist."""

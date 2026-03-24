@@ -108,6 +108,23 @@ class SkillRegistry:
             self.get_skill_info(name)
             for name in self._skills
         ]
+
+    def get_model_invocable_info(self) -> List[Dict[str, Any]]:
+        """Return skills that the model is allowed to invoke directly."""
+        invocable: List[Dict[str, Any]] = []
+        for name in self._skills:
+            info = self.get_skill_info(name)
+            if info is None:
+                continue
+            metadata = info.get("metadata", {}) or {}
+            if info.get("availability") != "available":
+                continue
+            if not info.get("user_invocable", True):
+                continue
+            if metadata.get("disable_model_invocation", False):
+                continue
+            invocable.append(info)
+        return invocable
     
     def enable(self, name: str) -> bool:
         """Enable a skill."""

@@ -55,11 +55,17 @@ class ExecutionEngine:
         skill_registry: Optional[SkillRegistry] = None,
     ) -> None:
         self._settings = settings or get_settings()
-        self._parser = parser or create_default_parser(llm_enabled=self._settings.llm_enabled)
+        self._parser = parser or create_default_parser(
+            llm_enabled=self._settings.llm_enabled,
+            llm_parse_only=self._settings.llm_parse_only,
+        )
         self._planner = planner or create_default_planner()
-        self._verifier = verifier or create_default_verifier()
         self._tool_registry = tool_registry or get_tool_registry()
         self._skill_registry = skill_registry or get_skill_registry()
+        self._verifier = verifier or create_default_verifier(
+            settings=self._settings,
+            skill_registry=self._skill_registry,
+        )
         
         self._planner.set_skill_registry(self._skill_registry)
         
@@ -480,6 +486,10 @@ class ExecutionEngine:
     def get_running_tasks(self) -> List[Task]:
         """Get all running tasks."""
         return [t for t in self._tasks.values() if t.state == TaskState.RUNNING]
+
+    def get_active_tasks(self) -> List[Task]:
+        """Get all tasks that are still kept in active memory."""
+        return list(self._tasks.values())
     
     def get_task_history(self, limit: int = 100) -> List[Task]:
         """Get task history."""

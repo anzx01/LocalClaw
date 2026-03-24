@@ -1,6 +1,6 @@
 """Tests for local-first configuration and skill loading."""
 
-from localclaw.config.settings import ModelProvider, Mode, Settings
+from localclaw.config.settings import ModelProvider, Mode, Settings, SkillInstallProtectionMode
 from localclaw.llm.openai_compatible import OpenAICompatibleProvider
 from localclaw.llm.provider import LLMConfig, LLMProviderType, create_llm_provider
 from localclaw.skills.loader import SkillLoader, load_skills_from_settings
@@ -13,9 +13,12 @@ def test_settings_default_to_local_first():
 
     assert settings.mode == Mode.LOCAL
     assert settings.llm_enabled is True
+    assert settings.llm_parse_only is True
     assert settings.model_provider == ModelProvider.OLLAMA
     assert settings.uses_openai_compatible_api is True
     assert settings.get_model_base_url().endswith("/v1")
+    assert settings.skill_install_protection_mode == SkillInstallProtectionMode.DISABLE_HIGH_RISK
+    assert settings.skill_isolation_require_approval is True
 
 
 def test_create_openai_compatible_provider_from_config():
