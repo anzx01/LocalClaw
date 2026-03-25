@@ -4,6 +4,10 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
+from localclaw.core.interpolation import (
+    normalize_condition_expression,
+    resolve_interpolated_value,
+)
 from localclaw.core.models import (
     Context,
     ErrorPolicy,
@@ -27,6 +31,7 @@ class Planner:
     def __init__(self) -> None:
         self._skill_registry: Optional[Any] = None
         self._intent_handlers: Dict[str, callable] = {}
+        self._fallback_parser: Optional[Any] = None
     
     def set_skill_registry(self, registry: Any) -> None:
         """Set the skill registry for skill lookups."""
@@ -49,14 +54,19 @@ class Planner:
         lines: List[str] = []
         for info in infos:
             name = info.get("name", "unknown")
+            invocation_name = info.get("skill_key", name)
             description = str(info.get("description", "")).strip()
             inputs = info.get("inputs", {}) or {}
+            aliases = info.get("aliases", []) or []
 
             line = f"- {name}"
+            line += f" | invoke as: skill.{invocation_name}"
             if description:
                 line += f": {description}"
             if inputs:
                 line += f" | inputs: {', '.join(inputs.keys())}"
+            if aliases:
+                line += f" | aliases: {', '.join(aliases)}"
             lines.append(line)
 
         if not lines:
@@ -71,7 +81,7 @@ class Planner:
 Classify the LocalClaw user request.
 
 Allowed intents:
-greeting, help, echo, list_skills, status, date_query, run_command, run_shell_command, file_list, read_file, write_file, append_file, delete_file, create_directory, check_weather, unknown
+greeting, help, echo, list_skills, status, date_query, run_command, run_shell_command, list_folders, file_list, read_file, write_file, append_file, delete_file, create_directory, check_weather, unknown
 
 Rules:
 - "/cmd <command>" -> {{"intent":"run_command","params":{{"command":"<command>"}}}}
@@ -79,7 +89,10 @@ Rules:
 - Chinese help/capability questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" -> {{"intent":"help","params":{{}}}}
 - Greetings like "hello", "hi", "你好" -> greeting
 - Weather questions -> check_weather
-- If an installed skill clearly fits better than a built-in intent, return "skill.<name>"
+- Requests like "看看我桌面有哪些文件夹" -> {{"intent":"list_folders","params":{{"path":"~/Desktop","folders_only":true}}}}
+- Requests like "列出桌面文件" or "查看 Desktop" -> {{"intent":"file_list","params":{{"path":"~/Desktop"}}}}
+- Current news, latest headlines, today's events, or recent web information must not map to help. If a web skill fits, return "skill.<invocation_name>"; otherwise return unknown.
+- If an installed skill clearly fits better than a built-in intent, return "skill.<invocation_name>" using the catalog's "invoke as" field
 - If nothing fits, return {{"intent":"unknown","params":{{}}}}
 
 Installed skills:
@@ -95,8 +108,12 @@ User: {user_request}
 Chinese help/capability questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" -> {{"intent":"help","params":{{}}}}.
 Greetings like "hello" or "你好" -> greeting.
 Weather questions -> check_weather.
+Desktop folder requests like "看看我桌面有哪些文件夹" -> {{"intent":"list_folders","params":{{"path":"~/Desktop","folders_only":true}}}}.
+Desktop file listing requests like "列出桌面文件" -> {{"intent":"file_list","params":{{"path":"~/Desktop"}}}}.
+"/ today's news / latest headlines / recent web info" -> matching installed web skill or unknown, never help.
 "/cmd <command>" -> run_command.
 "/shell <command>" -> run_shell_command.
+For installed skills, return "skill.<invocation_name>" using the catalog's "invoke as" field.
 If unsure, return {{"intent":"unknown","params":{{}}}}.
 User: {user_request}
 """
@@ -181,9 +198,35 @@ User: {user_request}
                 raw_message=message.content,
             )
 
+    async def _fallback_intent_from_parser(self, message: Message) -> Optional[Intent]:
+        """Use the deterministic parser as a rescue path when the model returns unknown."""
+        if self._fallback_parser is None:
+            from localclaw.core.parser import create_default_parser
+
+            self._fallback_parser = create_default_parser(
+                llm_enabled=False,
+                llm_parse_only=False,
+            )
+
+        intent = await self._fallback_parser.parse(message)
+        if intent.intent == "unknown":
+            return None
+
+        intent.source = "planner_fallback"
+        intent.confidence = max(intent.confidence, 0.5)
+        return intent
+
     async def plan_from_message(self, message: Message, context: Optional[Context] = None) -> Plan:
         """Understand a raw message with the local model and build a plan directly."""
         intent = await self._understand_message_with_llm(message)
+        if intent.intent == "unknown":
+            fallback_intent = await self._fallback_intent_from_parser(message)
+            if fallback_intent is not None:
+                logger.info(
+                    "Planner fell back to deterministic parsing for message %r",
+                    message.content,
+                )
+                intent = fallback_intent
         plan = await self.plan(intent, context)
         if plan.intent is None:
             plan.intent = intent
@@ -261,17 +304,18 @@ User: {user_request}
         if intent.intent == "query_capabilities":
             return self._plan_from_skill("list_skills", intent.params, intent)
         if intent.intent == "list_folders":
-            # Get desktop path
             import os
             desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-            # Create plan to list desktop folders
+            path = intent.params.get("path") or desktop_path
+            if path in ["~/Desktop", "Desktop", "桌面", "~/桌面"]:
+                path = desktop_path
             plan = Plan(intent=intent)
             plan.steps.append(
                 Step(
                     type=StepType.TOOL_CALL,
                     name="list_desktop_folders",
                     tool_name="file_list",
-                    input={"path": desktop_path}
+                    input={"path": path, "folders_only": intent.params.get("folders_only", True)}
                 )
             )
             return plan
@@ -431,6 +475,11 @@ User: {user_request}
                 skill_name=skill_name,
             )
         
+        resolved_skill_name = (
+            self._skill_registry.resolve_name(skill_name)
+            if hasattr(self._skill_registry, "resolve_name")
+            else skill_name
+        )
         skill = self._skill_registry.get(skill_name)
         if skill is None:
             return Plan(
@@ -445,6 +494,7 @@ User: {user_request}
                 skill_name=skill_name,
             )
 
+        canonical_skill_name = resolved_skill_name or skill.name
         if getattr(skill, "state", None) not in (SkillState.ENABLED, SkillState.RUNNING):
             definition = skill.get_definition() if hasattr(skill, "get_definition") else None
             availability = definition.metadata.get("availability", {}) if definition else {}
@@ -458,11 +508,11 @@ User: {user_request}
                     )
                 ],
                 intent=intent,
-                skill_name=skill_name,
+                skill_name=canonical_skill_name,
             )
 
-        steps = self._convert_skill_to_steps(skill, params, source_skill_name=skill_name)
-        return Plan(steps=steps, intent=intent, skill_name=skill_name)
+        steps = self._convert_skill_to_steps(skill, params, source_skill_name=canonical_skill_name)
+        return Plan(steps=steps, intent=intent, skill_name=canonical_skill_name)
     
     def _convert_skill_to_steps(self, skill: Any, params: Dict[str, Any], source_skill_name: Optional[str] = None) -> List[Step]:
         """Convert a skill definition to execution steps."""
@@ -480,21 +530,25 @@ User: {user_request}
         
         for i, action in enumerate(actions):
             action_type = action.get("type", "transform")
+            action_condition = normalize_condition_expression(action.get("condition"))
+            step_name = action.get("name")
             
             if action_type == "tool_call":
+                tool_name = action.get("tool") or action.get("name")
                 step = Step(
                     type=StepType.TOOL_CALL,
-                    name=f"step_{i}_{action.get('tool', 'unknown')}",
-                    tool_name=action.get("tool"),
+                    name=step_name or f"step_{i}_{tool_name or 'unknown'}",
+                    tool_name=tool_name,
                     source_skill_name=source_skill_name,
                     input=self._resolve_params(action.get("params", {}), params),
                     timeout=action.get("timeout", 30.0),
                 )
             elif action_type == "skill_call":
+                nested_skill_name = action.get("skill") or action.get("name")
                 step = Step(
                     type=StepType.SKILL_CALL,
-                    name=f"step_{i}_{action.get('skill', 'unknown')}",
-                    skill_name=action.get("skill"),
+                    name=step_name or f"step_{i}_{nested_skill_name or 'unknown'}",
+                    skill_name=nested_skill_name,
                     source_skill_name=source_skill_name,
                     input=self._resolve_params(action.get("params", {}), params),
                 )
@@ -530,6 +584,15 @@ User: {user_request}
                     source_skill_name=source_skill_name,
                     input=params,
                 )
+
+            if action_condition and action_type != "condition":
+                step = Step(
+                    type=StepType.CONDITION,
+                    name=step_name or f"step_{i}_condition",
+                    condition=action_condition,
+                    source_skill_name=source_skill_name,
+                    sub_steps=[step],
+                )
             
             if action.get("retry_policy"):
                 rp = action.get("retry_policy")
@@ -562,19 +625,10 @@ User: {user_request}
     
     def _resolve_params(self, template_params: Dict[str, Any], input_params: Dict[str, Any]) -> Dict[str, Any]:
         """Resolve parameter templates with actual values."""
-        resolved: Dict[str, Any] = {}
-        
-        for key, value in template_params.items():
-            if isinstance(value, str) and value.startswith("$"):
-                param_name = value[1:]
-                resolved[key] = input_params.get(param_name, "")
-            elif isinstance(value, str) and "{{" in value:
-                from jinja2 import Template
-                resolved[key] = Template(value).render(**input_params)
-            else:
-                resolved[key] = value
-        
-        return resolved
+        return {
+            key: resolve_interpolated_value(value, input_params)
+            for key, value in template_params.items()
+        }
     
     def _plan_greeting(self, intent: Intent) -> Plan:
         """Create a greeting plan."""

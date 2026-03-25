@@ -84,6 +84,8 @@ class Role:
                 return Permission.FILE_DELETE
             elif tool_name in ("shell", "safe_shell"):
                 return Permission.SHELL_EXECUTE
+            elif tool_name == "browser_cdp":
+                return Permission.NETWORK_ACCESS
             elif tool_name.startswith("http"):
                 return Permission.HTTP_REQUEST
         

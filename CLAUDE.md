@@ -86,7 +86,7 @@ User Input
 - Skills are JSON/YAML definitions in `skills/` directory. A skill declares `triggers`, `actions`, `permissions`, and required tools
 - `skills/registry/registry.py`: `SkillRegistry` — `get_skill_registry()` singleton
 - `skills/registry/clawhub.py`: ClawHub marketplace integration (search/install remote skills)
-- `skills/loader.py`: `register_from_directory(path, recursive)` loads and registers all skills in one call; `register_builtin_skills()` for built-in Python skills
+- `skills/loader.py`: `register_from_directory(path, recursive)` loads and registers all skills in one call
 - Skill lifecycle: `installed → enabled → running → stopped`
 
 **`localclaw/channels/`** — User interfaces

@@ -7,16 +7,19 @@ from typing import Optional
 
 import click
 
+from localclaw.channels.result_formatter import format_task_for_chat
 from localclaw.config.settings import get_settings
 from localclaw.core.engine import ExecutionEngine, get_engine
 from localclaw.core.models import ExecutionResult, Message, Task, TaskState
 from localclaw.llm.provider import initialize_llm_provider
 from localclaw.security.audit import configure_audit_logger
-from localclaw.skills.loader import load_skills_from_settings, register_builtin_skills
+from localclaw.skills.loader import load_skills_from_settings
 from localclaw.tools.base import Tool, get_tool_registry
+from localclaw.tools.browser_cdp_tool import register_browser_cdp_tools
 from localclaw.tools.clawhub_tool import register_clawhub_tools
 from localclaw.tools.file_tool import register_file_tools
 from localclaw.tools.http_tool import register_http_tools
+from localclaw.tools.local_model_tool import register_local_model_tools
 from localclaw.tools.shell_tool import register_shell_tools
 
 
@@ -104,10 +107,10 @@ def initialize_system() -> ExecutionEngine:
     tool_registry.register(ListSkillsTool())
     register_file_tools()
     register_http_tools()
+    register_local_model_tools()
     register_shell_tools()
+    register_browser_cdp_tools()
     register_clawhub_tools()
-
-    register_builtin_skills()
 
     load_skills_from_settings(settings)
 
@@ -131,23 +134,8 @@ def initialize_system() -> ExecutionEngine:
 
 def format_task_result(task: Task) -> str:
     """Format a task result for display."""
-    if task.state == TaskState.COMPLETED:
-        result_data = task.result.data
-        if "result" not in result_data and "message" not in result_data and len(result_data) == 1:
-            first_value = next(iter(result_data.values()))
-            if isinstance(first_value, dict):
-                result_data = first_value
-        if "result" in result_data:
-            return result_data["result"]
-        if "message" in result_data:
-            return result_data["message"]
-        if "content" in result_data:
-            return result_data["content"]
-        return str(result_data)
-    if task.state == TaskState.FAILED:
-        return f"Error: {task.error}"
-    if task.state == TaskState.VERIFYING:
-        return task.result.message if task.result else "Waiting for approval"
+    if task.state in (TaskState.COMPLETED, TaskState.FAILED, TaskState.VERIFYING):
+        return format_task_for_chat(task)
     return f"Task state: {task.state.value}"
 
 
@@ -351,9 +339,11 @@ def config() -> None:
     click.echo(f"  Model Provider: {settings.model_provider.value}")
     click.echo(f"  Model Name: {settings.model_name}")
     click.echo(f"  Model Base URL: {settings.get_model_base_url()}")
-    click.echo(f"  Bundled Skills: {settings.skills_dir}")
+    click.echo(f"  ClawHub Base URL: {settings.get_clawhub_base_url()}")
+    click.echo(f"  ClawHub Token Configured: {bool(settings.get_clawhub_token())}")
+    click.echo(f"  Configured Skill Dirs: {[str(path) for path in settings.extra_skill_dirs]}")
     click.echo(f"  Managed Skills: {settings.managed_skills_dir}")
-    click.echo(f"  Workspace Skills: {settings.workspace_skills_dir}")
+    click.echo(f"  Marketplace Catalog: {settings.bundled_skill_catalog_dir}")
     click.echo(f"  Data Directory: {settings.data_dir}")
     click.echo(f"  Memory Database: {settings.memory_db}")
     click.echo(f"  Audit Log: {settings.audit_log}")

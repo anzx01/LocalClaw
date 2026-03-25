@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from localclaw.config.settings import Settings, SkillInstallProtectionMode
+from localclaw.skills.registry import clawhub as clawhub_registry
 from localclaw.skills.registry.registry import SkillRegistry
 from localclaw.skills.security_review import review_skill_installation
 from localclaw.tools.base import ToolRegistry
@@ -96,6 +97,80 @@ class FakeLocalRegistry:
 
     def get_skill_path(self, skill_name: str):
         return self.skills_dir / skill_name
+
+
+class EmptyRemoteClient:
+    """Remote registry stub used when bundled catalog should satisfy the request."""
+
+    def __init__(self):
+        self.last_search_error = None
+
+    async def search_skills(self, query: str = "", category: str | None = None):
+        return []
+
+    async def get_skill_detail(self, skill_id: str):
+        return None
+
+    async def fetch_skill_bundle(self, skill_id: str):
+        return None
+
+    def save_skill_bundle(self, skill_id: str, skill_data: dict, target_dir):
+        skill_dir = target_dir / skill_id
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        with open(skill_dir / f"{skill_id}.json", "w", encoding="utf-8") as f:
+            json.dump(skill_data, f, ensure_ascii=False)
+        return True
+
+    async def close(self):
+        return None
+
+
+class FailingRemoteClient:
+    """Remote registry stub that simulates a recoverable search failure."""
+
+    def __init__(self, message: str = "DNS lookup failed") -> None:
+        self.last_search_error = None
+        self.message = message
+
+    async def search_skills(self, query: str = "", category: str | None = None):
+        self.last_search_error = self.message
+        return []
+
+    async def close(self):
+        return None
+
+
+def _write_bundled_catalog_skill(catalog_dir, skill_id: str = "repo.fs") -> None:
+    (catalog_dir / f"{skill_id}.json").write_text(
+        json.dumps(
+            {
+                "name": skill_id,
+                "version": "1.0.0",
+                "description": "Bundled OpenClaw-style workspace helper",
+                "type": "workflow",
+                "inputs": {"action": "string", "path": "string"},
+                "tools": ["file_list"],
+                "actions": [
+                    {
+                        "type": "tool_call",
+                        "name": "list_workspace",
+                        "tool": "file_list",
+                        "condition": "{{action == 'list'}}",
+                        "params": {"path": "{{path}}"},
+                    }
+                ],
+                "metadata": {
+                    "author": "LocalClaw",
+                    "category": "workspace",
+                    "catalog_id": skill_id,
+                    "skill_key": skill_id,
+                    "openclaw": {"skillKey": skill_id},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_review_skill_installation_detects_high_risk_patterns():
@@ -245,3 +320,85 @@ def test_clawhub_scan_and_install_routes_expose_review_flow(monkeypatch, tmp_pat
     assert install_data["installed"] is False
     assert install_data["requires_review"] is True
     assert install_data["scan"]["recommended_action"] == "block"
+
+
+@pytest.mark.asyncio
+async def test_clawhub_search_includes_bundled_catalog_when_remote_is_empty(monkeypatch, tmp_path):
+    """Bundled installable skills should show up even if the remote registry is unavailable."""
+
+    from localclaw.tools import clawhub_tool as clawhub_module
+
+    catalog_dir = tmp_path / "catalog"
+    catalog_dir.mkdir()
+    _write_bundled_catalog_skill(catalog_dir)
+
+    settings = Settings(_env_file=None, bundled_skill_catalog_dir=catalog_dir)
+
+    monkeypatch.setattr(clawhub_registry, "get_settings", lambda: settings)
+    monkeypatch.setattr(clawhub_module, "get_clawhub_client", lambda: EmptyRemoteClient())
+
+    result = await clawhub_module.ClawHubSearchTool().run(query="repo")
+
+    assert result.status == "success"
+    skills = result.data["skills"]
+    assert any(skill["id"] == "repo.fs" for skill in skills)
+    assert any(skill["source"] == "bundled" for skill in skills)
+
+
+@pytest.mark.asyncio
+async def test_clawhub_search_surfaces_remote_registry_errors(monkeypatch, tmp_path):
+    """Search should expose remote registry failures without hiding bundled matches."""
+
+    from localclaw.tools import clawhub_tool as clawhub_module
+
+    catalog_dir = tmp_path / "catalog"
+    catalog_dir.mkdir()
+    _write_bundled_catalog_skill(catalog_dir)
+
+    settings = Settings(_env_file=None, bundled_skill_catalog_dir=catalog_dir)
+
+    monkeypatch.setattr(clawhub_registry, "get_settings", lambda: settings)
+    monkeypatch.setattr(clawhub_module, "get_clawhub_client", lambda: FailingRemoteClient())
+
+    result = await clawhub_module.ClawHubSearchTool().run(query="repo")
+
+    assert result.status == "success"
+    assert result.data["remote_error"] == "DNS lookup failed"
+    assert any(skill["id"] == "repo.fs" for skill in result.data["skills"])
+
+
+@pytest.mark.asyncio
+async def test_clawhub_install_can_install_bundled_catalog_skill(monkeypatch, tmp_path):
+    """Bundled catalog entries should install through the same reviewed install flow as remote skills."""
+
+    from localclaw.tools import clawhub_tool as clawhub_module
+
+    catalog_dir = tmp_path / "catalog"
+    managed_dir = tmp_path / "managed"
+    catalog_dir.mkdir()
+    managed_dir.mkdir()
+    _write_bundled_catalog_skill(catalog_dir)
+
+    settings = Settings(
+        _env_file=None,
+        bundled_skill_catalog_dir=catalog_dir,
+        managed_skills_dir=managed_dir,
+        skill_install_protection_mode=SkillInstallProtectionMode.DISABLE_HIGH_RISK,
+    )
+    fake_skill_registry = SkillRegistry()
+
+    monkeypatch.setattr(clawhub_registry, "get_settings", lambda: settings)
+    monkeypatch.setattr(clawhub_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(clawhub_module, "get_clawhub_client", lambda: EmptyRemoteClient())
+    monkeypatch.setattr(clawhub_module, "get_skill_registry", lambda: fake_skill_registry)
+
+    tool = ClawHubInstallTool()
+    pending = await tool.run(skill_id="repo.fs")
+    installed = await tool.run(skill_id="repo.fs", decision="proceed")
+
+    assert pending.status == "error"
+    assert pending.data["requires_review"] is True
+    assert installed.status == "success"
+    assert installed.data["installed"] is True
+    assert (managed_dir / "repo.fs" / "repo.fs.json").exists()
+    assert fake_skill_registry.get("repo.fs") is not None

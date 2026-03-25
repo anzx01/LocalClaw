@@ -15,6 +15,7 @@ class SkillRegistry:
     def __init__(self) -> None:
         self._skills: Dict[str, Skill] = {}
         self._triggers: Dict[str, List[str]] = {}
+        self._skill_aliases: Dict[str, str] = {}
         self._logger = logging.getLogger("localclaw.skills.registry")
     
     def register(self, skill: Skill, enable: bool = True) -> None:
@@ -25,6 +26,7 @@ class SkillRegistry:
             skill.disable()
 
         self._skills[skill.name] = skill
+        self._rebuild_alias_index()
         self._logger.info(f"Registered skill: {skill.name} v{skill.version}")
         
         definition = skill.get_definition()
@@ -51,13 +53,17 @@ class SkillRegistry:
                         self._triggers[trigger.pattern].remove(name)
             
             del self._skills[name]
+            self._rebuild_alias_index()
             self._logger.info(f"Unregistered skill: {name}")
             return True
         return False
     
     def get(self, name: str) -> Optional[Skill]:
         """Get a skill by name."""
-        return self._skills.get(name)
+        resolved = self.resolve_name(name)
+        if resolved is None:
+            return None
+        return self._skills.get(resolved)
     
     def get_all(self) -> Dict[str, Skill]:
         """Get all registered skills."""
@@ -86,6 +92,13 @@ class SkillRegistry:
         
         definition = skill.get_definition()
         availability = definition.metadata.get("availability", {})
+        skill_key = str(definition.metadata.get("skill_key", skill.name)).strip() or skill.name
+        aliases = [
+            alias
+            for alias in definition.metadata.get("aliases", [])
+            if str(alias).strip() and str(alias).strip().lower() != skill.name.lower()
+        ]
+        invocation_names = self._build_invocation_names(skill.name, skill_key, aliases)
         return {
             "name": skill.name,
             "version": skill.version,
@@ -99,6 +112,12 @@ class SkillRegistry:
             "availability": availability.get("status", "available"),
             "availability_details": availability,
             "user_invocable": definition.metadata.get("user_invocable", True),
+            "skill_key": skill_key,
+            "aliases": aliases,
+            "invocation_names": invocation_names,
+            "source_path": definition.metadata.get("source_path"),
+            "source_format": definition.metadata.get("source_format"),
+            "documentation": definition.metadata.get("documentation"),
             "metadata": definition.metadata,
         }
     
@@ -125,6 +144,18 @@ class SkillRegistry:
                 continue
             invocable.append(info)
         return invocable
+
+    def resolve_name(self, identifier: str) -> Optional[str]:
+        """Resolve a canonical skill name from a name, OpenClaw key, or alias."""
+        if identifier is None:
+            return None
+        if identifier in self._skills:
+            return identifier
+
+        lowered = str(identifier).strip().lower()
+        if not lowered:
+            return None
+        return self._skill_aliases.get(lowered)
     
     def enable(self, name: str) -> bool:
         """Enable a skill."""
@@ -154,6 +185,45 @@ class SkillRegistry:
                 matched.extend(skill_names)
         
         return list(set(matched))
+
+    def _rebuild_alias_index(self) -> None:
+        """Rebuild skill lookup aliases from current registry contents."""
+        self._skill_aliases = {}
+        for skill in self._skills.values():
+            info = self._build_skill_invocation_metadata(skill)
+            for identifier in info["invocation_names"]:
+                self._skill_aliases[identifier.lower()] = skill.name
+
+    def _build_skill_invocation_metadata(self, skill: Skill) -> Dict[str, Any]:
+        """Collect OpenClaw-compatible invocation names for a skill."""
+        definition = skill.get_definition()
+        skill_key = str(definition.metadata.get("skill_key", skill.name)).strip() or skill.name
+        raw_aliases = definition.metadata.get("aliases", []) or []
+        aliases = [str(alias).strip() for alias in raw_aliases if str(alias).strip()]
+        return {
+            "skill_key": skill_key,
+            "aliases": aliases,
+            "invocation_names": self._build_invocation_names(skill.name, skill_key, aliases),
+        }
+
+    def _build_invocation_names(
+        self,
+        canonical_name: str,
+        skill_key: str,
+        aliases: List[str],
+    ) -> List[str]:
+        """Return unique invocation identifiers in priority order."""
+        ordered: List[str] = []
+        seen: set[str] = set()
+
+        for candidate in [canonical_name, skill_key, *aliases]:
+            normalized = str(candidate).strip()
+            lowered = normalized.lower()
+            if not normalized or lowered in seen:
+                continue
+            seen.add(lowered)
+            ordered.append(normalized)
+        return ordered
 
 
 _registry: Optional[SkillRegistry] = None

@@ -67,7 +67,7 @@ class VerifierBackend(ABC):
 class PermissionVerifier(VerifierBackend):
     """Verifies permissions for operations."""
     
-    HIGH_RISK_TOOLS = {"shell", "http_post"}
+    HIGH_RISK_TOOLS = {"shell", "http_post", "browser_cdp"}
     CRITICAL_TOOLS = {"shell"}
     
     def __init__(

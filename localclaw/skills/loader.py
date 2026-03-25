@@ -13,7 +13,7 @@ import yaml
 
 from localclaw.config.settings import Settings, get_settings
 from localclaw.skills.base import Skill, create_skill_from_dict
-from localclaw.skills.registry import SkillRegistry, get_skill_registry
+from localclaw.skills.registry.registry import SkillRegistry, get_skill_registry
 
 
 logger = logging.getLogger(__name__)
@@ -218,6 +218,11 @@ class SkillLoader:
         homepage = prepared.get("homepage") or openclaw_metadata.get("homepage")
         primary_env = openclaw_metadata.get("primaryEnv")
         skill_key = openclaw_metadata.get("skillKey", prepared.get("name", "unknown"))
+        aliases = self._normalize_aliases(
+            prepared.get("aliases"),
+            metadata.get("aliases"),
+            openclaw_metadata.get("aliases"),
+        )
         availability = self._evaluate_eligibility(requirements, openclaw_metadata)
 
         metadata.update(
@@ -229,6 +234,7 @@ class SkillLoader:
                 "homepage": homepage,
                 "primary_env": primary_env,
                 "skill_key": skill_key,
+                "aliases": aliases,
                 "source_path": str(source_path),
                 "availability": availability,
                 "source_format": metadata.get(
@@ -239,6 +245,27 @@ class SkillLoader:
         )
         prepared["metadata"] = metadata
         return prepared
+
+    def _normalize_aliases(self, *values: Any) -> List[str]:
+        """Collect normalized skill aliases from multiple metadata locations."""
+        aliases: List[str] = []
+        seen: set[str] = set()
+
+        for value in values:
+            if value is None:
+                continue
+            candidates = value if isinstance(value, list) else [value]
+            for candidate in candidates:
+                alias = str(candidate).strip()
+                if not alias:
+                    continue
+                lowered = alias.lower()
+                if lowered in seen:
+                    continue
+                seen.add(lowered)
+                aliases.append(alias)
+
+        return aliases
 
     def _extract_openclaw_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Extract nested OpenClaw metadata from a skill definition."""
@@ -436,76 +463,3 @@ def load_skills_from_settings(
     for skill_dir in resolved_settings.get_skill_search_paths():
         count += loader.register_from_directory(skill_dir, recursive=True)
     return count
-
-
-def create_builtin_skills() -> List[Dict[str, Any]]:
-    """Create definitions for built-in skills."""
-    return [
-        {
-            "name": "hello",
-            "version": "1.0.0",
-            "description": "Say hello to someone",
-            "type": "atomic",
-            "inputs": {"name": "string"},
-            "outputs": {"message": "string"},
-            "actions": [
-                {
-                    "type": "transform",
-                    "template": "Hello, {{name}}!",
-                }
-            ],
-            "permissions": {"risk_level": "low"},
-            "triggers": [{"type": "pattern", "pattern": r"^hello\s+(?P<name>\w+)$"}],
-        },
-        {
-            "name": "echo",
-            "version": "1.0.0",
-            "description": "Echo back a message",
-            "type": "atomic",
-            "inputs": {"text": "string"},
-            "outputs": {"message": "string"},
-            "actions": [
-                {
-                    "type": "transform",
-                    "template": "{{text}}",
-                }
-            ],
-            "permissions": {"risk_level": "low"},
-        },
-        {
-            "name": "system_status",
-            "version": "1.0.0",
-            "description": "Get system status information",
-            "type": "atomic",
-            "outputs": {"status": "string", "version": "string"},
-            "actions": [
-                {
-                    "type": "tool_call",
-                    "tool": "system_status",
-                }
-            ],
-            "permissions": {"risk_level": "low"},
-        },
-        {
-            "name": "list_skills",
-            "version": "1.0.0",
-            "description": "List all available skills",
-            "type": "atomic",
-            "outputs": {"skills": "list"},
-            "actions": [
-                {
-                    "type": "tool_call",
-                    "tool": "list_skills",
-                }
-            ],
-            "permissions": {"risk_level": "low"},
-        },
-    ]
-
-
-def register_builtin_skills() -> None:
-    """Register built-in skills."""
-    registry = get_skill_registry()
-    for skill_data in create_builtin_skills():
-        skill = create_skill_from_dict(skill_data)
-        registry.register(skill)

@@ -77,6 +77,60 @@ class Intent(BaseModel):
     raw_message: Optional[str] = None
 
 
+class AgentDecisionMode(str, Enum):
+    """High-level actions the local model can choose."""
+
+    ANSWER = "answer"
+    SKILL = "skill"
+    TOOL = "tool"
+    INTENT = "intent"
+    UNKNOWN = "unknown"
+
+
+class AgentDecision(BaseModel):
+    """OpenClaw-style model decision before execution."""
+
+    mode: AgentDecisionMode = Field(default=AgentDecisionMode.UNKNOWN)
+    answer: Optional[str] = None
+    skill_name: Optional[str] = None
+    tool_name: Optional[str] = None
+    intent_name: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    source: str = Field(default="llm")
+    raw_message: Optional[str] = None
+    rationale: Optional[str] = None
+
+    def to_intent(self) -> Optional[Intent]:
+        """Convert an executable decision into a legacy intent."""
+
+        if self.mode == AgentDecisionMode.SKILL and self.skill_name:
+            return Intent(
+                intent=f"skill.{self.skill_name}",
+                params=self.params,
+                confidence=self.confidence,
+                source=self.source,
+                raw_message=self.raw_message,
+            )
+        if self.mode == AgentDecisionMode.TOOL and self.tool_name:
+            return Intent(
+                intent=f"tool.{self.tool_name}",
+                params=self.params,
+                confidence=self.confidence,
+                source=self.source,
+                raw_message=self.raw_message,
+            )
+        if self.mode == AgentDecisionMode.INTENT and self.intent_name:
+            return Intent(
+                intent=self.intent_name,
+                params=self.params,
+                confidence=self.confidence,
+                source=self.source,
+                raw_message=self.raw_message,
+            )
+        return None
+
+
 class RetryPolicy(BaseModel):
     """Retry policy for steps."""
     max_retries: int = Field(default=3, ge=0)

@@ -44,16 +44,62 @@ class OllamaClient(LLMProvider):
         self._ollama_config.base_url = self._ollama_config.base_url.rstrip("/")
         self._session: Optional[aiohttp.ClientSession] = None
 
+    @staticmethod
+    def _is_vision_or_multimodal_model(model_name: str) -> bool:
+        """Best-effort filter for models that are poor fits for text-only intent parsing."""
+        lowered = model_name.lower()
+        return any(
+            marker in lowered
+            for marker in (
+                "-vl",
+                ":vl",
+                "vision",
+                "llava",
+                "minicpm-v",
+                "internvl",
+                "moondream",
+                "pixtral",
+                "qvq",
+            )
+        )
+
+    def _select_fallback_model(self, models: List[Dict[str, Any]]) -> str:
+        """Prefer text-oriented installed models when the configured model is missing."""
+        installed_names = [
+            str(model.get("name") or model.get("model") or "").strip()
+            for model in models
+        ]
+        installed_names = [name for name in installed_names if name]
+        if not installed_names:
+            return ""
+
+        configured_family = self._ollama_config.model.split(":", 1)[0].lower()
+        text_candidates = [
+            name for name in installed_names if not self._is_vision_or_multimodal_model(name)
+        ]
+        same_family_text_candidates = [
+            name
+            for name in text_candidates
+            if name.split(":", 1)[0].lower() == configured_family
+        ]
+
+        for candidates in (
+            same_family_text_candidates,
+            text_candidates,
+            installed_names,
+        ):
+            if candidates:
+                return candidates[0]
+        return ""
+
     async def _maybe_fallback_to_installed_model(self, error_text: str) -> bool:
-        """Fallback to the first installed Ollama model when the configured one is missing."""
+        """Fallback to a better installed Ollama model when the configured one is missing."""
         lowered = error_text.lower()
         if "model" not in lowered or "not found" not in lowered:
             return False
 
         models = await self.list_models()
-        fallback_name = ""
-        if models:
-            fallback_name = str(models[0].get("name") or models[0].get("model") or "").strip()
+        fallback_name = self._select_fallback_model(models)
 
         if not fallback_name or fallback_name == self._ollama_config.model:
             return False

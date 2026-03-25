@@ -472,6 +472,21 @@ class TestOllamaClient:
         
         assert available is False
 
+    @pytest.mark.asyncio
+    async def test_ollama_missing_model_prefers_text_model_fallback(self):
+        client = OllamaClient(OllamaConfig(model="qwen3:4b"))
+        client.list_models = AsyncMock(
+            return_value=[
+                {"name": "qwen3-vl:4b"},
+                {"name": "gemma3:4b"},
+            ]
+        )
+
+        changed = await client._maybe_fallback_to_installed_model("model 'qwen3:4b' not found")
+
+        assert changed is True
+        assert client._ollama_config.model == "gemma3:4b"
+
 
 class TestOpenClawCompatibility:
     """Tests for OpenClaw skill compatibility."""

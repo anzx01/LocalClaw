@@ -61,6 +61,20 @@ async def test_dsl_parser():
 
 
 @pytest.mark.asyncio
+async def test_dsl_parser_supports_openclaw_skill_keys():
+    """Slash commands should accept dotted and dashed OpenClaw skill identifiers."""
+    parser = DSLParser()
+
+    message = Message(content="/repo.fs action=list path=.")
+    intent = await parser.parse(message)
+
+    assert intent is not None
+    assert intent.intent == "skill.repo.fs"
+    assert intent.params["action"] == "list"
+    assert intent.params["path"] == "."
+
+
+@pytest.mark.asyncio
 async def test_dsl_parser_positional():
     """Test DSLParser with positional args."""
     parser = DSLParser()
@@ -143,6 +157,20 @@ async def test_default_parser_unknown():
     intent = await parser.parse(message)
     
     assert intent.intent == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_default_parser_desktop_folders_request():
+    """Chinese desktop folder questions should map to a folder-list intent."""
+
+    parser = create_default_parser()
+
+    message = Message(content="看看我桌面有那些文件夹？")
+    intent = await parser.parse(message)
+
+    assert intent.intent == "list_folders"
+    assert intent.params["path"] == "~/Desktop"
+    assert intent.params["folders_only"] == "true"
 
 
 @pytest.mark.asyncio
@@ -235,7 +263,7 @@ async def test_llm_parser_can_select_skill_plugin(monkeypatch):
     assert intent.params["action"] == "list"
     assert intent.params["path"] == "."
     assert "Installed skills:" in captured["prompt"]
-    assert "- fs: File system workflow plugin" in captured["prompt"]
+    assert "- fs | invoke as: skill.fs: File system workflow plugin" in captured["prompt"]
 
 
 @pytest.mark.asyncio

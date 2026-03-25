@@ -11,12 +11,60 @@ from localclaw.skills.security_review import (
     review_skill_installation,
 )
 from localclaw.tools.base import Tool, register_tool
-from localclaw.skills.registry.clawhub import get_clawhub_client, get_local_registry
+from localclaw.skills.registry.clawhub import (
+    get_bundled_skill_catalog,
+    get_clawhub_client,
+    get_local_registry,
+)
 from localclaw.skills.loader import SkillLoader
 from localclaw.skills.registry.registry import get_skill_registry
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _resolve_skill_payload(skill_id: str) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str]:
+    """Resolve a skill detail/bundle from the bundled catalog or remote registry."""
+
+    bundled_catalog = get_bundled_skill_catalog()
+    detail = bundled_catalog.get_skill_detail(skill_id)
+    bundle = bundled_catalog.fetch_skill_bundle(skill_id)
+    if detail is not None or bundle is not None:
+        return detail, bundle, "bundled"
+
+    client = get_clawhub_client()
+    try:
+        detail = await client.get_skill_detail(skill_id)
+        bundle = await client.fetch_skill_bundle(skill_id)
+        return detail, bundle, "remote"
+    finally:
+        await client.close()
+
+
+def _merge_marketplace_skills(
+    bundled_skills: List[Dict[str, Any]],
+    remote_skills: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Merge bundled and remote marketplace results, preferring bundled entries."""
+
+    merged: Dict[str, Dict[str, Any]] = {}
+    ordered: List[Dict[str, Any]] = []
+
+    for skill in [*bundled_skills, *remote_skills]:
+        skill_id = str(skill.get("id") or skill.get("name") or "").strip()
+        if not skill_id:
+            continue
+        lowered = skill_id.lower()
+        if lowered in merged:
+            continue
+        normalized = dict(skill)
+        normalized.setdefault("id", skill_id)
+        normalized.setdefault("source", "remote")
+        normalized.setdefault("source_label", "Remote")
+        merged[lowered] = normalized
+        ordered.append(normalized)
+
+    return ordered
 
 
 class ClawHubSearchTool(Tool):
@@ -31,13 +79,21 @@ class ClawHubSearchTool(Tool):
     async def execute(self, query: str = "", category: Optional[str] = None, **kwargs) -> ExecutionResult:
         """Execute ClawHub search."""
         try:
+            bundled_catalog = get_bundled_skill_catalog()
+            bundled_skills = bundled_catalog.search_skills(query=query, category=category)
+
             client = get_clawhub_client()
-            skills = await client.search_skills(query, category)
-            await client.close()
+            try:
+                remote_skills = await client.search_skills(query, category)
+                remote_error = getattr(client, "last_search_error", None)
+            finally:
+                await client.close()
+
+            skills = _merge_marketplace_skills(bundled_skills, remote_skills)
 
             return ExecutionResult.success(
                 message="Skills search completed",
-                data={"skills": skills},
+                data={"skills": skills, "remote_error": remote_error},
             )
         except Exception as e:
             return ExecutionResult.from_error(str(e), ErrorType.SYSTEM_ERROR)
@@ -55,10 +111,7 @@ class ClawHubScanTool(Tool):
     async def execute(self, skill_id: str, **kwargs) -> ExecutionResult:
         """Execute a pre-installation security scan."""
         try:
-            client = get_clawhub_client()
-            detail = await client.get_skill_detail(skill_id)
-            bundle = await client.fetch_skill_bundle(skill_id)
-            await client.close()
+            detail, bundle, source = await _resolve_skill_payload(skill_id)
 
             if detail is None and bundle is None:
                 return ExecutionResult.from_error(
@@ -67,6 +120,8 @@ class ClawHubScanTool(Tool):
                 )
 
             scan = review_skill_installation(skill_id=skill_id, detail=detail, bundle=bundle)
+            scan.setdefault("metadata_snapshot", {})
+            scan["metadata_snapshot"]["source"] = source
             return ExecutionResult.success(
                 message="Skill security review completed",
                 data={"scan": scan},
@@ -94,20 +149,18 @@ class ClawHubInstallTool(Tool):
                     ErrorType.VALIDATION_ERROR,
                 )
 
-            client = get_clawhub_client()
-            detail = await client.get_skill_detail(skill_id)
-            bundle = await client.fetch_skill_bundle(skill_id)
+            detail, bundle, source = await _resolve_skill_payload(skill_id)
             if detail is None and bundle is None:
-                await client.close()
                 return ExecutionResult.from_error(
                     f"Failed to fetch skill metadata for {skill_id}",
                     ErrorType.SYSTEM_ERROR,
                 )
             scan = review_skill_installation(skill_id=skill_id, detail=detail, bundle=bundle)
+            scan.setdefault("metadata_snapshot", {})
+            scan["metadata_snapshot"]["source"] = source
 
             normalized_decision = (decision or "").strip().lower()
             if normalized_decision != "proceed":
-                await client.close()
                 return ExecutionResult.from_error(
                     f"Skill {skill_id} requires a security review decision before installation",
                     ErrorType.VALIDATION_ERROR,
@@ -120,7 +173,6 @@ class ClawHubInstallTool(Tool):
                 )
 
             if bundle is None:
-                await client.close()
                 return ExecutionResult.from_error(
                     f"Failed to download skill {skill_id}",
                     ErrorType.SYSTEM_ERROR,
@@ -137,8 +189,11 @@ class ClawHubInstallTool(Tool):
             )
             protected_bundle = apply_post_install_guard(bundle, guard)
 
-            saved = client.save_skill_bundle(skill_id, protected_bundle, local_registry.skills_dir)
-            await client.close()
+            client = get_clawhub_client()
+            try:
+                saved = client.save_skill_bundle(skill_id, protected_bundle, local_registry.skills_dir)
+            finally:
+                await client.close()
             if not saved:
                 return ExecutionResult.from_error(
                     f"Failed to save skill {skill_id}",

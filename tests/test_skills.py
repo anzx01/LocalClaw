@@ -114,3 +114,31 @@ def test_registry_get_info():
     assert info is not None
     assert info["name"] == "mock_skill"
     assert info["version"] == "1.0.0"
+
+
+def test_registry_resolves_openclaw_skill_key_and_aliases():
+    """OpenClaw-compatible skill keys and aliases should resolve to the canonical skill."""
+    registry = SkillRegistry()
+    skill = create_skill_from_dict(
+        {
+            "name": "workspace_fs",
+            "description": "Workspace file skill",
+            "actions": [{"type": "transform", "template": "ok"}],
+            "metadata": {
+                "skill_key": "repo.fs",
+                "aliases": ["filesystem", "files"],
+            },
+        }
+    )
+
+    registry.register(skill)
+
+    assert registry.resolve_name("repo.fs") == "workspace_fs"
+    assert registry.resolve_name("FILESYSTEM") == "workspace_fs"
+    assert registry.get("files") is skill
+
+    info = registry.get_skill_info("workspace_fs")
+    assert info is not None
+    assert info["skill_key"] == "repo.fs"
+    assert "filesystem" in info["aliases"]
+    assert "repo.fs" in info["invocation_names"]

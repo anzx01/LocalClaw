@@ -50,6 +50,8 @@ _BROWSER_CONTROL_KEYWORDS = [
     "webdriver",
     "puppeteer",
     "headless",
+    "cdp",
+    "chrome devtools",
 ]
 _FILE_ACCESS_KEYWORDS = [
     "读取文件",
@@ -136,6 +138,7 @@ _SENSITIVE_PATH_KEYWORDS = [
 _REMOTE_CONTENT_KEYWORDS = [
     "http_get",
     "browser",
+    "browser_cdp",
     "scrape",
     "crawler",
     "crawl",
@@ -147,6 +150,7 @@ _REMOTE_CONTENT_KEYWORDS = [
 _DANGEROUS_TOOLS = {
     "shell",
     "safe_shell",
+    "browser_cdp",
     "file_delete",
     "file_write",
     "http_post",
@@ -168,6 +172,7 @@ _NETWORK_REQUEST_TOOLS = {
     "http",
     "http_get",
     "http_post",
+    "browser_cdp",
 }
 _BENIGN_USE_CASE_KEYWORDS = [
     "weather",
@@ -214,6 +219,7 @@ _POST_INSTALL_PROTECTED_TOOLS = {
     "shell",
     "safe_shell",
     "browser",
+    "browser_cdp",
     "playwright",
     "selenium",
     "webdriver",
@@ -286,7 +292,7 @@ def review_skill_installation(
         "sensitive_input_detected": bool(metadata["sensitive_inputs"]),
         "command_execution_detected": bool(_matching_tools(metadata["tools"], _COMMAND_EXECUTION_TOOLS))
         or bool(_keyword_hits(corpus, _COMMAND_EXEC_KEYWORDS)),
-        "browser_control_detected": bool(_matching_tools(metadata["tools"], {"browser", "playwright", "selenium", "webdriver", "puppeteer"}))
+        "browser_control_detected": bool(_matching_tools(metadata["tools"], {"browser", "browser_cdp", "playwright", "selenium", "webdriver", "puppeteer"}))
         or bool(_keyword_hits(corpus, _BROWSER_CONTROL_KEYWORDS)),
         "file_access_detected": bool(_matching_tools(metadata["tools"], _FILE_ACCESS_TOOLS))
         or bool(_keyword_hits(corpus, _FILE_ACCESS_KEYWORDS)),
@@ -672,7 +678,7 @@ def _detect_command_execution_capability(metadata: Dict[str, Any], corpus: str) 
 def _detect_browser_control_capability(metadata: Dict[str, Any], corpus: str) -> Optional[Dict[str, Any]]:
     """Detect skills that can automate or control a browser."""
 
-    tool_hits = _matching_tools(metadata["tools"], {"browser", "playwright", "selenium", "webdriver", "puppeteer"})
+    tool_hits = _matching_tools(metadata["tools"], {"browser", "browser_cdp", "playwright", "selenium", "webdriver", "puppeteer"})
     keyword_hits = _keyword_hits(corpus, _BROWSER_CONTROL_KEYWORDS)
     if not tool_hits and not keyword_hits:
         return None

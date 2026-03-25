@@ -94,6 +94,43 @@
         .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
         .result-note { font-size: 12px; color: #667085; }
         .skill-note { margin-top: 8px; color: #667085; font-size: 13px; line-height: 1.5; }
+        .skills-shell { display: grid; gap: 18px; }
+        .skills-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+        .metric-card { border: 1px solid #e4ebf5; border-radius: 16px; padding: 16px 18px; background: linear-gradient(180deg, #ffffff, #f8fbff); box-shadow: 0 10px 30px rgba(15,23,42,0.05); }
+        .metric-card strong { display: block; margin-bottom: 8px; color: #475467; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+        .metric-value { font-size: 28px; font-weight: 800; color: #101828; line-height: 1.1; }
+        .metric-subtle { margin-top: 8px; color: #667085; font-size: 13px; line-height: 1.45; word-break: break-word; }
+        .skills-layout { display: grid; grid-template-columns: minmax(320px, 0.95fr) minmax(380px, 1.15fr); gap: 20px; align-items: start; }
+        .skills-panel { border: 1px solid #e5e7eb; border-radius: 20px; padding: 18px; background: linear-gradient(180deg, #ffffff, #fbfdff); box-shadow: 0 12px 36px rgba(15,23,42,0.06); }
+        .skills-panel-header { display: flex; justify-content: space-between; align-items: start; gap: 14px; margin-bottom: 14px; }
+        .skills-panel-header h3 { color: #101828; margin-bottom: 6px; }
+        .skills-panel-header p { color: #667085; font-size: 14px; line-height: 1.5; }
+        .skills-card-grid { display: grid; gap: 14px; }
+        .skill-card { border: 1px solid #e5e7eb; border-radius: 18px; padding: 16px; background: #fff; box-shadow: 0 8px 24px rgba(15,23,42,0.04); }
+        .skill-card-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 10px; }
+        .skill-card-title { color: #101828; margin-bottom: 4px; }
+        .skill-version { color: #667085; font-size: 13px; }
+        .skill-description { color: #475467; line-height: 1.55; margin-bottom: 12px; }
+        .skill-badges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+        .skill-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+        .skill-meta span { padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #f2f6fb; color: #475467; }
+        .skill-tag-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+        .skill-tag { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; background: #eef4ff; color: #1f5eff; font-size: 12px; font-weight: 700; }
+        .skill-warning { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: #fff7e8; border: 1px solid #f5df9b; color: #8a5a00; font-size: 13px; line-height: 1.5; }
+        .skill-filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+        .skill-filter-row input, .skill-filter-row select { flex: 1; min-width: 160px; padding: 10px 12px; border: 1px solid #d6e1ec; border-radius: 10px; font: inherit; background: white; color: #101828; }
+        .skill-subtle { color: #667085; font-size: 13px; line-height: 1.5; }
+        .pill.source-bundled { background: #e8f7ef; color: #0f8a4f; }
+        .pill.source-remote { background: #eef4ff; color: #1f5eff; }
+        .pill.source-managed { background: #fff4e5; color: #9a6700; }
+        .pill.source-configured { background: #f3e8ff; color: #7c3aed; }
+        .pill.source-runtime { background: #f2f4f7; color: #475467; }
+        .pill.source-unknown { background: #f8fafc; color: #667085; }
+        .pill.state-available, .pill.state-enabled { background: #e8f7ef; color: #0f8a4f; }
+        .pill.state-blocked, .pill.state-stopped { background: #fdecec; color: #b42318; }
+        .pill.state-installed { background: #eef4ff; color: #1f5eff; }
+        .pill.state-running { background: #e0f2fe; color: #0369a1; }
+        .pill.state-unknown { background: #f2f4f7; color: #475467; }
         .modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.52); display: flex; justify-content: center; align-items: flex-start; padding: 32px 16px; z-index: 50; overflow-y: auto; }
         .modal-card { width: min(860px, 100%); background: white; border-radius: 20px; padding: 22px; box-shadow: 0 20px 60px rgba(15, 23, 42, 0.22); }
         .modal-header { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 16px; }
@@ -119,6 +156,7 @@
         @media (max-width: 900px) {
             .section-header { flex-direction: column; align-items: start; }
             .modal-header { flex-direction: column; }
+            .skills-layout { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -245,55 +283,208 @@
             <div class="section-header">
                 <div>
                     <h2>Skill Management</h2>
-                    <p>Every installation now runs a safety review first, covering malicious plugin patterns and high-risk capabilities such as secrets, shell, browser, file, network, and scheduled tasks.</p>
+                    <p>Browse built-in recommendations and ClawHub listings, review install risk before changes, and manage user-installed skills without mixing them up with runtime defaults.</p>
                 </div>
                 <div class="toolbar">
-                    <button class="ghost-btn" @click="loadSkills()">Refresh</button>
+                    <span class="hint" x-text="'Registry: ' + (config.clawhub_base_url || 'https://clawhub.ai')"></span>
+                    <button class="ghost-btn" @click="refreshSkillCatalog()" :disabled="skillsLoading || availableSkillsLoading" x-text="skillsLoading || availableSkillsLoading ? 'Refreshing...' : 'Refresh'"></button>
                 </div>
             </div>
-            <div class="grid">
-                <div>
-                    <h3>Installed Skills</h3>
-                    <div class="skill-list">
-                        <template x-for="skill in skills" :key="skill.name">
-                            <div class="skill-card">
-                                <h4 x-text="skill.name + ' v' + skill.version"></h4>
-                                <p><strong>Description:</strong> <span x-text="skill.description"></span></p>
-                                <p><strong>Type:</strong> <span x-text="skill.type"></span></p>
-                                <p><strong>State:</strong> <span x-text="skill.state"></span></p>
-                                <div class="skill-actions">
-                                    <button class="uninstall" @click="uninstallSkill(skill.name)">Uninstall</button>
-                                </div>
-                            </div>
-                        </template>
+            <div class="skills-shell">
+                <div class="skills-summary-grid">
+                    <div class="metric-card">
+                        <strong>Installed</strong>
+                        <div class="metric-value" x-text="skills.length"></div>
+                        <div class="metric-subtle">Active runtime skills currently registered.</div>
+                    </div>
+                    <div class="metric-card">
+                        <strong>Available</strong>
+                        <div class="metric-value" x-text="availableSkills.length"></div>
+                        <div class="metric-subtle">Bundled recommendations plus remote marketplace results.</div>
+                    </div>
+                    <div class="metric-card">
+                        <strong>Protection</strong>
+                        <div class="metric-value" x-text="formatProtectionMode(config.skill_install_protection_mode)"></div>
+                        <div class="metric-subtle">Every install is scanned before any files are written.</div>
+                    </div>
+                    <div class="metric-card">
+                        <strong>Registry</strong>
+                        <div class="metric-value" x-text="config.clawhub_has_token ? 'Private' : 'Public'"></div>
+                        <div class="metric-subtle" x-text="config.clawhub_base_url || 'https://clawhub.ai'"></div>
                     </div>
                 </div>
-                <div>
-                    <h3>Available Skills</h3>
-                    <template x-if="availableSkillsLoadError">
-                        <div class="notice" x-text="availableSkillsLoadError"></div>
-                    </template>
-                    <div class="skill-list">
-                        <template x-if="availableSkills.length === 0">
-                            <div class="empty-state">暂无可安装的第三方 Skill。</div>
+
+                <div class="skills-layout">
+                    <section class="skills-panel">
+                        <div class="skills-panel-header">
+                            <div>
+                                <h3>Installed Skills</h3>
+                                <p>User-installed skills can be removed here. Skills loaded from configured directories stay read-only.</p>
+                            </div>
+                            <div class="skill-subtle" x-text="filteredInstalledSkills().length + ' shown / ' + skills.length + ' total'"></div>
+                        </div>
+
+                        <div class="skill-filter-row">
+                            <input type="text" x-model="installedSkillQuery" placeholder="Filter installed skills">
+                            <button class="ghost-btn" @click="installedSkillQuery = ''" :disabled="!installedSkillQuery">Clear</button>
+                        </div>
+
+                        <template x-if="skillsLoading">
+                            <div class="empty-state">Loading installed skills...</div>
                         </template>
-                        <template x-for="skill in availableSkills" :key="skill.id">
-                            <div class="skill-card">
-                                <h4 x-text="skill.name + ' v' + skill.version"></h4>
-                                <p><strong>Description:</strong> <span x-text="skill.description"></span></p>
-                                <p><strong>Author:</strong> <span x-text="skill.author"></span></p>
-                                <p class="skill-note">安装前会自动检查密钥输入、命令执行、浏览器控制、文件访问、网络请求、定时任务以及常见恶意插件特征。</p>
-                                <div class="skill-actions">
-                                    <button
-                                        class="install"
-                                        @click="openInstallReview(skill)"
-                                        :disabled="installing === skill.id || reviewLoading === skill.id"
-                                        x-text="reviewLoading === skill.id ? '体检中...' : (installing === skill.id ? '安装中...' : '体检后安装')">
-                                    </button>
+
+                        <div class="skills-card-grid" x-show="!skillsLoading">
+                            <template x-if="filteredInstalledSkills().length === 0">
+                                <div class="empty-state">No installed skills match the current filter.</div>
+                            </template>
+
+                            <template x-for="skill in filteredInstalledSkills()" :key="skill.name">
+                                <div class="skill-card">
+                                    <div class="skill-card-head">
+                                        <div>
+                                            <h4 class="skill-card-title" x-text="skill.name"></h4>
+                                            <div class="skill-version" x-text="'v' + skill.version"></div>
+                                        </div>
+                                        <div class="skill-badges">
+                                            <span class="pill" :class="skillStatePillClass(skill.state)" x-text="skill.state"></span>
+                                            <span class="pill" :class="availabilityPillClass(skill.availability)" x-text="availabilityLabel(skill)"></span>
+                                        </div>
+                                    </div>
+
+                                    <p class="skill-description" x-text="skill.description || 'No description provided.'"></p>
+
+                                    <div class="skill-meta">
+                                        <span x-text="'Type: ' + (skill.type || 'unknown')"></span>
+                                        <span x-text="'Source: ' + formatInstalledSource(skill)"></span>
+                                        <template x-if="skill.skill_key">
+                                            <span x-text="'Key: ' + skill.skill_key"></span>
+                                        </template>
+                                    </div>
+
+                                    <template x-if="skill.availability_reason">
+                                        <div class="skill-warning" x-text="skill.availability_reason"></div>
+                                    </template>
+
+                                    <template x-if="skill.aliases && skill.aliases.length">
+                                        <div class="skill-tag-list">
+                                            <template x-for="alias in skill.aliases" :key="alias">
+                                                <span class="skill-tag" x-text="alias"></span>
+                                            </template>
+                                        </div>
+                                    </template>
+
+                                    <div class="skill-actions">
+                                        <button class="secondary-btn" @click="copyText('/' + (skill.skill_key || skill.name))">Copy Invoke</button>
+                                        <button
+                                            class="danger-btn"
+                                            x-show="skill.removable"
+                                            @click="uninstallSkill(skill)"
+                                            :disabled="uninstallingSkill === normalizeSkillId(skill)"
+                                            x-text="uninstallingSkill === normalizeSkillId(skill) ? 'Removing...' : 'Uninstall'">
+                                        </button>
+                                    </div>
+
+                                    <template x-if="!skill.removable">
+                                        <p class="skill-note">This skill comes from a configured directory or runtime registration and is not removable from the marketplace UI.</p>
+                                    </template>
                                 </div>
+                            </template>
+                        </div>
+                    </section>
+
+                    <section class="skills-panel">
+                        <div class="skills-panel-header">
+                            <div>
+                                <h3>Available Skills</h3>
+                                <p>Search bundled recommendations and ClawHub results, then run a security review before installation.</p>
+                            </div>
+                            <div class="skill-badges">
+                                <span class="pill source-bundled">Bundled</span>
+                                <span class="pill source-remote">ClawHub</span>
+                            </div>
+                        </div>
+
+                        <div class="skill-filter-row">
+                            <input type="text" x-model="skillSearchQuery" @keyup.enter="loadAvailableSkills()" placeholder="Search skills, for example weather, summarize, browser">
+                            <select x-model="skillSourceFilter">
+                                <option value="all">All sources</option>
+                                <option value="bundled">Bundled only</option>
+                                <option value="remote">ClawHub only</option>
+                            </select>
+                            <button class="ghost-btn" @click="loadAvailableSkills()" :disabled="availableSkillsLoading" x-text="availableSkillsLoading ? 'Searching...' : 'Search'"></button>
+                        </div>
+
+                        <template x-if="availableSkillsLoadError">
+                            <div class="notice">
+                                <div x-text="availableSkillsLoadError"></div>
+                                <div class="skill-note" x-text="'Current registry: ' + (config.clawhub_base_url || 'https://clawhub.ai')"></div>
                             </div>
                         </template>
-                    </div>
+
+                        <template x-if="availableSkillsRemoteError && !availableSkillsLoadError">
+                            <div class="notice">
+                                <div>ClawHub search is currently unavailable. Bundled catalog results can still appear if you switch sources.</div>
+                                <div class="skill-note" x-text="availableSkillsRemoteError"></div>
+                            </div>
+                        </template>
+
+                        <template x-if="availableSkillsLoading">
+                            <div class="empty-state">Loading installable skills...</div>
+                        </template>
+
+                        <div class="skills-card-grid" x-show="!availableSkillsLoading">
+                            <template x-if="filteredAvailableSkills().length === 0">
+                                <div class="empty-state" x-text="availableSkillsEmptyStateMessage()"></div>
+                            </template>
+
+                            <template x-for="skill in filteredAvailableSkills()" :key="skill.id">
+                                <div class="skill-card">
+                                    <div class="skill-card-head">
+                                        <div>
+                                            <h4 class="skill-card-title" x-text="skill.name"></h4>
+                                            <div class="skill-version" x-text="'v' + (skill.version || '1.0.0')"></div>
+                                        </div>
+                                        <div class="skill-badges">
+                                            <span class="pill" :class="skillSourcePillClass(skill.source || 'remote')" x-text="skill.source_label || formatAvailableSource(skill)"></span>
+                                            <template x-if="skill.category">
+                                                <span class="pill state-installed" x-text="skill.category"></span>
+                                            </template>
+                                        </div>
+                                    </div>
+
+                                    <p class="skill-description" x-text="skill.description || 'No description provided.'"></p>
+
+                                    <div class="skill-meta">
+                                        <span x-text="'Author: ' + (skill.author || 'Unknown')"></span>
+                                        <span x-text="'Source: ' + formatAvailableSource(skill)"></span>
+                                        <template x-if="skill.updated_at">
+                                            <span x-text="'Updated: ' + formatTimestamp(skill.updated_at)"></span>
+                                        </template>
+                                    </div>
+
+                                    <template x-if="skill.tags && skill.tags.length">
+                                        <div class="skill-tag-list">
+                                            <template x-for="tag in skill.tags.slice(0, 6)" :key="tag">
+                                                <span class="skill-tag" x-text="tag"></span>
+                                            </template>
+                                        </div>
+                                    </template>
+
+                                    <p class="skill-note">Install review covers secret prompts, command execution, browser control, file access, network access, schedules, and common malicious plugin traits.</p>
+
+                                    <div class="skill-actions">
+                                        <button class="secondary-btn" x-show="skill.homepage" @click="openExternalLink(skill.homepage)">Open Page</button>
+                                        <button
+                                            class="install"
+                                            @click="openInstallReview(skill)"
+                                            :disabled="installing === skill.id || reviewLoading === skill.id"
+                                            x-text="reviewLoading === skill.id ? 'Scanning...' : (installing === skill.id ? 'Installing...' : 'Review & Install')">
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </section>
                 </div>
             </div>
         </div>
@@ -571,8 +762,15 @@
                 input: '',
                 loading: false,
                 skills: [],
+                skillsLoading: false,
+                installedSkillQuery: '',
                 availableSkills: [],
+                availableSkillsLoading: false,
                 availableSkillsLoadError: '',
+                availableSkillsRemoteError: '',
+                availableSkillsEmptyMessage: '',
+                skillSearchQuery: '',
+                skillSourceFilter: 'all',
                 tasks: [],
                 approvals: [],
                 config: {},
@@ -582,6 +780,7 @@
                 copyStatus: '',
                 approvingStepKey: '',
                 installing: '',
+                uninstallingSkill: '',
                 reviewLoading: '',
                 installReviewOpen: false,
                 installReview: null,
@@ -603,23 +802,288 @@
                 
                 async init() {
                     await this.loadConfig();
-                    await this.loadSkills();
+                    await this.refreshSkillCatalog();
                     await this.loadTasks();
                     await this.loadApprovals();
-                    await this.loadAvailableSkills();
                     await this.loadChannels();
                     
                     setInterval(() => {
-                        this.loadSkills();
+                        if (this.activeTab === 'skills') {
+                            this.refreshSkillCatalog({ showLoading: false });
+                        }
                         this.loadTasks();
                         this.loadApprovals();
-                        this.loadAvailableSkills();
                         this.loadChannels();
                     }, 5000);
                 },
 
                 enabledChannelCount() {
                     return this.channels.filter(channel => channel.enabled).length;
+                },
+
+                refreshSkillCatalog(options = {}) {
+                    return Promise.all([
+                        this.loadSkills(options),
+                        this.loadAvailableSkills(options)
+                    ]);
+                },
+
+                normalizeSkillId(skillOrId) {
+                    if (!skillOrId) {
+                        return '';
+                    }
+
+                    if (typeof skillOrId === 'string') {
+                        return skillOrId.trim().toLowerCase();
+                    }
+
+                    const candidates = [skillOrId.id, skillOrId.skill_key, skillOrId.name];
+                    for (const candidate of candidates) {
+                        if (candidate && String(candidate).trim()) {
+                            return String(candidate).trim().toLowerCase();
+                        }
+                    }
+                    return '';
+                },
+
+                sortInstalledSkills(skills) {
+                    return [...(skills || [])].sort((left, right) => {
+                        if (Boolean(left.removable) !== Boolean(right.removable)) {
+                            return left.removable ? -1 : 1;
+                        }
+                        return String(left.name || '').localeCompare(String(right.name || ''));
+                    });
+                },
+
+                sortAvailableSkills(skills) {
+                    const sourceOrder = { bundled: 0, remote: 1 };
+                    return [...(skills || [])].sort((left, right) => {
+                        const leftSource = String(left.source || 'remote');
+                        const rightSource = String(right.source || 'remote');
+                        const sourceDiff = (sourceOrder[leftSource] ?? 9) - (sourceOrder[rightSource] ?? 9);
+                        if (sourceDiff !== 0) {
+                            return sourceDiff;
+                        }
+                        return String(left.name || left.id || '').localeCompare(String(right.name || right.id || ''));
+                    });
+                },
+
+                filteredInstalledSkills() {
+                    const query = this.installedSkillQuery.trim().toLowerCase();
+                    const sorted = this.sortInstalledSkills(this.skills);
+                    if (!query) {
+                        return sorted;
+                    }
+
+                    return sorted.filter(skill => {
+                        const haystack = [
+                            skill.name,
+                            skill.skill_key,
+                            skill.description,
+                            skill.type,
+                            skill.source_scope,
+                            ...(skill.aliases || [])
+                        ]
+                            .filter(Boolean)
+                            .join(' ')
+                            .toLowerCase();
+                        return haystack.includes(query);
+                    });
+                },
+
+                filteredAvailableSkills() {
+                    const query = this.skillSearchQuery.trim().toLowerCase();
+                    const sourceFilter = this.skillSourceFilter;
+                    return this.sortAvailableSkills(this.availableSkills).filter(skill => {
+                        if (sourceFilter !== 'all' && String(skill.source || 'remote') !== sourceFilter) {
+                            return false;
+                        }
+
+                        if (!query) {
+                            return true;
+                        }
+
+                        const haystack = [
+                            skill.id,
+                            skill.name,
+                            skill.description,
+                            skill.author,
+                            skill.category,
+                            ...(skill.tags || [])
+                        ]
+                            .filter(Boolean)
+                            .join(' ')
+                            .toLowerCase();
+                        return haystack.includes(query);
+                    });
+                },
+
+                availableSkillMatchesQuery(skill, query) {
+                    const normalizedQuery = String(query || '').trim().toLowerCase();
+                    if (!normalizedQuery) {
+                        return true;
+                    }
+
+                    const haystack = [
+                        skill.id,
+                        skill.name,
+                        skill.description,
+                        skill.author,
+                        skill.category,
+                        ...(skill.tags || [])
+                    ]
+                        .filter(Boolean)
+                        .join(' ')
+                        .toLowerCase();
+                    return haystack.includes(normalizedQuery);
+                },
+
+                availableSkillsEmptyStateMessage() {
+                    if (this.filteredAvailableSkills().length > 0) {
+                        return '';
+                    }
+
+                    const query = this.skillSearchQuery.trim().toLowerCase();
+                    const sourceFilter = this.skillSourceFilter;
+                    const queryMatches = this.availableSkills.filter(skill => this.availableSkillMatchesQuery(skill, query));
+                    const bundledMatches = queryMatches.filter(skill => String(skill.source || 'remote') === 'bundled');
+                    const remoteMatches = queryMatches.filter(skill => String(skill.source || 'remote') === 'remote');
+
+                    if (sourceFilter === 'remote' && this.availableSkillsRemoteError) {
+                        if (bundledMatches.length > 0) {
+                            return query
+                                ? 'ClawHub is currently unavailable. This search matched bundled skills, so switch to All sources or Bundled only to see them.'
+                                : 'ClawHub is currently unavailable. Switch to All sources or Bundled only to browse the bundled catalog.';
+                        }
+                        return 'ClawHub is currently unavailable. Check network or DNS for the registry, or switch to Bundled only.';
+                    }
+
+                    if (sourceFilter === 'remote' && bundledMatches.length > 0) {
+                        return query
+                            ? 'This search matched bundled skills, but the current filter is ClawHub only. Switch sources to see them.'
+                            : 'Bundled skills are available, but the current filter is ClawHub only.';
+                    }
+
+                    if (sourceFilter === 'bundled' && remoteMatches.length > 0) {
+                        return query
+                            ? 'This search matched ClawHub skills, but the current filter is Bundled only. Switch sources to see them.'
+                            : 'ClawHub skills are available, but the current filter is Bundled only.';
+                    }
+
+                    if (this.availableSkills.length === 0) {
+                        return query
+                            ? 'No skills matched this search. Try a broader keyword or switch sources.'
+                            : 'No installable skills are currently available.';
+                    }
+
+                    return this.availableSkillsEmptyMessage || 'No skills match the current search or source filter.';
+                },
+
+                skillSourcePillClass(source) {
+                    const normalized = String(source || 'remote').toLowerCase();
+                    if (normalized === 'bundled') {
+                        return 'source-bundled';
+                    }
+                    if (normalized === 'managed') {
+                        return 'source-managed';
+                    }
+                    if (normalized === 'configured') {
+                        return 'source-configured';
+                    }
+                    if (normalized === 'runtime') {
+                        return 'source-runtime';
+                    }
+                    if (normalized === 'remote') {
+                        return 'source-remote';
+                    }
+                    return 'source-unknown';
+                },
+
+                skillStatePillClass(state) {
+                    const normalized = String(state || 'unknown').toLowerCase();
+                    if (normalized === 'enabled') {
+                        return 'state-enabled';
+                    }
+                    if (normalized === 'running') {
+                        return 'state-running';
+                    }
+                    if (normalized === 'stopped') {
+                        return 'state-stopped';
+                    }
+                    if (normalized === 'installed') {
+                        return 'state-installed';
+                    }
+                    return 'state-unknown';
+                },
+
+                availabilityPillClass(status) {
+                    const normalized = String(status || 'unknown').toLowerCase();
+                    if (normalized === 'available') {
+                        return 'state-available';
+                    }
+                    if (normalized === 'blocked') {
+                        return 'state-blocked';
+                    }
+                    return 'state-unknown';
+                },
+
+                availabilityLabel(skill) {
+                    const normalized = String(skill && skill.availability ? skill.availability : 'available').toLowerCase();
+                    if (normalized === 'blocked') {
+                        return 'blocked';
+                    }
+                    return normalized || 'available';
+                },
+
+                formatInstalledSource(skill) {
+                    const labels = {
+                        managed: 'User installed',
+                        configured: 'Configured dir',
+                        runtime: 'Runtime',
+                        unknown: 'Unknown'
+                    };
+                    const scope = String((skill && skill.source_scope) || 'runtime').toLowerCase();
+                    return labels[scope] || 'Unknown';
+                },
+
+                formatAvailableSource(skill) {
+                    if (!skill) {
+                        return 'Unknown';
+                    }
+                    return skill.source_label || (String(skill.source || 'remote').toLowerCase() === 'bundled' ? 'Bundled' : 'ClawHub');
+                },
+
+                formatProtectionMode(mode) {
+                    const labels = {
+                        disable_high_risk: 'Guarded',
+                        isolate: 'Isolated',
+                        off: 'Open'
+                    };
+                    return labels[String(mode || '').toLowerCase()] || 'Guarded';
+                },
+
+                formatTimestamp(value) {
+                    if (!value && value !== 0) {
+                        return 'Unknown';
+                    }
+
+                    if (typeof value === 'number') {
+                        const millis = value < 1000000000000 ? value * 1000 : value;
+                        return new Date(millis).toLocaleDateString();
+                    }
+
+                    const parsed = new Date(value);
+                    if (Number.isNaN(parsed.getTime())) {
+                        return String(value);
+                    }
+                    return parsed.toLocaleDateString();
+                },
+
+                openExternalLink(url) {
+                    if (!url) {
+                        return;
+                    }
+                    window.open(url, '_blank', 'noopener');
                 },
 
                 absoluteUrl(path) {
@@ -803,12 +1267,20 @@
                     }
                 },
                 
-                async loadSkills() {
+                async loadSkills(options = {}) {
+                    const showLoading = options.showLoading !== false;
+                    if (showLoading) {
+                        this.skillsLoading = true;
+                    }
                     try {
                         const response = await axios.get('/api/skills');
-                        this.skills = response.data;
+                        this.skills = this.sortInstalledSkills(Array.isArray(response.data) ? response.data : []);
                     } catch (e) {
                         console.error('Failed to load skills:', e);
+                    } finally {
+                        if (showLoading) {
+                            this.skillsLoading = false;
+                        }
                     }
                 },
                 
@@ -862,26 +1334,51 @@
                     }
                 },
                 
-                async loadAvailableSkills() {
+                async loadAvailableSkills(options = {}) {
+                    const showLoading = options.showLoading !== false;
+                    if (showLoading) {
+                        this.availableSkillsLoading = true;
+                    }
                     try {
-                        const response = await axios.get('/api/clawhub/search');
+                        const query = this.skillSearchQuery.trim();
+                        const response = await axios.get('/api/clawhub/search', {
+                            params: query ? { query: query } : {}
+                        });
                         const payload = response.data || {};
                         const skills = Array.isArray(payload.skills) ? payload.skills : [];
 
-                        this.availableSkills = skills.filter(skill => {
-                            const skillId = skill.id || skill.name || '';
-                            return !this.isSkillInstalled(skillId);
-                        });
+                        this.availableSkills = this.sortAvailableSkills(skills.filter(skill => !this.isSkillInstalled(skill)));
                         this.availableSkillsLoadError = payload.error || '';
+                        this.availableSkillsRemoteError = payload.remote_error || '';
+                        this.availableSkillsEmptyMessage = '';
 
                         if (this.availableSkills.length === 0 && !this.availableSkillsLoadError) {
-                            this.availableSkillsLoadError = '当前没有可安装的第三方 Skill，或者 ClawHub 仓库暂时不可用。';
+                            this.availableSkillsEmptyMessage = query
+                                ? 'No skills matched this search. Try a broader keyword or switch sources.'
+                                : 'No installable skills are currently available.';
                         }
                     } catch (e) {
                         console.error('Failed to load available skills:', e);
-                        this.availableSkills = [];
-                        this.availableSkillsLoadError = '无法加载可安装 Skill。请检查 ClawHub 服务是否可用，然后刷新重试。';
+                        this.availableSkillsLoadError = 'Unable to load installable skills. Check the bundled catalog and ClawHub registry configuration, then try again.';
+                        this.availableSkillsRemoteError = '';
+                    } finally {
+                        if (showLoading) {
+                            this.availableSkillsLoading = false;
+                        }
                     }
+                },
+
+                isSkillInstalled(skillOrId) {
+                    const normalizedId = this.normalizeSkillId(skillOrId);
+                    if (!normalizedId) {
+                        return false;
+                    }
+
+                    return this.skills.some(skill => {
+                        return [skill.name, skill.skill_key]
+                            .filter(Boolean)
+                            .some(candidate => this.normalizeSkillId(candidate) === normalizedId);
+                    });
                 },
 
                 async openInstallReview(skill) {
@@ -993,10 +1490,18 @@
                             }
                         }
 
-                        if (data.status === 'verifying' && responseText === 'Waiting for approval') {
-                            responseText = 'Waiting for approval.\nOpen the Approvals tab to resume this raw shell task.';
+                        if (data.status === 'verifying') {
+                            await this.loadApprovals();
+                            if (responseText === 'Waiting for approval') {
+                                const approval = this.approvals.find(item => item.task_id === data.task_id);
+                                const pendingAction = approval && approval.step
+                                    ? (approval.step.command_preview || approval.step.tool_name || approval.step.name || 'this high-risk action')
+                                    : 'this high-risk action';
+                                responseText = 'Waiting for approval.\nOpen the Approvals tab to continue: ' + pendingAction;
+                            }
+                            this.activeTab = 'approvals';
                         }
-                        
+
                         this.messages.push({
                             id: Date.now() + 1,
                             type: data.status === 'failed' ? 'error' : 'system',
@@ -1004,10 +1509,6 @@
                         });
 
                         await this.loadTasks();
-                        if (data.status === 'verifying') {
-                            await this.loadApprovals();
-                            this.activeTab = 'approvals';
-                        }
                     } catch (e) {
                         this.messages.push({
                             id: Date.now() + 1,
@@ -1040,7 +1541,7 @@
                         );
 
                         if (response.data.installed) {
-                            await this.loadSkills();
+                            await this.refreshSkillCatalog();
                             this.closeInstallReview();
                             alert('Skill ' + skillId + ' installed successfully!');
                         } else if (response.data.requires_review && response.data.scan) {
@@ -1058,11 +1559,34 @@
                 },
                 
                 async uninstallSkill(skillName) {
-                    alert('Uninstalling skill ' + skillName + '...');
-                    setTimeout(() => {
-                        this.loadSkills();
-                        alert('Skill ' + skillName + ' uninstalled successfully!');
-                    }, 1000);
+                    const skill = typeof skillName === 'object' ? skillName : { name: skillName };
+                    const skillId = skill.skill_key || skill.name;
+                    const normalizedId = this.normalizeSkillId(skill);
+
+                    if (!skill.removable) {
+                        alert('This skill is not removable from the marketplace UI.');
+                        return;
+                    }
+
+                    if (!window.confirm('Remove installed skill "' + (skill.name || skillId) + '"?')) {
+                        return;
+                    }
+
+                    this.uninstallingSkill = normalizedId;
+
+                    try {
+                        const response = await axios.post('/api/clawhub/remove?skill_id=' + encodeURIComponent(skillId));
+                        if (response.data && response.data.removed) {
+                            await this.refreshSkillCatalog();
+                            alert('Skill ' + (skill.name || skillId) + ' removed successfully.');
+                        } else {
+                            alert('Failed to remove skill: ' + ((response.data && response.data.error) || 'Unknown error'));
+                        }
+                    } catch (e) {
+                        alert('Failed to remove skill: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message));
+                    } finally {
+                        this.uninstallingSkill = '';
+                    }
                 }
             };
         }

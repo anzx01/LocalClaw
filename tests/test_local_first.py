@@ -5,6 +5,7 @@ from localclaw.llm.ollama import OllamaClient
 from localclaw.llm.openai_compatible import OpenAICompatibleProvider
 from localclaw.llm.provider import LLMConfig, LLMProviderType, create_llm_provider
 from localclaw.skills.loader import SkillLoader, load_skills_from_settings
+from localclaw.skills.registry.clawhub import LocalSkillRegistry
 from localclaw.skills.registry import SkillRegistry
 
 
@@ -18,6 +19,7 @@ def test_settings_default_to_local_first():
     assert settings.model_provider == ModelProvider.OLLAMA
     assert settings.uses_openai_compatible_api is False
     assert not settings.get_model_base_url().endswith("/v1")
+    assert settings.extra_skill_dirs == []
     assert settings.skill_install_protection_mode == SkillInstallProtectionMode.DISABLE_HIGH_RISK
     assert settings.skill_isolation_require_approval is True
 
@@ -120,90 +122,142 @@ This one requires a missing environment variable.
     assert info["state"] == "stopped"
 
 
-def test_settings_skill_search_paths_follow_openclaw_precedence(tmp_path):
-    """Extra dirs should load first, workspace last, without duplicate real paths."""
+def test_settings_skill_search_paths_use_configured_dirs_then_managed(tmp_path):
+    """Configured dirs should load first, managed installs last, without duplicate real paths."""
     extra_dir = tmp_path / "extra"
-    bundled_dir = tmp_path / "bundled"
+    second_extra_dir = tmp_path / "second-extra"
     managed_dir = tmp_path / "managed"
-    workspace_dir = tmp_path / "workspace"
-    for directory in (extra_dir, bundled_dir, managed_dir, workspace_dir):
+    for directory in (extra_dir, second_extra_dir, managed_dir):
         directory.mkdir()
 
     settings = Settings(
         _env_file=None,
-        skills_dir=bundled_dir,
         managed_skills_dir=managed_dir,
-        workspace_skills_dir=workspace_dir,
-        extra_skill_dirs=[extra_dir, bundled_dir],
+        extra_skill_dirs=[extra_dir, second_extra_dir, managed_dir],
     )
 
     search_paths = settings.get_skill_search_paths()
 
-    assert search_paths == [extra_dir, bundled_dir, managed_dir, workspace_dir]
+    assert search_paths == [extra_dir, second_extra_dir, managed_dir]
+
+
+def test_default_skill_search_paths_include_only_managed_dir(tmp_path):
+    """Without configured dirs, only the managed install directory should be loaded."""
+    managed_dir = tmp_path / "managed"
+    managed_dir.mkdir(parents=True)
+
+    settings = Settings(
+        _env_file=None,
+        managed_skills_dir=managed_dir,
+    )
+
+    search_paths = settings.get_skill_search_paths()
+
+    assert search_paths == [managed_dir]
+
+
+def test_load_skills_from_settings_uses_only_configured_and_managed_dirs(tmp_path):
+    """Loading from settings should only pull skills from configured dirs and the managed install dir."""
+    configured_dir = tmp_path / "configured"
+    managed_dir = tmp_path / "managed"
+    for directory in (configured_dir, managed_dir):
+        directory.mkdir()
+
+    (configured_dir / "configured.json").write_text(
+        '{"name":"configured","description":"configured","actions":[{"type":"transform","template":"configured"}]}',
+        encoding="utf-8",
+    )
+    (managed_dir / "managed.json").write_text(
+        '{"name":"managed","description":"managed","actions":[{"type":"transform","template":"managed"}]}',
+        encoding="utf-8",
+    )
+
+    registry = SkillRegistry()
+    settings = Settings(
+        _env_file=None,
+        managed_skills_dir=managed_dir,
+        extra_skill_dirs=[configured_dir],
+    )
+
+    count = load_skills_from_settings(settings, registry)
+
+    assert count == 2
+    assert set(registry.list_skills()) == {"configured", "managed"}
 
 
 def test_skill_loader_supports_openclaw_nested_metadata_and_precedence(tmp_path):
-    """Nested metadata.openclaw.requires should be honored and higher precedence should win."""
+    """Nested metadata.openclaw.requires should be honored and managed installs should win precedence."""
     extra_dir = tmp_path / "extra"
-    bundled_dir = tmp_path / "bundled"
     managed_dir = tmp_path / "managed"
-    workspace_dir = tmp_path / "workspace"
-    for directory in (extra_dir, bundled_dir, managed_dir, workspace_dir):
+    for directory in (extra_dir, managed_dir):
         directory.mkdir()
 
     (extra_dir / "shared.json").write_text(
         '{"name":"shared","description":"extra","actions":[{"type":"transform","template":"extra"}]}',
         encoding="utf-8",
     )
-    (bundled_dir / "shared.json").write_text(
-        '{"name":"shared","description":"bundled","actions":[{"type":"transform","template":"bundled"}]}',
-        encoding="utf-8",
-    )
-    (managed_dir / "shared.json").write_text(
-        '{"name":"shared","description":"managed","actions":[{"type":"transform","template":"managed"}]}',
-        encoding="utf-8",
-    )
 
-    nested_dir = workspace_dir / "nested_skill"
+    nested_dir = managed_dir / "nested_skill"
     nested_dir.mkdir()
     (nested_dir / "SKILL.md").write_text(
         """---
 name: shared
-description: workspace
+description: managed
 metadata:
   openclaw:
     requires:
       anyBins:
         - definitely-missing-binary
         - python
+    skillKey: repo.shared
+    aliases:
+      - shared-tool
     primaryEnv: TEST_API_KEY
     homepage: https://example.com
 actions:
   - type: transform
-    template: "workspace"
+    template: "managed"
 ---
 # Shared Skill
 
-Workspace wins.
+Managed install wins.
 """,
         encoding="utf-8",
     )
 
     settings = Settings(
         _env_file=None,
-        skills_dir=bundled_dir,
         managed_skills_dir=managed_dir,
-        workspace_skills_dir=workspace_dir,
         extra_skill_dirs=[extra_dir],
     )
     registry = SkillRegistry()
 
     count = load_skills_from_settings(settings, registry)
 
-    assert count == 4
+    assert count == 2
     info = registry.get_skill_info("shared")
     assert info is not None
-    assert info["description"] == "workspace"
+    assert info["description"] == "managed"
     assert info["availability"] == "available"
     assert info["metadata"]["primary_env"] == "TEST_API_KEY"
     assert info["metadata"]["homepage"] == "https://example.com"
+    assert info["skill_key"] == "repo.shared"
+    assert "shared-tool" in info["aliases"]
+
+
+def test_local_skill_registry_uses_managed_skill_dir(monkeypatch, tmp_path):
+    """Marketplace installs should go to the managed user skill directory, not the bundled repo tree."""
+
+    from localclaw.skills.registry import clawhub as clawhub_registry
+
+    managed_dir = tmp_path / "managed"
+    settings = Settings(
+        _env_file=None,
+        managed_skills_dir=managed_dir,
+    )
+
+    monkeypatch.setattr(clawhub_registry, "get_settings", lambda: settings)
+
+    registry = LocalSkillRegistry()
+
+    assert registry.skills_dir == managed_dir

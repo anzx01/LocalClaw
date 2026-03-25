@@ -5,6 +5,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -17,11 +18,13 @@ from localclaw.core.engine import ExecutionEngine, get_engine
 from localclaw.core.models import ExecutionResult, Message, Step, Task, TaskState
 from localclaw.llm.provider import initialize_llm_provider
 from localclaw.security.audit import configure_audit_logger
-from localclaw.skills.loader import load_skills_from_settings, register_builtin_skills
+from localclaw.skills.loader import load_skills_from_settings
 from localclaw.tools.base import Tool, get_tool_registry
 from localclaw.tools.file_tool import register_file_tools
 from localclaw.tools.http_tool import register_http_tools
+from localclaw.tools.local_model_tool import register_local_model_tools
 from localclaw.tools.shell_tool import register_shell_tools
+from localclaw.tools.browser_cdp_tool import register_browser_cdp_tools
 from localclaw.tools.clawhub_tool import register_clawhub_tools
 from localclaw.channels.wechat_personal import (
     PersonalWeChatEnvelope,
@@ -40,6 +43,7 @@ from localclaw.channels.whatsapp import (
     normalize_whatsapp_webhook_payload,
     send_whatsapp_text_reply,
 )
+from localclaw.channels.result_formatter import format_task_for_chat
 
 
 logger = logging.getLogger(__name__)
@@ -99,8 +103,14 @@ class SkillResponse(BaseModel):
     description: str
     type: str
     state: str
+    skill_key: Optional[str] = None
+    aliases: List[str] = []
     availability: str = "available"
     availability_reason: Optional[str] = None
+    source_path: Optional[str] = None
+    source_format: Optional[str] = None
+    source_scope: str = "runtime"
+    removable: bool = False
 
 
 class SkillSecurityReviewResponse(BaseModel):
@@ -241,7 +251,7 @@ def _serialize_step(step: Optional[Step]) -> Optional[Dict[str, Any]]:
     risk_level = "low"
     if step.tool_name == "shell":
         risk_level = "critical"
-    elif step.tool_name in {"http_post"}:
+    elif step.tool_name in {"http_post", "browser_cdp"}:
         risk_level = "high"
 
     return {
@@ -380,10 +390,10 @@ def initialize_system() -> ExecutionEngine:
     tool_registry.register(ListSkillsTool())
     register_file_tools()
     register_http_tools()
+    register_local_model_tools()
     register_shell_tools()
+    register_browser_cdp_tools()
     register_clawhub_tools()
-    
-    register_builtin_skills()
     
     load_skills_from_settings(settings)
     
@@ -498,7 +508,7 @@ def create_app() -> FastAPI:
         return MessageResponse(
             task_id=task.id,
             status=task.state.value,
-            message=task.result.message if task.result else "",
+            message=format_task_for_chat(task),
             data=task.result.data if task.result else {},
             error=task.error,
         )
@@ -560,10 +570,30 @@ def create_app() -> FastAPI:
     async def list_skills():
         """List all registered skills."""
         from localclaw.skills.registry import get_skill_registry
-        
+
         registry = get_skill_registry()
         skills = registry.get_all_info()
-        
+        settings = get_settings()
+        managed_dir = settings.managed_skills_dir.resolve()
+        configured_dirs = [path.resolve() for path in settings.extra_skill_dirs]
+
+        def _classify_skill_source(path_value: Optional[str]) -> tuple[str, bool]:
+            normalized_path = str(path_value or "").strip()
+            if not normalized_path:
+                return "runtime", False
+
+            try:
+                resolved = Path(normalized_path).resolve()
+            except Exception:
+                return "unknown", False
+
+            parents = {resolved, *resolved.parents}
+            if managed_dir in parents:
+                return "managed", True
+            if any(configured_dir in parents for configured_dir in configured_dirs):
+                return "configured", False
+            return "unknown", False
+
         return [
             SkillResponse(
                 name=s["name"],
@@ -571,8 +601,14 @@ def create_app() -> FastAPI:
                 description=s["description"],
                 type=s["type"],
                 state=s["state"],
+                skill_key=s.get("skill_key"),
+                aliases=s.get("aliases", []),
                 availability=s.get("availability", "available"),
                 availability_reason=s.get("availability_details", {}).get("reason"),
+                source_path=s.get("source_path"),
+                source_format=s.get("source_format"),
+                source_scope=_classify_skill_source(s.get("source_path"))[0],
+                removable=_classify_skill_source(s.get("source_path"))[1],
             )
             for s in skills
         ]
@@ -590,7 +626,10 @@ def create_app() -> FastAPI:
         registry = get_tool_registry()
         result = await registry.execute("clawhub_search", query=query)
         if result.status == "success":
-            return {"skills": result.data.get("skills", [])}
+            return {
+                "skills": result.data.get("skills", []),
+                "remote_error": result.data.get("remote_error"),
+            }
         return {"skills": [], "error": result.message}
 
     @app.get("/api/clawhub/scan", response_model=SkillSecurityReviewResponse)
@@ -639,9 +678,11 @@ def create_app() -> FastAPI:
             "model_provider": settings.model_provider.value,
             "model_name": settings.model_name,
             "model_base_url": settings.get_model_base_url(),
-            "skills_dir": str(settings.skills_dir),
+            "clawhub_base_url": settings.get_clawhub_base_url(),
+            "clawhub_has_token": bool(settings.get_clawhub_token()),
+            "bundled_skill_catalog_dir": str(settings.bundled_skill_catalog_dir),
             "managed_skills_dir": str(settings.managed_skills_dir),
-            "workspace_skills_dir": str(settings.workspace_skills_dir),
+            "configured_skill_dirs": [str(path) for path in settings.extra_skill_dirs],
             "data_dir": str(settings.data_dir),
             "wechat_personal_enabled": settings.wechat_personal_enabled,
             "wechat_personal_reply_via_proxy": settings.wechat_personal_reply_via_proxy,
@@ -1041,7 +1082,7 @@ def create_app() -> FastAPI:
                         "type": "result",
                         "task_id": task.id,
                         "status": task.state.value,
-                        "message": task.result.message if task.result else "",
+                        "message": format_task_for_chat(task),
                         "data": task.result.data if task.result else {},
                     })
         except WebSocketDisconnect:
@@ -1199,9 +1240,14 @@ def get_web_ui_html() -> str:
     </div>
     <script>
         const _FALLBACK_SKILLS = [
-            { id: 'weather', name: 'Weather', version: '2.0.0', description: 'Get weather information from wttr.in', author: 'LocalClaw Team' },
-            { id: 'web_search', name: 'Web Search', version: '1.0.0', description: 'Search the web using DuckDuckGo', author: 'LocalClaw Team' },
-            { id: 'fs', name: 'File System', version: '2.0.0', description: 'File system operations', author: 'LocalClaw Team' }
+            { id: 'skill-vetter', name: 'Skill-Vetter', version: '1.0.0', description: 'Review a skill before installation', author: 'LocalClaw Team' },
+            { id: 'agent-browser', name: 'Agent Browser', version: '1.0.0', description: 'Fetch a page or endpoint over HTTP', author: 'LocalClaw Team' },
+            { id: 'tavily-web-search', name: 'Tavily Web Search', version: '1.0.0', description: 'Search with Tavily when configured', author: 'LocalClaw Team' },
+            { id: 'find-skills', name: 'Find-Skills', version: '1.0.0', description: 'Search bundled skills and ClawHub skills', author: 'LocalClaw Team' },
+            { id: 'weather', name: 'Weather', version: '1.0.0', description: 'Get current weather and forecasts', author: 'LocalClaw Team' },
+            { id: 'self-improving-agent', name: 'Self-Improving-Agent', version: '1.0.0', description: 'Generate a concrete improvement plan', author: 'LocalClaw Team' },
+            { id: 'summarize', name: 'Summarize', version: '1.0.0', description: 'Summarize text with the local model', author: 'LocalClaw Team' },
+            { id: 'humanizer', name: 'Humanizer', version: '1.0.0', description: 'Rewrite text to sound more natural', author: 'LocalClaw Team' }
         ];
 
         window.app = function() {

@@ -1,5 +1,6 @@
 """Global configuration for LocalClaw."""
 
+import os
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -54,18 +55,17 @@ class Settings(BaseSettings):
         description="Route all user input through the local LLM understanding chain without automatic legacy parser fallback",
     )
 
-    skills_dir: Path = Field(default=PROJECT_ROOT / "skills", description="Bundled skill definitions")
+    bundled_skill_catalog_dir: Path = Field(
+        default=PROJECT_ROOT / "bundled_skills",
+        description="Bundled installable skill catalog shown in the marketplace UI",
+    )
     managed_skills_dir: Path = Field(
         default=Path.home() / ".localclaw" / "skills",
         description="User-managed local skill directory",
     )
-    workspace_skills_dir: Path = Field(
-        default=Path.cwd() / "skills",
-        description="Workspace-local skill directory",
-    )
     extra_skill_dirs: list[Path] = Field(
         default_factory=list,
-        description="Additional skill directories loaded with lowest precedence",
+        description="Explicitly configured additional skill directories loaded with lower precedence than managed skills",
     )
     data_dir: Path = Field(default=Path("./data"), description="Directory for data storage")
 
@@ -85,7 +85,7 @@ class Settings(BaseSettings):
         default=ModelProvider.OLLAMA,
         description="Preferred LLM provider for local inference",
     )
-    model_name: str = Field(default="qwen2.5-coder:7b", description="Model name to use")
+    model_name: str = Field(default="qwen3:4b", description="Model name to use")
     model_base_url: Optional[str] = Field(
         default=None,
         description="Base URL for the configured model provider",
@@ -169,23 +169,26 @@ class Settings(BaseSettings):
         default=True,
         description="Whether isolated skills should still block critical tools such as raw shell execution",
     )
+    clawhub_base_url: Optional[str] = Field(
+        default=None,
+        description="Optional override for the ClawHub registry base URL",
+    )
+    clawhub_token: Optional[str] = Field(
+        default=None,
+        description="Optional bearer token for private ClawHub registries",
+    )
 
     def ensure_directories(self) -> None:
         """Ensure all required directories exist."""
-        self.skills_dir.mkdir(parents=True, exist_ok=True)
+        self.bundled_skill_catalog_dir.mkdir(parents=True, exist_ok=True)
         self.managed_skills_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.audit_log.parent.mkdir(parents=True, exist_ok=True)
         self.memory_db.parent.mkdir(parents=True, exist_ok=True)
 
     def get_skill_search_paths(self) -> list[Path]:
-        """Return skill directories in precedence order from low to high."""
-        ordered_paths = [
-            *self.extra_skill_dirs,
-            self.skills_dir,
-            self.managed_skills_dir,
-            self.workspace_skills_dir,
-        ]
+        """Return active skill directories in precedence order from low to high."""
+        ordered_paths = [*self.extra_skill_dirs, self.managed_skills_dir]
 
         unique_paths: list[Path] = []
         seen: set[Path] = set()
@@ -229,6 +232,17 @@ class Settings(BaseSettings):
     def get_model_api_key(self) -> Optional[str]:
         """Resolve the API key for the active model provider."""
         return self.openai_api_key
+
+    def get_clawhub_base_url(self) -> str:
+        """Resolve the active ClawHub registry base URL."""
+        base_url = (self.clawhub_base_url or os.getenv("CLAWHUB_URL") or "https://clawhub.ai").strip()
+        normalized = base_url.rstrip("/")
+        return normalized or "https://clawhub.ai"
+
+    def get_clawhub_token(self) -> Optional[str]:
+        """Resolve the active ClawHub bearer token, if configured."""
+        token = (self.clawhub_token or os.getenv("CLAWHUB_TOKEN") or "").strip()
+        return token or None
 
 
 _settings: Optional[Settings] = None

@@ -11,7 +11,10 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from jinja2 import Template
 
 from localclaw.config.settings import Settings, get_settings
+from localclaw.core.interpolation import resolve_interpolated_value
 from localclaw.core.models import (
+    AgentDecision,
+    AgentDecisionMode,
     Context,
     ErrorType,
     ExecutionResult,
@@ -24,6 +27,7 @@ from localclaw.core.models import (
     Task,
     TaskState,
 )
+from localclaw.core.openclaw_runtime import OpenClawRuntime
 from localclaw.core.parser import Parser, create_default_parser
 from localclaw.core.planner import Planner, create_default_planner
 from localclaw.core.verifier import VerificationDecision, Verifier, create_default_verifier
@@ -53,6 +57,7 @@ class ExecutionEngine:
         verifier: Optional[Verifier] = None,
         tool_registry: Optional[ToolRegistry] = None,
         skill_registry: Optional[SkillRegistry] = None,
+        openclaw_runtime: Optional[OpenClawRuntime] = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._parser_override = parser is not None
@@ -63,6 +68,10 @@ class ExecutionEngine:
         self._planner = planner or create_default_planner()
         self._tool_registry = tool_registry or get_tool_registry()
         self._skill_registry = skill_registry or get_skill_registry()
+        self._openclaw_runtime = openclaw_runtime or OpenClawRuntime(
+            skill_registry=self._skill_registry,
+            tool_registry=self._tool_registry,
+        )
         self._verifier = verifier or create_default_verifier(
             settings=self._settings,
             skill_registry=self._skill_registry,
@@ -121,15 +130,36 @@ class ExecutionEngine:
                 )
 
             if self._settings.llm_enabled and self._settings.llm_parse_only and not self._parser_override:
-                plan = await self._planner.plan_from_message(message, task.context)
-                task.plan = plan
-                task.intent = plan.intent
-                resolved_intent = plan.intent.intent if plan.intent else "unknown"
+                decision = await self._openclaw_runtime.decide(message, task.context)
                 self._logger.info(
-                    "Task %s: Planned directly from local model with intent '%s'",
+                    "Task %s: OpenClaw runtime decision mode '%s'",
                     task.id,
-                    resolved_intent,
+                    decision.mode.value,
                 )
+
+                if decision.mode == AgentDecisionMode.ANSWER and decision.answer:
+                    self._complete_with_direct_answer(task, decision)
+                else:
+                    intent = decision.to_intent()
+                    if intent is None:
+                        self._logger.info(
+                            "Task %s: OpenClaw runtime returned no executable action; retrying planner understanding",
+                            task.id,
+                        )
+                        plan = await self._planner.plan_from_message(message, task.context)
+                    else:
+                        task.intent = intent
+                        plan = await self._planner.plan(intent, task.context)
+                        if plan.intent is None:
+                            plan.intent = intent
+                    task.plan = plan
+                    task.intent = plan.intent
+                    resolved_intent = plan.intent.intent if plan.intent else "unknown"
+                    self._logger.info(
+                        "Task %s: Planned from local model with intent '%s'",
+                        task.id,
+                        resolved_intent,
+                    )
             else:
                 intent = await self._parser.parse(message)
                 task.intent = intent
@@ -137,12 +167,16 @@ class ExecutionEngine:
                 plan = await self._planner.plan(intent, task.context)
                 task.plan = plan
 
-            task.advance_state(TaskState.PLANNED)
-            if task.plan is not None:
-                self._logger.info(f"Task {task.id}: Created plan with {len(task.plan.steps)} steps")
-            
-            task.advance_state(TaskState.RUNNING)
-            await self._execute_plan(task)
+            if task.state != TaskState.COMPLETED:
+                if task.intent is not None:
+                    task.context.inputs.update(task.intent.params)
+
+                task.advance_state(TaskState.PLANNED)
+                if task.plan is not None:
+                    self._logger.info(f"Task {task.id}: Created plan with {len(task.plan.steps)} steps")
+
+                task.advance_state(TaskState.RUNNING)
+                await self._execute_plan(task)
             
         except Exception as e:
             self._logger.error(f"Task {task.id} failed: {e}")
@@ -163,6 +197,29 @@ class ExecutionEngine:
             self._on_task_complete(task)
         
         return task
+
+    def _complete_with_direct_answer(self, task: Task, decision: AgentDecision) -> None:
+        """Finish a task immediately with the model's direct answer."""
+
+        answer = (decision.answer or "").strip()
+        if not answer:
+            raise EngineError("Local model returned an empty direct answer", ErrorType.PARSE_ERROR)
+
+        task.intent = Intent(
+            intent="answer",
+            params={"answer": answer},
+            confidence=decision.confidence,
+            source=decision.source,
+            raw_message=decision.raw_message,
+        )
+        task.plan = Plan(intent=task.intent, steps=[])
+        task.context.inputs.update(task.intent.params)
+        task.advance_state(TaskState.PLANNED)
+        task.advance_state(TaskState.RUNNING)
+        task.result = ExecutionResult.success(
+            data={"result": answer, "message": answer},
+        )
+        task.advance_state(TaskState.COMPLETED)
     
     async def _execute_plan(self, task: Task, start_index: int = 0) -> None:
         """Execute all steps in a plan."""
@@ -386,12 +443,24 @@ class ExecutionEngine:
             return ExecutionResult.from_error(f"Condition evaluation error: {e}", ErrorType.SYSTEM_ERROR)
         
         if condition_result:
+            sub_results = []
             for sub_step in step.sub_steps:
                 result = await self._execute_step(sub_step, task)
+                sub_results.append(result)
                 if result.status == "error":
                     return result
-        
-        return ExecutionResult.success(data={"condition_result": condition_result})
+
+            if len(sub_results) == 1:
+                return sub_results[0]
+
+            return ExecutionResult.success(
+                data={
+                    "condition_result": True,
+                    "sub_results": [result.data for result in sub_results],
+                }
+            )
+
+        return ExecutionResult.success(data={"condition_result": False})
     
     async def _execute_loop_step(self, step: Step, task: Task) -> ExecutionResult:
         """Execute a loop step."""
@@ -434,23 +503,11 @@ class ExecutionEngine:
     
     def _resolve_params(self, params: Dict[str, Any], context: Context) -> Dict[str, Any]:
         """Resolve parameter values from context."""
-        resolved: Dict[str, Any] = {}
-        
-        for key, value in params.items():
-            if isinstance(value, str):
-                if value.startswith("$"):
-                    var_name = value[1:]
-                    resolved[key] = context.get_variable(var_name) or context.inputs.get(var_name, "")
-                elif "{{" in value:
-                    template = Template(value)
-                    template_vars = self._get_template_vars(context)
-                    resolved[key] = template.render(**template_vars)
-                else:
-                    resolved[key] = value
-            else:
-                resolved[key] = value
-        
-        return resolved
+        template_vars = self._get_template_vars(context)
+        return {
+            key: resolve_interpolated_value(value, template_vars)
+            for key, value in params.items()
+        }
     
     def _get_template_vars(self, context: Context) -> Dict[str, Any]:
         """Get all variables available for templates."""

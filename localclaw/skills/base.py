@@ -207,13 +207,27 @@ def _parse_action(data: Dict[str, Any]) -> SkillAction:
     """Parse an action from a dictionary."""
     then_actions = [_parse_action(a) for a in data.get("then", [])]
     sub_actions = [_parse_action(a) for a in data.get("actions", [])]
+    action_type = data.get("type", "transform")
+    normalized_params = (
+        data.get("params")
+        or data.get("inputs")
+        or data.get("args")
+        or {}
+    )
+    normalized_tool = data.get("tool")
+    if normalized_tool is None and action_type in {"tool", "tool_call", "command"}:
+        normalized_tool = data.get("name") or data.get("command")
+
+    normalized_skill = data.get("skill") or data.get("handler")
+    if normalized_skill is None and action_type in {"skill", "skill_call", "handler"}:
+        normalized_skill = data.get("name")
     
     return SkillAction(
-        type=data.get("type", "transform"),
+        type=action_type,
         name=data.get("name"),
-        tool=data.get("tool"),
-        skill=data.get("skill"),
-        params=data.get("params", {}),
+        tool=normalized_tool,
+        skill=normalized_skill,
+        params=normalized_params,
         template=data.get("template"),
         condition=data.get("condition"),
         var=data.get("var"),

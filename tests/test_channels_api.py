@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 
 from localclaw.config.settings import Settings
 from localclaw.core.models import Message, Plan, Step, StepStatus, StepType, Task, TaskState
+from localclaw.skills.base import create_skill_from_dict
+from localclaw.skills.registry import SkillRegistry
 
 
 def test_channels_overview_endpoint(monkeypatch):
@@ -166,3 +168,84 @@ def test_approve_endpoint_returns_enriched_task_payload(monkeypatch):
     assert data["message"] == "/shell dir"
     assert data["channel"] == "web"
     assert data["result"]["step-shell"]["stdout"] == "ok"
+
+
+def test_skills_endpoint_marks_managed_skills_as_removable(monkeypatch, tmp_path):
+    """The Skills API should distinguish managed installs from configured and runtime skills."""
+
+    from localclaw.channels import web as web_channel
+    from localclaw.skills import registry as skill_registry_module
+
+    managed_dir = tmp_path / "managed"
+    configured_dir = tmp_path / "configured"
+    for directory in (managed_dir, configured_dir):
+        directory.mkdir()
+
+    registry = SkillRegistry()
+    managed_skill = create_skill_from_dict(
+        {
+            "name": "managed-demo",
+            "version": "1.0.0",
+            "description": "Managed skill",
+            "type": "workflow",
+            "metadata": {
+                "source_path": str(managed_dir / "managed-demo" / "SKILL.md"),
+                "skill_key": "managed-demo",
+                "aliases": ["managed"],
+            },
+        }
+    )
+    configured_skill = create_skill_from_dict(
+        {
+            "name": "configured-demo",
+            "version": "1.0.0",
+            "description": "Configured directory skill",
+            "type": "workflow",
+            "metadata": {
+                "source_path": str(configured_dir / "configured-demo" / "SKILL.md"),
+            },
+        }
+    )
+    runtime_skill = create_skill_from_dict(
+        {
+            "name": "runtime-demo",
+            "version": "1.0.0",
+            "description": "Runtime skill",
+            "type": "atomic",
+            "metadata": {},
+        }
+    )
+    registry.register(managed_skill)
+    registry.register(configured_skill)
+    registry.register(runtime_skill)
+
+    settings = Settings(
+        _env_file=None,
+        managed_skills_dir=managed_dir,
+        extra_skill_dirs=[configured_dir],
+    )
+
+    monkeypatch.setattr(web_channel, "get_settings", lambda: settings)
+    monkeypatch.setattr(skill_registry_module, "get_skill_registry", lambda: registry)
+    monkeypatch.setattr(web_channel, "initialize_system", lambda: None)
+
+    app = web_channel.create_app()
+    with TestClient(app) as client:
+        response = client.get("/api/skills")
+
+    assert response.status_code == 200
+    payload = response.json()
+    managed = next(skill for skill in payload if skill["name"] == "managed-demo")
+    configured = next(skill for skill in payload if skill["name"] == "configured-demo")
+    runtime = next(skill for skill in payload if skill["name"] == "runtime-demo")
+
+    assert managed["removable"] is True
+    assert managed["source_scope"] == "managed"
+    assert managed["skill_key"] == "managed-demo"
+    assert "managed" in managed["aliases"]
+
+    assert configured["removable"] is False
+    assert configured["source_scope"] == "configured"
+
+    assert runtime["removable"] is False
+    assert runtime["source_scope"] == "runtime"
