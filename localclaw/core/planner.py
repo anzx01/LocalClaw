@@ -3,6 +3,7 @@
 import json
 import logging
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from localclaw.core.interpolation import (
     normalize_condition_expression,
@@ -81,7 +82,7 @@ class Planner:
 Classify the LocalClaw user request.
 
 Allowed intents:
-greeting, help, echo, list_skills, status, date_query, run_command, run_shell_command, list_folders, file_list, read_file, write_file, append_file, delete_file, create_directory, check_weather, unknown
+greeting, help, echo, list_skills, status, date_query, run_command, run_shell_command, list_folders, file_list, read_file, write_file, append_file, delete_file, create_directory, check_weather, check_disk_space, unknown
 
 Rules:
 - "/cmd <command>" -> {{"intent":"run_command","params":{{"command":"<command>"}}}}
@@ -89,8 +90,11 @@ Rules:
 - Chinese help/capability questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" -> {{"intent":"help","params":{{}}}}
 - Greetings like "hello", "hi", "你好" -> greeting
 - Weather questions -> check_weather
+- Requests like "我C盘空间还剩多少" or "D盘还有多少可用空间" -> {{"intent":"check_disk_space","params":{{"path":"C:/"}}}}
 - Requests like "看看我桌面有哪些文件夹" -> {{"intent":"list_folders","params":{{"path":"~/Desktop","folders_only":true}}}}
 - Requests like "列出桌面文件" or "查看 Desktop" -> {{"intent":"file_list","params":{{"path":"~/Desktop"}}}}
+- Requests like "我D盘有哪些目录" or "查看 D 盘文件夹" -> {{"intent":"list_folders","params":{{"path":"D:/","folders_only":true}}}}
+- Requests like "列出 D 盘文件" -> {{"intent":"file_list","params":{{"path":"D:/"}}}}
 - Current news, latest headlines, today's events, or recent web information must not map to help. If a web skill fits, return "skill.<invocation_name>"; otherwise return unknown.
 - If an installed skill clearly fits better than a built-in intent, return "skill.<invocation_name>" using the catalog's "invoke as" field
 - If nothing fits, return {{"intent":"unknown","params":{{}}}}
@@ -108,8 +112,11 @@ User: {user_request}
 Chinese help/capability questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" -> {{"intent":"help","params":{{}}}}.
 Greetings like "hello" or "你好" -> greeting.
 Weather questions -> check_weather.
+Disk-space questions like "我C盘空间还剩多少" -> {{"intent":"check_disk_space","params":{{"path":"C:/"}}}}.
 Desktop folder requests like "看看我桌面有哪些文件夹" -> {{"intent":"list_folders","params":{{"path":"~/Desktop","folders_only":true}}}}.
 Desktop file listing requests like "列出桌面文件" -> {{"intent":"file_list","params":{{"path":"~/Desktop"}}}}.
+Drive folder requests like "我D盘有哪些目录" -> {{"intent":"list_folders","params":{{"path":"D:/","folders_only":true}}}}.
+Drive file listing requests like "列出 D 盘文件" -> {{"intent":"file_list","params":{{"path":"D:/"}}}}.
 "/ today's news / latest headlines / recent web info" -> matching installed web skill or unknown, never help.
 "/cmd <command>" -> run_command.
 "/shell <command>" -> run_shell_command.
@@ -216,10 +223,15 @@ User: {user_request}
         intent.confidence = max(intent.confidence, 0.5)
         return intent
 
-    async def plan_from_message(self, message: Message, context: Optional[Context] = None) -> Plan:
+    async def plan_from_message(
+        self,
+        message: Message,
+        context: Optional[Context] = None,
+        allow_parser_fallback: bool = True,
+    ) -> Plan:
         """Understand a raw message with the local model and build a plan directly."""
         intent = await self._understand_message_with_llm(message)
-        if intent.intent == "unknown":
+        if allow_parser_fallback and intent.intent == "unknown":
             fallback_intent = await self._fallback_intent_from_parser(message)
             if fallback_intent is not None:
                 logger.info(
@@ -289,14 +301,31 @@ User: {user_request}
         if intent.intent == "get_date":
             return self._plan_from_skill("date", intent.params, intent)
         if intent.intent == "check_weather" or intent.intent == "get_weather":
-            location = intent.params.get("location", "Beijing")
+            location = str(intent.params.get("location") or "").strip()
+            weather_url = f"https://wttr.in/{quote(location)}?format=j1" if location else "https://wttr.in/?format=j1"
             plan = Plan(intent=intent)
             plan.steps.append(
                 Step(
                     type=StepType.TOOL_CALL,
                     name="get_weather",
                     tool_name="http_get",
-                    input={"url": f"https://wttr.in/{location}?format=j1"},
+                    input={"url": weather_url},
+                    timeout=10.0,
+                )
+            )
+            return plan
+        if intent.intent == "check_disk_space" or intent.intent == "get_disk_space":
+            path = self._normalize_filesystem_path(intent.params.get("path") or "")
+            if not path:
+                drive = str(intent.params.get("drive") or "").strip()
+                path = f"{drive.upper()}:/" if drive else ""
+            plan = Plan(intent=intent)
+            plan.steps.append(
+                Step(
+                    type=StepType.TOOL_CALL,
+                    name="get_disk_usage",
+                    tool_name="disk_usage",
+                    input={"path": path},
                     timeout=10.0,
                 )
             )
@@ -306,9 +335,7 @@ User: {user_request}
         if intent.intent == "list_folders":
             import os
             desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-            path = intent.params.get("path") or desktop_path
-            if path in ["~/Desktop", "Desktop", "桌面", "~/桌面"]:
-                path = desktop_path
+            path = self._normalize_filesystem_path(intent.params.get("path") or desktop_path)
             plan = Plan(intent=intent)
             plan.steps.append(
                 Step(
@@ -333,15 +360,9 @@ User: {user_request}
             return plan
         if intent.intent == "list_files" or intent.intent == "list" or intent.intent == "file_list":
             import os
-            import re
-            path = intent.params.get("path", ".")
-            if path in ["~/Desktop", "Desktop", "桌面", "~/桌面"]:
-                path = os.path.join(os.path.expanduser("~"), "Desktop")
-            elif path and not os.path.isabs(path):
-                drive_match = re.match(r'^([A-Za-z]):[/\\]?$', path)
-                if drive_match:
-                    path = drive_match.group(1) + ":/"
-                elif os.path.exists(os.path.join(os.path.expanduser("~"), "Desktop", path)):
+            path = self._normalize_filesystem_path(intent.params.get("path", "."))
+            if path and isinstance(path, str) and not os.path.isabs(path):
+                if os.path.exists(os.path.join(os.path.expanduser("~"), "Desktop", path)):
                     path = os.path.join(os.path.expanduser("~"), "Desktop", path)
                 elif os.path.exists(os.path.join(os.getcwd(), path)):
                     path = os.path.join(os.getcwd(), path)
@@ -429,24 +450,12 @@ User: {user_request}
     
     def _plan_tool_call(self, tool_name: str, params: Dict[str, Any], intent: Intent) -> Plan:
         """Create a plan for direct tool call from LLM."""
-        import os
-        import platform
-        
         plan = Plan(intent=intent)
         
         processed_params = {}
         for key, value in params.items():
             if key == "path" and value:
-                if isinstance(value, str):
-                    value_lower = value.lower()
-                    if value_lower in ["桌面", "desktop"]:
-                        value = os.path.join(os.path.expanduser("~"), "Desktop")
-                    elif "用户名" in value or "username" in value_lower or "your_username" in value_lower:
-                        value = os.path.join(os.path.expanduser("~"), "Desktop")
-                    elif len(value) == 2 and value[1] == ":":
-                        value = value[0] + ":/"
-                    elif value.startswith("/Users/") or value.startswith("/home/"):
-                        value = os.path.join(os.path.expanduser("~"), "Desktop")
+                value = self._normalize_filesystem_path(value)
             processed_params[key] = value
         
         plan.steps.append(
@@ -629,6 +638,39 @@ User: {user_request}
             key: resolve_interpolated_value(value, input_params)
             for key, value in template_params.items()
         }
+
+    def _normalize_filesystem_path(self, value: Any) -> Any:
+        """Normalize user-facing path shorthands into executable local paths."""
+
+        import os
+        import re
+
+        if not isinstance(value, str):
+            return value
+
+        normalized = value.strip()
+        if not normalized:
+            return normalized
+
+        normalized_lower = normalized.lower()
+        if normalized in ["~/Desktop", "Desktop", "桌面", "~/桌面"] or normalized_lower == "~/desktop":
+            return os.path.join(os.path.expanduser("~"), "Desktop")
+
+        if "用户名" in normalized or "username" in normalized_lower or "your_username" in normalized_lower:
+            return os.path.join(os.path.expanduser("~"), "Desktop")
+
+        drive_word_match = re.fullmatch(r"([A-Za-z])\s*盘(?:根目录)?", normalized, re.IGNORECASE)
+        if drive_word_match:
+            return drive_word_match.group(1).upper() + ":/"
+
+        drive_root_match = re.fullmatch(r"([A-Za-z]):[/\\]?", normalized, re.IGNORECASE)
+        if drive_root_match:
+            return drive_root_match.group(1).upper() + ":/"
+
+        if normalized.startswith("/Users/") or normalized.startswith("/home/"):
+            return os.path.join(os.path.expanduser("~"), "Desktop")
+
+        return normalized
     
     def _plan_greeting(self, intent: Intent) -> Plan:
         """Create a greeting plan."""

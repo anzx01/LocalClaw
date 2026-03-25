@@ -13,6 +13,19 @@ from localclaw.tools.base import Tool, ToolError, register_tool
 logger = logging.getLogger(__name__)
 
 
+def _humanize_bytes(size_bytes: int) -> str:
+    """Convert byte counts into a readable storage string."""
+
+    value = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if value < 1024.0 or unit == "PB":
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{size_bytes} B"
+
+
 class FileReadTool(Tool):
     """Tool for reading file contents."""
     
@@ -345,6 +358,77 @@ class FileAppendTool(Tool):
         return self._base_dir / p
 
 
+class DiskUsageTool(Tool):
+    """Tool for checking disk usage on a drive or filesystem path."""
+
+    name = "disk_usage"
+    description = "Check total, used, and free disk space for a path"
+    risk_level = RiskLevel.LOW
+    inputs = {"path": "string"}
+    outputs = {
+        "path": "string",
+        "total_bytes": "integer",
+        "used_bytes": "integer",
+        "free_bytes": "integer",
+        "free_percent": "float",
+    }
+
+    def __init__(self, base_dir: Optional[Path] = None) -> None:
+        super().__init__()
+        self._base_dir = base_dir or Path.cwd()
+
+    async def execute(self, path: str = ".", **kwargs) -> ExecutionResult:
+        """Execute disk usage lookup."""
+
+        del kwargs
+
+        try:
+            target_path = self._resolve_path(path)
+
+            if not target_path.exists():
+                return ExecutionResult.from_error(
+                    f"Path not found: {path}",
+                    ErrorType.VALIDATION_ERROR,
+                )
+
+            usage = shutil.disk_usage(str(target_path))
+            total_bytes = int(usage.total)
+            used_bytes = int(usage.used)
+            free_bytes = int(usage.free)
+            free_percent = round((free_bytes / total_bytes) * 100, 1) if total_bytes else 0.0
+            used_percent = round((used_bytes / total_bytes) * 100, 1) if total_bytes else 0.0
+
+            return ExecutionResult.success(
+                message=f"Checked disk usage: {path}",
+                data={
+                    "path": str(target_path),
+                    "total_bytes": total_bytes,
+                    "used_bytes": used_bytes,
+                    "free_bytes": free_bytes,
+                    "total": _humanize_bytes(total_bytes),
+                    "used": _humanize_bytes(used_bytes),
+                    "free": _humanize_bytes(free_bytes),
+                    "free_percent": free_percent,
+                    "used_percent": used_percent,
+                },
+            )
+        except PermissionError:
+            return ExecutionResult.from_error(
+                f"Permission denied: {path}",
+                ErrorType.PERMISSION_ERROR,
+            )
+        except Exception as e:
+            return ExecutionResult.from_error(str(e), ErrorType.SYSTEM_ERROR)
+
+    def _resolve_path(self, path: str) -> Path:
+        """Resolve path relative to base directory."""
+
+        p = Path(path)
+        if p.is_absolute():
+            return p
+        return self._base_dir / p
+
+
 def register_file_tools(base_dir: Optional[Path] = None) -> None:
     """Register all file tools."""
     register_tool(FileReadTool(base_dir))
@@ -353,3 +437,4 @@ def register_file_tools(base_dir: Optional[Path] = None) -> None:
     register_tool(FileDeleteTool(base_dir))
     register_tool(FileMkdirTool(base_dir))
     register_tool(FileAppendTool(base_dir))
+    register_tool(DiskUsageTool(base_dir))

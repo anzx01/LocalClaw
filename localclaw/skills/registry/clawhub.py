@@ -40,7 +40,10 @@ class ClawHubClient:
     async def _ensure_session(self):
         """Ensure aiohttp session is created."""
         if self.session is None:
-            self.session = aiohttp.ClientSession()
+            # Force the OS-threaded resolver because aiohttp's async resolver can
+            # fail on some Windows/local-network setups even when normal DNS works.
+            connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+            self.session = aiohttp.ClientSession(connector=connector)
         return self.session
 
     async def close(self):

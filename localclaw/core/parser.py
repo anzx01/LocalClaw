@@ -185,7 +185,7 @@ class LLMParser(ParserBackend):
 Classify the user request for LocalClaw.
 
 Allowed intents:
-greeting, help, echo, list_skills, status, date_query, run_command, run_shell_command, list_folders, file_list, read_file, write_file, append_file, delete_file, create_directory, check_weather, unknown
+greeting, help, echo, list_skills, status, date_query, run_command, run_shell_command, list_folders, file_list, read_file, write_file, append_file, delete_file, create_directory, check_weather, check_disk_space, unknown
 
 Rules:
 - "/cmd <command>" -> {{"intent":"run_command","params":{{"command":"<command>"}}}}
@@ -193,8 +193,11 @@ Rules:
 - Chinese help/capability questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" -> {{"intent":"help","params":{{}}}}
 - Greetings like "hello", "hi", "你好" -> greeting
 - Weather questions -> check_weather
+- Requests like "我C盘空间还剩多少" or "D盘还有多少可用空间" -> {{"intent":"check_disk_space","params":{{"path":"C:/"}}}}
 - Requests like "看看我桌面有哪些文件夹" -> {{"intent":"list_folders","params":{{"path":"~/Desktop","folders_only":true}}}}
 - Requests like "列出桌面文件" or "查看 Desktop" -> {{"intent":"file_list","params":{{"path":"~/Desktop"}}}}
+- Requests like "我D盘有哪些目录" or "查看 D 盘文件夹" -> {{"intent":"list_folders","params":{{"path":"D:/","folders_only":true}}}}
+- Requests like "列出 D 盘文件" -> {{"intent":"file_list","params":{{"path":"D:/"}}}}
 - Current news, latest headlines, today's events, or recent web information must not map to help. If a listed web skill fits better, return "skill.<invocation_name>"; otherwise return unknown.
 - If a listed skill is clearly a better match than a built-in intent, return "skill.<invocation_name>" using the catalog's "invoke as" field
 - If nothing fits, return {{"intent":"unknown","params":{{}}}}
@@ -212,8 +215,11 @@ User: {user_request}
 Chinese capability/help questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" must map to {{"intent":"help","params":{{}}}}.
 Greetings like "hello" or "你好" map to greeting.
 Weather questions map to check_weather.
+Disk-space questions like "我C盘空间还剩多少" map to {{"intent":"check_disk_space","params":{{"path":"C:/"}}}}.
 Desktop folder requests like "看看我桌面有哪些文件夹" map to {{"intent":"list_folders","params":{{"path":"~/Desktop","folders_only":true}}}}.
 Desktop file listing requests like "列出桌面文件" map to {{"intent":"file_list","params":{{"path":"~/Desktop"}}}}.
+Drive folder requests like "我D盘有哪些目录" map to {{"intent":"list_folders","params":{{"path":"D:/","folders_only":true}}}}.
+Drive file listing requests like "列出 D 盘文件" map to {{"intent":"file_list","params":{{"path":"D:/"}}}}.
 News / latest headlines / today's events / recent web info map to an installed web skill or unknown, never help.
 "/cmd <command>" maps to run_command.
 "/shell <command>" maps to run_shell_command.
@@ -459,6 +465,12 @@ def create_default_parser(llm_enabled: bool = False, llm_parse_only: bool = Fals
             pattern=r"^(?:今天|明天|后天).*?(?:天气|下雨|下雪|晴天|气温)",
             intent="check_weather",
             priority=15,
+        ),
+        ParseRule(
+            pattern=r"^.*?(?P<drive>[A-Za-z])\s*盘.*?(?:空间|容量|可用|空闲|剩余|还剩|剩多少).*$",
+            intent="check_disk_space",
+            params_template={"drive": "$drive"},
+            priority=18,
         ),
         ParseRule(
             pattern=r"^(?:天气|下雨|下雪|晴天|气温)",

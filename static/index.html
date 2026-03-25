@@ -17,12 +17,39 @@
         .tab { flex: 1; padding: 15px; text-align: center; cursor: pointer; border-bottom: 3px solid transparent; }
         .tab.active { border-bottom-color: #007bff; color: #007bff; font-weight: bold; }
         .tab-content { background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 20px; }
-        .chat-container { background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .messages { height: 400px; overflow-y: auto; padding: 20px; border-bottom: 1px solid #eee; }
-        .message { margin-bottom: 15px; padding: 10px 15px; border-radius: 8px; white-space: pre-wrap; }
-        .message.user { background: #007bff; color: white; margin-left: 20%; }
-        .message.system { background: #f0f0f0; margin-right: 20%; }
-        .message.error { background: #f8d7da; color: #721c24; }
+        .chat-container { background: white; border-radius: 18px; box-shadow: 0 16px 40px rgba(15,23,42,0.08); overflow: hidden; }
+        .messages { height: 460px; overflow-y: auto; padding: 22px; border-bottom: 1px solid #e5eaf0; background: linear-gradient(180deg, #f8fbff 0%, #fdfefe 100%); display: flex; flex-direction: column; gap: 14px; }
+        .message { max-width: min(82%, 860px); }
+        .message.user { align-self: flex-end; }
+        .message.system, .message.error { align-self: flex-start; }
+        .message-shell { padding: 16px 18px; border-radius: 22px; border: 1px solid #dbe4ee; box-shadow: 0 10px 28px rgba(15,23,42,0.06); backdrop-filter: blur(10px); }
+        .message.user .message-shell { background: linear-gradient(135deg, #1d4ed8, #2563eb 48%, #3b82f6); color: white; border-color: rgba(37, 99, 235, 0.45); }
+        .message.system .message-shell { background: rgba(255,255,255,0.92); color: #0f172a; }
+        .message.error .message-shell { background: linear-gradient(180deg, #fff7f7, #fff1f1); color: #7f1d1d; border-color: #f3c6c6; }
+        .message-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+        .message-role { font-size: 11px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.8; }
+        .message-time { font-size: 12px; opacity: 0.65; font-variant-numeric: tabular-nums; }
+        .message-title { margin-bottom: 10px; font-size: 16px; font-weight: 800; line-height: 1.3; }
+        .message-body { display: grid; gap: 10px; }
+        .message-paragraph { margin: 0; line-height: 1.62; white-space: pre-wrap; word-break: break-word; }
+        .message-section-label { margin-bottom: 8px; font-size: 11px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.7; }
+        .message-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+        .message-fact { padding: 10px 12px; border-radius: 14px; border: 1px solid rgba(148,163,184,0.25); background: rgba(148,163,184,0.08); min-width: 0; }
+        .message.user .message-fact { border-color: rgba(255,255,255,0.16); background: rgba(255,255,255,0.14); }
+        .message.error .message-fact { border-color: rgba(239,68,68,0.18); background: rgba(254,226,226,0.75); }
+        .message-fact.tone-success { border-color: rgba(34,197,94,0.24); background: rgba(220,252,231,0.88); }
+        .message-fact.tone-warning { border-color: rgba(245,158,11,0.24); background: rgba(254,243,199,0.92); }
+        .message.user .message-fact.tone-success,
+        .message.user .message-fact.tone-warning { color: #eff6ff; background: rgba(255,255,255,0.16); }
+        .message-fact-label { display: block; margin-bottom: 4px; font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.72; }
+        .message-fact-value { display: block; font-size: 13px; font-weight: 700; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+        .message-list { display: grid; gap: 8px; }
+        .message-list-item { padding: 10px 12px; border-radius: 14px; border: 1px solid rgba(148,163,184,0.24); background: rgba(241,245,249,0.88); line-height: 1.56; white-space: pre-wrap; word-break: break-word; }
+        .message.user .message-list-item { border-color: rgba(255,255,255,0.16); background: rgba(255,255,255,0.12); }
+        .message.error .message-list-item { border-color: rgba(239,68,68,0.2); background: rgba(254,226,226,0.72); }
+        .message-code { margin: 0; padding: 12px 14px; border-radius: 16px; border: 1px solid #d7e0eb; background: #0f172a; color: #e2e8f0; font-size: 12px; line-height: 1.62; white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
+        .message.user .message-code { background: rgba(3,7,18,0.34); border-color: rgba(255,255,255,0.16); color: #f8fafc; }
+        .message.error .message-code { background: #fff6f6; border-color: #f0caca; color: #7f1d1d; }
         .input-area { padding: 15px; display: flex; gap: 10px; }
         .input-area input { flex: 1; padding: 10px 15px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
         .input-area button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
@@ -157,6 +184,7 @@
             .section-header { flex-direction: column; align-items: start; }
             .modal-header { flex-direction: column; }
             .skills-layout { grid-template-columns: 1fr; }
+            .message { max-width: 100%; }
         }
     </style>
 </head>
@@ -179,7 +207,61 @@
             <div class="chat-container">
                 <div class="messages" x-ref="messages">
                     <template x-for="msg in messages" :key="msg.id">
-                        <div class="message" :class="msg.type" x-text="msg.content"></div>
+                        <div class="message" :class="msg.type">
+                            <div class="message-shell">
+                                <div class="message-meta">
+                                    <span class="message-role" x-text="msg.label"></span>
+                                    <span class="message-time" x-text="msg.time"></span>
+                                </div>
+                                <template x-if="msg.title">
+                                    <div class="message-title" x-text="msg.title"></div>
+                                </template>
+                                <div class="message-body">
+                                    <template x-for="(block, blockIndex) in msg.blocks" :key="msg.id + '-block-' + blockIndex">
+                                        <div>
+                                            <template x-if="block.type === 'paragraph'">
+                                                <p class="message-paragraph" x-text="block.text"></p>
+                                            </template>
+                                            <template x-if="block.type === 'facts'">
+                                                <div>
+                                                    <template x-if="block.label">
+                                                        <div class="message-section-label" x-text="block.label"></div>
+                                                    </template>
+                                                    <div class="message-facts">
+                                                        <template x-for="(item, itemIndex) in block.items" :key="msg.id + '-fact-' + blockIndex + '-' + itemIndex">
+                                                            <div class="message-fact" :class="item.tone ? 'tone-' + item.tone : ''">
+                                                                <span class="message-fact-label" x-text="item.label"></span>
+                                                                <span class="message-fact-value" x-text="item.value"></span>
+                                                            </div>
+                                                        </template>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                            <template x-if="block.type === 'list'">
+                                                <div>
+                                                    <template x-if="block.label">
+                                                        <div class="message-section-label" x-text="block.label"></div>
+                                                    </template>
+                                                    <div class="message-list">
+                                                        <template x-for="(item, itemIndex) in block.items" :key="msg.id + '-list-' + blockIndex + '-' + itemIndex">
+                                                            <div class="message-list-item" x-text="item"></div>
+                                                        </template>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                            <template x-if="block.type === 'code'">
+                                                <div>
+                                                    <template x-if="block.label">
+                                                        <div class="message-section-label" x-text="block.label"></div>
+                                                    </template>
+                                                    <pre class="message-code" x-text="block.value"></pre>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
                     </template>
                 </div>
                 
@@ -423,7 +505,7 @@
 
                         <template x-if="availableSkillsRemoteError && !availableSkillsLoadError">
                             <div class="notice">
-                                <div>ClawHub search is currently unavailable. Bundled catalog results can still appear if you switch sources.</div>
+                                <div x-text="availableSkillsRemoteNoticeMessage()"></div>
                                 <div class="skill-note" x-text="availableSkillsRemoteError"></div>
                             </div>
                         </template>
@@ -817,6 +899,330 @@
                     }, 5000);
                 },
 
+                nextMessageId() {
+                    return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+                },
+
+                formatMessageTime(value = new Date()) {
+                    return new Intl.DateTimeFormat(undefined, {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    }).format(value);
+                },
+
+                scrollChatToBottom() {
+                    setTimeout(() => {
+                        const messagesElement = this.$refs.messages || document.querySelector('.messages');
+                        if (messagesElement) {
+                            messagesElement.scrollTop = messagesElement.scrollHeight;
+                        }
+                    }, 80);
+                },
+
+                createChatMessage(type, content, options = {}) {
+                    const resolvedContent = typeof content === 'string' && content.trim()
+                        ? content.trim()
+                        : (options.fallbackContent || '');
+                    const blocks = Array.isArray(options.blocks) && options.blocks.length
+                        ? options.blocks
+                        : this.buildTextBlocks(resolvedContent);
+
+                    return {
+                        id: this.nextMessageId(),
+                        type: type,
+                        label: options.label || (type === 'user' ? 'You' : (type === 'error' ? 'Error' : 'LocalClaw')),
+                        time: options.time || this.formatMessageTime(),
+                        title: options.title || '',
+                        content: resolvedContent,
+                        blocks: blocks.length ? blocks : [{ type: 'paragraph', text: resolvedContent || 'No output' }]
+                    };
+                },
+
+                buildTextBlocks(text) {
+                    const normalized = String(text || '').replace(/\r\n/g, '\n').trim();
+                    if (!normalized) {
+                        return [{ type: 'paragraph', text: 'No output' }];
+                    }
+
+                    const sections = normalized.split(/\n{2,}/).map(section => section.trim()).filter(Boolean);
+                    const blocks = [];
+
+                    sections.forEach(section => {
+                        const lines = section.split('\n').map(line => line.trimEnd()).filter(line => line.trim().length > 0);
+                        if (!lines.length) {
+                            return;
+                        }
+
+                        const listStart = lines.findIndex(line => /^(- |\d+\.\s)/.test(line.trim()));
+                        if (listStart > 0) {
+                            const lead = lines.slice(0, listStart).join('\n').trim();
+                            if (lead) {
+                                blocks.push({ type: 'paragraph', text: lead });
+                            }
+                            const items = this.groupListItems(lines.slice(listStart));
+                            if (items.length) {
+                                blocks.push({ type: 'list', items: items });
+                                return;
+                            }
+                        }
+
+                        if (listStart === 0) {
+                            const items = this.groupListItems(lines);
+                            if (items.length) {
+                                blocks.push({ type: 'list', items: items });
+                                return;
+                            }
+                        }
+
+                        blocks.push({ type: 'paragraph', text: lines.join('\n') });
+                    });
+
+                    return blocks;
+                },
+
+                groupListItems(lines) {
+                    const items = [];
+                    let current = '';
+
+                    (lines || []).forEach(rawLine => {
+                        const line = String(rawLine || '').trimEnd();
+                        const trimmed = line.trim();
+                        if (!trimmed) {
+                            return;
+                        }
+
+                        if (/^(- |\d+\.\s)/.test(trimmed)) {
+                            if (current) {
+                                items.push(current.trim());
+                            }
+                            current = trimmed.replace(/^(- |\d+\.\s)/, '').trim();
+                            return;
+                        }
+
+                        if (current) {
+                            current += '\n' + trimmed;
+                        } else {
+                            current = trimmed;
+                        }
+                    });
+
+                    if (current) {
+                        items.push(current.trim());
+                    }
+                    return items;
+                },
+
+                extractLocationFromWeatherText(text) {
+                    const match = String(text || '').match(/(?:地点|Location):\s*([^\n。]+)/i);
+                    return match ? match[1].trim() : '';
+                },
+
+                extractPrimaryStepResult(taskData) {
+                    if (!taskData || typeof taskData !== 'object') {
+                        return null;
+                    }
+
+                    for (const value of Object.values(taskData)) {
+                        if (value && typeof value === 'object' && !Array.isArray(value)) {
+                            return value;
+                        }
+                    }
+                    return null;
+                },
+
+                buildWeatherMessageBlocks(body, fallbackText) {
+                    const blocks = this.buildTextBlocks(fallbackText);
+                    const weatherFacts = [];
+
+                    const nearest = Array.isArray(body.nearest_area) && body.nearest_area.length > 0
+                        ? (body.nearest_area[0] || {})
+                        : {};
+                    const areaName = Array.isArray(nearest.areaName) && nearest.areaName.length > 0
+                        ? ((nearest.areaName[0] || {}).value || '')
+                        : '';
+                    const country = Array.isArray(nearest.country) && nearest.country.length > 0
+                        ? ((nearest.country[0] || {}).value || '')
+                        : '';
+                    const fallbackLocation = [areaName, country].filter(Boolean).join(', ');
+                    const location = this.extractLocationFromWeatherText(fallbackText) || fallbackLocation;
+
+                    const current = Array.isArray(body.current_condition) && body.current_condition.length > 0
+                        ? (body.current_condition[0] || {})
+                        : {};
+                    if (location) {
+                        weatherFacts.push({ label: 'Location', value: location });
+                    }
+                    if (current.temp_C) {
+                        weatherFacts.push({ label: 'Temperature', value: current.temp_C + '°C' });
+                    }
+                    if (current.FeelsLikeC) {
+                        weatherFacts.push({ label: 'Feels like', value: current.FeelsLikeC + '°C' });
+                    }
+                    if (current.humidity) {
+                        weatherFacts.push({ label: 'Humidity', value: current.humidity + '%' });
+                    }
+                    if (current.windspeedKmph) {
+                        weatherFacts.push({ label: 'Wind', value: current.windspeedKmph + ' km/h' });
+                    }
+
+                    if (weatherFacts.length) {
+                        blocks.push({ type: 'facts', label: 'Snapshot', items: weatherFacts });
+                    }
+
+                    return {
+                        title: 'Weather Snapshot',
+                        blocks: blocks
+                    };
+                },
+
+                buildStructuredBlocks(stepResult, fallbackText) {
+                    if (!stepResult || typeof stepResult !== 'object') {
+                        return {
+                            title: '',
+                            blocks: this.buildTextBlocks(fallbackText)
+                        };
+                    }
+
+                    if (typeof stepResult.stdout === 'string' || typeof stepResult.stderr === 'string') {
+                        const blocks = [];
+                        const facts = [];
+
+                        if (stepResult.command) {
+                            facts.push({ label: 'Command', value: stepResult.command });
+                        }
+                        if (typeof stepResult.exit_code !== 'undefined') {
+                            facts.push({
+                                label: 'Exit code',
+                                value: String(stepResult.exit_code),
+                                tone: Number(stepResult.exit_code) === 0 ? 'success' : 'warning'
+                            });
+                        }
+                        if (facts.length) {
+                            blocks.push({ type: 'facts', label: 'Execution', items: facts });
+                        }
+                        if (stepResult.stdout) {
+                            blocks.push({ type: 'code', label: 'STDOUT', value: String(stepResult.stdout) });
+                        }
+                        if (stepResult.stderr) {
+                            blocks.push({ type: 'code', label: 'STDERR', value: String(stepResult.stderr) });
+                        }
+
+                        return {
+                            title: 'Command Result',
+                            blocks: blocks.length ? blocks : this.buildTextBlocks(fallbackText)
+                        };
+                    }
+
+                    if (typeof stepResult.free_bytes !== 'undefined' && typeof stepResult.total_bytes !== 'undefined') {
+                        const facts = [];
+                        if (stepResult.path) {
+                            facts.push({ label: 'Path', value: String(stepResult.path) });
+                        }
+                        if (stepResult.free) {
+                            facts.push({
+                                label: 'Free',
+                                value: stepResult.free + (typeof stepResult.free_percent !== 'undefined' ? ' (' + stepResult.free_percent + '%)' : ''),
+                                tone: 'success'
+                            });
+                        }
+                        if (stepResult.used) {
+                            facts.push({
+                                label: 'Used',
+                                value: stepResult.used + (typeof stepResult.used_percent !== 'undefined' ? ' (' + stepResult.used_percent + '%)' : '')
+                            });
+                        }
+                        if (stepResult.total) {
+                            facts.push({ label: 'Total', value: stepResult.total });
+                        }
+
+                        return {
+                            title: 'Disk Space',
+                            blocks: [
+                                { type: 'facts', label: 'Capacity', items: facts },
+                                ...this.buildTextBlocks(fallbackText)
+                            ]
+                        };
+                    }
+
+                    if (Array.isArray(stepResult.directories) || Array.isArray(stepResult.files)) {
+                        const directories = Array.isArray(stepResult.directories) ? stepResult.directories : [];
+                        const files = Array.isArray(stepResult.files) ? stepResult.files : [];
+                        const blocks = [];
+                        const facts = [];
+
+                        if (stepResult.path) {
+                            facts.push({ label: 'Path', value: String(stepResult.path) });
+                        }
+                        facts.push({ label: 'Directories', value: String(directories.length) });
+                        facts.push({ label: 'Files', value: String(files.length) });
+                        blocks.push({ type: 'facts', label: 'Listing', items: facts });
+
+                        if (directories.length) {
+                            blocks.push({ type: 'list', label: 'Directories', items: directories.map(item => String(item)) });
+                        }
+                        if (files.length) {
+                            blocks.push({ type: 'list', label: 'Files', items: files.map(item => String(item)) });
+                        }
+                        if (!directories.length && !files.length) {
+                            blocks.push({ type: 'paragraph', text: 'This location is empty.' });
+                        }
+
+                        return {
+                            title: 'Directory Snapshot',
+                            blocks: blocks
+                        };
+                    }
+
+                    if (
+                        stepResult.body &&
+                        typeof stepResult.body === 'object' &&
+                        (
+                            (Array.isArray(stepResult.body.current_condition) && stepResult.body.current_condition.length > 0) ||
+                            (Array.isArray(stepResult.body.weather) && stepResult.body.weather.length > 0)
+                        )
+                    ) {
+                        return this.buildWeatherMessageBlocks(stepResult.body, fallbackText);
+                    }
+
+                    return {
+                        title: '',
+                        blocks: this.buildTextBlocks(fallbackText)
+                    };
+                },
+
+                buildChatMessageFromApi(data) {
+                    let responseText = typeof data.message === 'string' && data.message.trim()
+                        ? data.message.trim()
+                        : 'Done';
+                    const stepResult = this.extractPrimaryStepResult(data.data);
+                    let structured = this.buildStructuredBlocks(stepResult, responseText);
+
+                    if (data.status === 'verifying') {
+                        const approval = this.approvals.find(item => item.task_id === data.task_id);
+                        const pendingAction = approval && approval.step
+                            ? (approval.step.command_preview || approval.step.tool_name || approval.step.name || 'this high-risk action')
+                            : 'this high-risk action';
+                        responseText = 'Waiting for approval.\nOpen the Approvals tab to continue.\nPending step: ' + pendingAction;
+                        structured = {
+                            title: 'Approval Required',
+                            blocks: [
+                                { type: 'paragraph', text: 'This request paused before running a high-risk action.' },
+                                { type: 'facts', label: 'Pending Step', items: [{ label: 'Action', value: pendingAction, tone: 'warning' }] },
+                                { type: 'paragraph', text: 'Open the Approvals tab to review and continue.' }
+                            ]
+                        };
+                    }
+
+                    return this.createChatMessage(
+                        data.status === 'failed' ? 'error' : 'system',
+                        responseText,
+                        {
+                            title: structured.title,
+                            blocks: structured.blocks
+                        }
+                    );
+                },
+
                 enabledChannelCount() {
                     return this.channels.filter(channel => channel.enabled).length;
                 },
@@ -977,6 +1383,17 @@
                     }
 
                     return this.availableSkillsEmptyMessage || 'No skills match the current search or source filter.';
+                },
+
+                availableSkillsRemoteNoticeMessage() {
+                    const sourceFilter = this.skillSourceFilter;
+                    if (sourceFilter === 'all') {
+                        return 'ClawHub search is currently unavailable. Bundled catalog results are still shown below when available.';
+                    }
+                    if (sourceFilter === 'bundled') {
+                        return 'ClawHub search is currently unavailable. You can still browse bundled catalog results below.';
+                    }
+                    return 'ClawHub search is currently unavailable. Bundled catalog results can still appear if you switch sources.';
                 },
 
                 skillSourcePillClass(source) {
@@ -1425,11 +1842,8 @@
                     const content = this.input.trim();
                     this.input = '';
                     
-                    this.messages.push({
-                        id: Date.now(),
-                        type: 'user',
-                        content: content
-                    });
+                    this.messages.push(this.createChatMessage('user', content));
+                    this.scrollChatToBottom();
                     
                     this.loading = true;
                     
@@ -1441,88 +1855,27 @@
                         });
                         
                         const data = response.data;
-                        
-                        let responseText = data.message || 'Done';
-                        if (data.data) {
-                            const stepIds = Object.keys(data.data);
-                            if (stepIds.length > 0) {
-                                const firstStepId = stepIds[0];
-                                const stepResult = data.data[firstStepId];
-                                if (stepResult) {
-                                    if (typeof stepResult.stdout === 'string' || typeof stepResult.stderr === 'string') {
-                                        const parts = [];
-                                        if (stepResult.command) {
-                                            parts.push('Command: ' + stepResult.command);
-                                        }
-                                        if (typeof stepResult.exit_code !== 'undefined') {
-                                            parts.push('Exit code: ' + stepResult.exit_code);
-                                        }
-                                        if (stepResult.stdout) {
-                                            parts.push('STDOUT:\n' + stepResult.stdout);
-                                        }
-                                        if (stepResult.stderr) {
-                                            parts.push('STDERR:\n' + stepResult.stderr);
-                                        }
-                                        responseText = parts.join('\n\n');
-                                    } else if (stepResult.files && stepResult.directories) {
-                                        responseText = 'Path: ' + stepResult.path + '\n';
-                                        if (stepResult.directories.length > 0) {
-                                            responseText += 'Directories:\n' + stepResult.directories.map(d => '  [DIR] ' + d).join('\n') + '\n';
-                                        }
-                                        if (stepResult.files.length > 0) {
-                                            responseText += 'Files:\n' + stepResult.files.map(f => '  ' + f).join('\n');
-                                        }
-                                        if (stepResult.files.length === 0 && stepResult.directories.length === 0) {
-                                            responseText += '(empty)';
-                                        }
-                                    } else if (stepResult.result) {
-                                        responseText = stepResult.result;
-                                    } else if (stepResult.message) {
-                                        responseText = stepResult.message;
-                                    } else if (stepResult.content) {
-                                        responseText = stepResult.content;
-                                    }
-                                }
-                            } else if (data.data.result) {
-                                responseText = data.data.result;
-                            } else if (data.data.message) {
-                                responseText = data.data.message;
-                            }
-                        }
 
                         if (data.status === 'verifying') {
                             await this.loadApprovals();
-                            if (responseText === 'Waiting for approval') {
-                                const approval = this.approvals.find(item => item.task_id === data.task_id);
-                                const pendingAction = approval && approval.step
-                                    ? (approval.step.command_preview || approval.step.tool_name || approval.step.name || 'this high-risk action')
-                                    : 'this high-risk action';
-                                responseText = 'Waiting for approval.\nOpen the Approvals tab to continue: ' + pendingAction;
-                            }
                             this.activeTab = 'approvals';
                         }
 
-                        this.messages.push({
-                            id: Date.now() + 1,
-                            type: data.status === 'failed' ? 'error' : 'system',
-                            content: responseText
-                        });
+                        this.messages.push(this.buildChatMessageFromApi(data));
+                        this.scrollChatToBottom();
 
                         await this.loadTasks();
                     } catch (e) {
-                        this.messages.push({
-                            id: Date.now() + 1,
-                            type: 'error',
-                            content: 'Error: ' + (e.response && e.response.data ? e.response.data.detail : e.message)
-                        });
+                        this.messages.push(
+                            this.createChatMessage(
+                                'error',
+                                'Error: ' + (e.response && e.response.data ? e.response.data.detail : e.message),
+                                { title: 'Request Failed' }
+                            )
+                        );
+                        this.scrollChatToBottom();
                     } finally {
                         this.loading = false;
-                        setTimeout(() => {
-                            const messagesElement = document.querySelector('.messages');
-                            if (messagesElement) {
-                                messagesElement.scrollTop = messagesElement.scrollHeight;
-                            }
-                        }, 100);
                     }
                 },
                 

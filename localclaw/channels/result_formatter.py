@@ -96,6 +96,9 @@ def _format_single_output(output: Dict[str, Any], task: Optional[Task]) -> Optio
     if "stdout" in output or "stderr" in output:
         return _format_shell_output(output)
 
+    if "free_bytes" in output and "total_bytes" in output:
+        return _format_disk_usage_output(output)
+
     if "files" in output or "directories" in output:
         return _format_file_list_output(output, task)
 
@@ -148,6 +151,35 @@ def _format_file_list_output(output: Dict[str, Any], task: Optional[Task]) -> st
         lines.append("(empty)")
 
     return "\n".join(lines)
+
+
+def _format_disk_usage_output(output: Dict[str, Any]) -> str:
+    """Format disk capacity output into a readable summary."""
+
+    lines = []
+    path = str(output.get("path") or "").strip()
+    total = str(output.get("total") or "").strip()
+    used = str(output.get("used") or "").strip()
+    free = str(output.get("free") or "").strip()
+    free_percent = output.get("free_percent")
+    used_percent = output.get("used_percent")
+
+    if path:
+        lines.append(f"Path: {path}")
+    if free:
+        if free_percent not in (None, ""):
+            lines.append(f"Free: {free} ({free_percent}%)")
+        else:
+            lines.append(f"Free: {free}")
+    if used:
+        if used_percent not in (None, ""):
+            lines.append(f"Used: {used} ({used_percent}%)")
+        else:
+            lines.append(f"Used: {used}")
+    if total:
+        lines.append(f"Total: {total}")
+
+    return "\n".join(lines) if lines else _stringify_value(output)
 
 
 def _wants_directory_only_view(task: Optional[Task]) -> bool:
@@ -309,7 +341,7 @@ def _format_weather_payload(body: Dict[str, Any], task: Optional[Task]) -> Optio
         current = current_condition[0] if isinstance(current_condition, list) and current_condition else {}
         description = _extract_weather_desc(current)
         temp_c = current.get("temp_C")
-        location = _extract_weather_location(body)
+        location = _resolve_weather_display_location(body, task)
         parts = []
         if location:
             parts.append(f"地点：{location}")
@@ -328,7 +360,7 @@ def _format_weather_payload(body: Dict[str, Any], task: Optional[Task]) -> Optio
     description = _extract_weather_desc(reference_hour) or _extract_weather_desc(target_day)
     chance_of_rain = _max_numeric_field(hourly, "chanceofrain")
     precip_mm = _max_numeric_field(hourly, "precipMM", as_float=True)
-    location = _extract_weather_location(body)
+    location = _resolve_weather_display_location(body, task)
     min_temp = target_day.get("mintempC") or target_day.get("avgtempC")
     max_temp = target_day.get("maxtempC") or target_day.get("avgtempC")
 
@@ -423,6 +455,15 @@ def _extract_weather_location(body: Dict[str, Any]) -> str:
     if area_name and country and country.lower() not in area_name.lower():
         return f"{area_name}, {country}"
     return area_name or country
+
+
+def _resolve_weather_display_location(body: Dict[str, Any], task: Optional[Task]) -> str:
+    """Prefer the user-requested weather location over wttr.in's nearest-area label."""
+
+    requested_location = ""
+    if task and task.intent:
+        requested_location = str(task.intent.params.get("location") or "").strip()
+    return requested_location or _extract_weather_location(body)
 
 
 def _max_numeric_field(items: Any, key: str, as_float: bool = False) -> Optional[float]:

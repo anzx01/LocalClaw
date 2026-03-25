@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -85,6 +86,72 @@ class OpenClawRuntime:
 
         return decision
 
+    async def fallback_to_chat_answer(
+        self,
+        message: Message,
+        context: Optional[Context] = None,
+    ) -> AgentDecision:
+        """Ask the local model to answer conversationally when no action was planned."""
+
+        del context  # Reserved for future multi-turn prompting.
+
+        llm_provider = get_llm_provider()
+        if not await llm_provider.is_available():
+            return AgentDecision(
+                mode=AgentDecisionMode.UNKNOWN,
+                confidence=0.0,
+                source="openclaw_runtime_chat_fallback",
+                raw_message=message.content,
+            )
+
+        system_prompt = (
+            "You are LocalClaw's local-model conversational fallback. "
+            "The runtime could not map the user's request to an installed skill, tool, or built-in action. "
+            "Reply naturally in the user's language. "
+            "Do not claim that you executed commands, accessed files, or fetched live/current data. "
+            "If the request depends on current weather, current external information, filesystem state, system state, "
+            "or the physical world and you cannot verify it here, say that plainly and briefly."
+        )
+
+        response_content = ""
+        try:
+            response = await llm_provider.chat(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message.content},
+                ],
+                max_tokens=512,
+                temperature=0.3,
+            )
+            response_content = response.content
+        except Exception as exc:
+            logger.debug("OpenClaw runtime chat fallback failed: %s", exc)
+
+        if not response_content.strip():
+            try:
+                response = await llm_provider.generate(
+                    prompt=f"User: {json.dumps(message.content, ensure_ascii=False)}",
+                    system_prompt=system_prompt,
+                    max_tokens=512,
+                    temperature=0.3,
+                )
+                response_content = response.content
+            except Exception as exc:
+                logger.debug("OpenClaw runtime generate fallback failed: %s", exc)
+
+        decision = self._decision_from_model_output(response_content, message.content)
+        if decision.mode == AgentDecisionMode.ANSWER and decision.answer:
+            decision.source = "openclaw_runtime_chat_fallback"
+            decision.confidence = max(decision.confidence, 0.5)
+            return decision
+
+        return AgentDecision(
+            mode=AgentDecisionMode.UNKNOWN,
+            confidence=0.0,
+            source="openclaw_runtime_chat_fallback",
+            raw_message=message.content,
+        )
+
     def _build_decision_prompt(self, message: Message) -> str:
         """Build the primary model-first decision prompt."""
 
@@ -106,6 +173,9 @@ First decide whether you can answer the user directly.
 - For "/<skill> ...", choose that skill directly.
 - For requests like "看看我桌面有哪些文件夹", choose intent "list_folders" with params.path="~/Desktop" and params.folders_only=true.
 - For requests like "列出桌面文件" or "查看 Desktop", choose tool "file_list" or intent "file_list" with params.path="~/Desktop".
+- For requests like "我D盘有哪些目录" or "查看 D 盘文件夹", choose intent "list_folders" with params.path="D:/" and params.folders_only=true.
+- For requests like "列出 D 盘文件", choose tool "file_list" or intent "file_list" with params.path="D:/".
+- For requests like "我C盘空间还剩多少" or "D盘还有多少可用空间", choose intent "check_disk_space" with params.path="C:/" or "D:/".
 - Reply in the user's language.
 
 Output one JSON object with exactly one mode:
@@ -139,6 +209,9 @@ Never answer weather, news, latest/current web information, filesystem, network,
 Use listed skill names and tool names exactly.
 Desktop folder requests like "看看我桌面有哪些文件夹" should resolve to intent "list_folders" with path "~/Desktop".
 Desktop file listing requests like "列出桌面文件" should resolve to tool or intent "file_list" with path "~/Desktop".
+Drive folder requests like "我D盘有哪些目录" should resolve to intent "list_folders" with path "D:/".
+Drive file listing requests like "列出 D 盘文件" should resolve to tool or intent "file_list" with path "D:/".
+Drive free-space requests like "我C盘空间还剩多少" should resolve to intent "check_disk_space" with path "C:/".
 
 <available_skills>
 {self._build_skill_catalog(compact=True)}
@@ -429,15 +502,70 @@ User: {user_request}
         request = str(message.content or "").strip()
 
         desktop_listing_params = self._build_desktop_listing_intent_params(request)
-        if desktop_listing_params and decision.mode not in {AgentDecisionMode.SKILL, AgentDecisionMode.TOOL}:
+        if desktop_listing_params:
+            if desktop_listing_params.get("error"):
+                return AgentDecision(
+                    mode=AgentDecisionMode.ANSWER,
+                    answer=desktop_listing_params["error"],
+                    confidence=0.99,
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="missing_drive_letter",
+                )
+            if decision.mode not in {AgentDecisionMode.SKILL, AgentDecisionMode.TOOL}:
+                return AgentDecision(
+                    mode=AgentDecisionMode.INTENT,
+                    intent_name="list_folders" if desktop_listing_params.get("folders_only") else "file_list",
+                    params=desktop_listing_params,
+                    confidence=max(decision.confidence, 0.97),
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="filesystem_listing_guardrail",
+                )
+
+        disk_space_params = self._build_disk_space_intent_params(request)
+        if disk_space_params:
+            if disk_space_params.get("error"):
+                return AgentDecision(
+                    mode=AgentDecisionMode.ANSWER,
+                    answer=disk_space_params["error"],
+                    confidence=0.99,
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="missing_drive_letter",
+                )
+            if decision.mode not in {AgentDecisionMode.SKILL, AgentDecisionMode.TOOL}:
+                return AgentDecision(
+                    mode=AgentDecisionMode.INTENT,
+                    intent_name="check_disk_space",
+                    params=disk_space_params,
+                    confidence=max(decision.confidence, 0.97),
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="disk_usage_guardrail",
+                )
+
+        weather_params = self._build_weather_intent_params(request)
+        if weather_params:
+            if decision.mode in {AgentDecisionMode.SKILL, AgentDecisionMode.TOOL}:
+                return decision
+            if self._tool_registry.get("http_get") is not None:
+                return AgentDecision(
+                    mode=AgentDecisionMode.INTENT,
+                    intent_name="check_weather",
+                    params=weather_params,
+                    confidence=max(decision.confidence, 0.97),
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="weather_guardrail",
+                )
             return AgentDecision(
-                mode=AgentDecisionMode.INTENT,
-                intent_name="list_folders" if desktop_listing_params.get("folders_only") else "file_list",
-                params=desktop_listing_params,
-                confidence=max(decision.confidence, 0.97),
+                mode=AgentDecisionMode.ANSWER,
+                answer="我现在不能直接感知外面的实时天气，而且当前没有可用的天气查询动作。",
+                confidence=max(decision.confidence, 0.8),
                 source="openclaw_runtime_guardrail",
                 raw_message=message.content,
-                rationale="filesystem_listing_guardrail",
+                rationale="weather_guardrail_no_tool",
             )
 
         if not self._looks_like_news_request(request):
@@ -517,7 +645,7 @@ User: {user_request}
     def _looks_like_news_request(self, text: str) -> bool:
         """Detect user requests that clearly require current news or headlines."""
 
-        normalized = text.strip().lower()
+        normalized = self._normalize_request_text(text)
         if not normalized:
             return False
 
@@ -553,32 +681,202 @@ User: {user_request}
         return has_news and (has_current or "个" in normalized or "条" in normalized or "10" in normalized)
 
     def _build_desktop_listing_intent_params(self, request: str) -> Optional[Dict[str, Any]]:
-        """Detect simple desktop listing requests that can be routed deterministically."""
+        """Detect simple desktop or drive listing requests that can be routed deterministically."""
 
-        normalized = request.strip().lower()
+        normalized = self._normalize_request_text(request)
         if not normalized or normalized.startswith("/"):
             return None
 
         if self._extract_first_url(request):
             return None
 
-        wants_desktop = any(token in request for token in ("桌面", "desktop"))
+        wants_desktop = any(token in normalized for token in ("桌面", "desktop"))
         wants_listing = any(
-            token in request
+            token in normalized
             for token in ("看看", "查看", "列出", "显示", "有哪些", "有那些", "有什么", "都有什么", "内容")
         )
-        wants_folders_only = any(token in request for token in ("文件夹", "目录", "folders", "directories"))
-        wants_files = any(token in request for token in ("文件", "文档", "files"))
+        wants_folders_only = any(
+            re.search(pattern, normalized, re.IGNORECASE)
+            for pattern in (r"文件夹", r"目录", r"\bfolders?\b", r"\bdirector(?:y|ies)\b")
+        )
+        wants_files = any(
+            re.search(pattern, normalized, re.IGNORECASE)
+            for pattern in (r"文件(?!夹)", r"文档", r"\bfiles?\b")
+        )
 
-        if not wants_desktop:
+        if wants_desktop:
+            if not wants_listing and not wants_folders_only and not wants_files:
+                return None
+            return {
+                "path": "~/Desktop",
+                "folders_only": wants_folders_only and not wants_files,
+            }
+
+        drive_match = re.search(r"([a-z])\s*盘", normalized)
+        if drive_match:
+            drive_letter = drive_match.group(1).upper()
+            if not wants_listing and not wants_folders_only and not wants_files:
+                return None
+            return {
+                "path": f"{drive_letter}:/",
+                "folders_only": wants_folders_only and not wants_files,
+            }
+
+        if "盘" in normalized and wants_folders_only:
+            return {
+                "path": "ask_drive",
+                "folders_only": True,
+                "error": "请指定盘符，例如：D盘有哪些文件夹？",
+            }
+
+        return None
+
+    def _build_disk_space_intent_params(self, request: str) -> Optional[Dict[str, Any]]:
+        """Detect drive free-space requests that can be routed deterministically."""
+
+        normalized = self._normalize_request_text(request)
+        if not normalized or normalized.startswith("/"):
             return None
-        if not wants_listing and not wants_folders_only and not wants_files:
+
+        if self._extract_first_url(request):
             return None
+
+        space_keywords = (
+            "空间",
+            "容量",
+            "磁盘空间",
+            "磁盘容量",
+            "剩余",
+            "还剩",
+            "剩多少",
+            "可用",
+            "空闲",
+            "剩下",
+            "free space",
+            "available space",
+            "disk space",
+        )
+        if not any(keyword in normalized for keyword in space_keywords):
+            return None
+
+        drive_match = re.search(r"([a-z])\s*盘", normalized)
+        if drive_match:
+            drive_letter = drive_match.group(1).upper()
+            return {
+                "path": f"{drive_letter}:/",
+                "drive": drive_letter,
+            }
+
+        if "盘" in normalized or "磁盘" in normalized:
+            return {
+                "path": "ask_drive",
+                "error": "请指定盘符，例如：C盘空间还剩多少？",
+            }
+
+        return None
+
+    def _build_weather_intent_params(self, request: str) -> Optional[Dict[str, Any]]:
+        """Detect weather-like requests that should route to the live weather tool path."""
+
+        normalized = self._normalize_request_text(request)
+        if not normalized or normalized.startswith("/"):
+            return None
+
+        if self._extract_first_url(request):
+            return None
+
+        weather_keywords = (
+            "天气",
+            "气温",
+            "温度",
+            "下雨",
+            "下雪",
+            "晴天",
+            "阴天",
+            "多云",
+            "冷不冷",
+            "热不热",
+            "风大",
+            "风力",
+            "风小",
+            "雾霾",
+        )
+        weather_patterns = (
+            r"(?:外面|窗外).*(?:天|天气|云|雨|雪|晴|阴|蓝)",
+            r"(?:天|天气).*(?:蓝|晴|阴|云|雨|雪)",
+        )
+        if not any(keyword in normalized for keyword in weather_keywords) and not any(
+            re.search(pattern, normalized, re.IGNORECASE) for pattern in weather_patterns
+        ):
+            return None
+
+        day_offset = 0
+        day_label = "今天"
+        if "后天" in normalized:
+            day_offset = 2
+            day_label = "后天"
+        elif "明天" in normalized:
+            day_offset = 1
+            day_label = "明天"
 
         return {
-            "path": "~/Desktop",
-            "folders_only": wants_folders_only and not wants_files,
+            "location": self._extract_weather_location(request),
+            "day_offset": day_offset,
+            "day_label": day_label,
         }
+
+    def _extract_weather_location(self, request: str) -> str:
+        """Best-effort extraction of a location label from a weather question."""
+
+        normalized = unicodedata.normalize("NFKC", str(request or ""))
+        normalized = re.sub(r"https?://[^\s<>()\"']+", " ", normalized, flags=re.IGNORECASE)
+        filler_patterns = (
+            r"帮我",
+            r"给我",
+            r"请",
+            r"查下",
+            r"查一下",
+            r"看下",
+            r"看看",
+            r"查看",
+            r"告诉我",
+            r"想知道",
+            r"问下",
+            r"搜下",
+            r"搜一下",
+        )
+        for pattern in filler_patterns:
+            normalized = re.sub(pattern, " ", normalized, flags=re.IGNORECASE)
+
+        compact = re.sub(r"\s+", "", normalized)
+        compact = re.sub(r"^(?:今天|明天|后天|现在|此刻)+", "", compact)
+        match = re.search(
+            r"(?P<location>[\u4e00-\u9fffA-Za-z]{1,20}?)(?:今天|明天|后天|现在|此刻)?(?:的)?"
+            r"(?:天气|气温|温度|会不会下雨|会下雨|下不下雨|下雨|下雪|冷不冷|热不热|风大不大|风大|风力)",
+            compact,
+        )
+        if not match:
+            return ""
+
+        location = re.sub(r"^(?:今天|明天|后天|现在|此刻)+", "", match.group("location"))
+        if location in {
+            "今天",
+            "明天",
+            "后天",
+            "现在",
+            "此刻",
+            "外面",
+            "窗外",
+            "这里",
+            "那边",
+            "当地",
+            "本地",
+            "这边",
+            "天气",
+            "天",
+        }:
+            return ""
+        return location
 
     def _build_news_feed_tool_params(self, request: str) -> Optional[Dict[str, Any]]:
         """Return an http_get request for generic headline queries when possible."""
@@ -706,6 +1004,14 @@ User: {user_request}
         if not match:
             return None
         return match.group(0).rstrip(".,)")
+
+    def _normalize_request_text(self, text: str) -> str:
+        """Normalize user text for robust guardrail matching."""
+
+        normalized = unicodedata.normalize("NFKC", str(text or ""))
+        normalized = normalized.replace("\\", "/")
+        normalized = re.sub(r"\s+", " ", normalized).strip().lower()
+        return normalized
 
     def _resolve_skill_name(self, identifier: Any) -> Optional[str]:
         """Resolve a skill by canonical name, skill key, or alias."""

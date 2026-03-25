@@ -400,5 +400,6 @@ async def test_clawhub_install_can_install_bundled_catalog_skill(monkeypatch, tm
     assert pending.data["requires_review"] is True
     assert installed.status == "success"
     assert installed.data["installed"] is True
+    assert installed.data["guard"]["mode"] == "off"
     assert (managed_dir / "repo.fs" / "repo.fs.json").exists()
     assert fake_skill_registry.get("repo.fs") is not None

@@ -146,15 +146,35 @@ class ExecutionEngine:
                             "Task %s: OpenClaw runtime returned no executable action; retrying planner understanding",
                             task.id,
                         )
-                        plan = await self._planner.plan_from_message(message, task.context)
+                        plan = await self._planner.plan_from_message(
+                            message,
+                            task.context,
+                            allow_parser_fallback=False,
+                        )
                     else:
                         task.intent = intent
                         plan = await self._planner.plan(intent, task.context)
                         if plan.intent is None:
                             plan.intent = intent
-                    task.plan = plan
-                    task.intent = plan.intent
                     resolved_intent = plan.intent.intent if plan.intent else "unknown"
+                    if resolved_intent == "unknown":
+                        self._logger.info(
+                            "Task %s: Planner still returned unknown; trying local-model chat fallback",
+                            task.id,
+                        )
+                        fallback_decision = await self._openclaw_runtime.fallback_to_chat_answer(
+                            message,
+                            task.context,
+                        )
+                        if fallback_decision.mode == AgentDecisionMode.ANSWER and fallback_decision.answer:
+                            self._complete_with_direct_answer(task, fallback_decision)
+                            plan = None
+                        else:
+                            task.plan = plan
+                            task.intent = plan.intent
+                    else:
+                        task.plan = plan
+                        task.intent = plan.intent
                     self._logger.info(
                         "Task %s: Planned from local model with intent '%s'",
                         task.id,

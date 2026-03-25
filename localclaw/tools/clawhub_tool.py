@@ -180,10 +180,15 @@ class ClawHubInstallTool(Tool):
                 )
 
             settings = get_settings()
+            protection_mode = (
+                "off"
+                if source == "bundled"
+                else settings.skill_install_protection_mode.value
+            )
             guard = build_post_install_guard(
                 bundle=bundle,
                 scan=scan,
-                protection_mode=settings.skill_install_protection_mode.value,
+                protection_mode=protection_mode,
                 isolation_require_approval=settings.skill_isolation_require_approval,
                 isolation_block_critical=settings.skill_isolation_block_critical,
             )

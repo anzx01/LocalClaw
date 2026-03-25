@@ -40,6 +40,19 @@ class DummyHttpGetTool(Tool):
         return ExecutionResult.success(data={"status_code": 200, "body": ""})
 
 
+class DummyDiskUsageTool(Tool):
+    """Low-risk disk usage tool used by drive-capacity guardrail tests."""
+
+    name = "disk_usage"
+    description = "Check disk capacity for a path"
+    risk_level = RiskLevel.LOW
+    inputs = {"path": "string"}
+    outputs = {"free_bytes": "integer", "total_bytes": "integer"}
+
+    async def execute(self, **kwargs):
+        return ExecutionResult.success(data={"path": "C:/", "free_bytes": 1, "total_bytes": 2})
+
+
 @pytest.mark.asyncio
 async def test_openclaw_runtime_can_return_direct_answer(monkeypatch):
     """Plain conversational requests should be answerable without planner fallback."""
@@ -70,6 +83,39 @@ async def test_openclaw_runtime_can_return_direct_answer(monkeypatch):
 
     assert decision.mode == AgentDecisionMode.ANSWER
     assert "skill" in decision.answer
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_prompt_mentions_drive_directory_queries(monkeypatch):
+    """The runtime prompt should teach the local model how to route drive-root listings."""
+
+    captured = {"prompt": ""}
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            captured["prompt"] = prompt
+
+            class Response:
+                content = '{"mode":"intent","intent":"list_folders","params":{"path":"D:/","folders_only":true}}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+    decision = await runtime.decide(Message(content="我d盘有哪些目录？"))
+
+    assert decision.mode == AgentDecisionMode.INTENT
+    assert decision.intent_name == "list_folders"
+    assert decision.params["path"] == "D:/"
+    assert decision.params["folders_only"] is True
+    assert "我D盘有哪些目录" in captured["prompt"]
 
 
 @pytest.mark.asyncio
@@ -297,6 +343,128 @@ async def test_openclaw_runtime_guardrails_desktop_folder_listing(monkeypatch):
     assert decision.source == "openclaw_runtime_guardrail"
 
 
+@pytest.mark.asyncio
+async def test_openclaw_runtime_guardrails_desktop_file_listing(monkeypatch):
+    """Desktop file requests should stay on the general file-listing path."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"unknown","params":{}}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+    decision = await runtime.decide(Message(content="列出桌面文件"))
+
+    assert decision.mode == AgentDecisionMode.INTENT
+    assert decision.intent_name == "file_list"
+    assert decision.params["path"] == "~/Desktop"
+    assert decision.params["folders_only"] is False
+    assert decision.source == "openclaw_runtime_guardrail"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_guardrails_weather_questions(monkeypatch):
+    """Weather-like questions should route to the live weather intent path."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"answer","answer":"今天天气看起来不错。"}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    tool_registry.register(DummyHttpGetTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+    decision = await runtime.decide(Message(content="\u5916\u9762\u7684\u5929\u84dd\u4e0d\uff1f"))
+
+    assert decision.mode == AgentDecisionMode.INTENT
+    assert decision.intent_name == "check_weather"
+    assert decision.params["location"] == ""
+    assert decision.params["day_offset"] == 0
+    assert decision.params["day_label"] == "\u4eca\u5929"
+    assert decision.source == "openclaw_runtime_guardrail"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_weather_location_strips_day_prefix(monkeypatch):
+    """Weather guardrails should not include relative day words inside the city name."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"unknown","params":{}}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    tool_registry.register(DummyHttpGetTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+
+    beijing = await runtime.decide(Message(content="后天北京天气？"))
+    xian = await runtime.decide(Message(content="明天西安天气？"))
+
+    assert beijing.mode == AgentDecisionMode.INTENT
+    assert beijing.intent_name == "check_weather"
+    assert beijing.params["location"] == "北京"
+    assert beijing.params["day_offset"] == 2
+
+    assert xian.mode == AgentDecisionMode.INTENT
+    assert xian.intent_name == "check_weather"
+    assert xian.params["location"] == "西安"
+    assert xian.params["day_offset"] == 1
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_guardrails_disk_space_questions(monkeypatch):
+    """Drive free-space requests should route to a deterministic disk-usage intent."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"unknown","params":{}}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    tool_registry.register(DummyDiskUsageTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+    decision = await runtime.decide(Message(content="我c盘空间还剩多少？"))
+
+    assert decision.mode == AgentDecisionMode.INTENT
+    assert decision.intent_name == "check_disk_space"
+    assert decision.params["path"] == "C:/"
+    assert decision.params["drive"] == "C"
+    assert decision.source == "openclaw_runtime_guardrail"
+
+
 def test_clawhub_client_preserves_skill_markdown_bundle(tmp_path):
     """Markdown skills should stay in OpenClaw-style directory format when installed."""
 
@@ -396,6 +564,42 @@ async def test_clawhub_client_search_records_http_failures():
 
     assert skills == []
     assert client.last_search_error == "/api/v1/search returned 429: Rate limit exceeded"
+
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_clawhub_client_uses_threaded_dns_resolver(monkeypatch):
+    """ClawHub HTTP sessions should prefer the threaded resolver for Windows-friendly DNS."""
+
+    captured = {}
+
+    class FakeThreadedResolver:
+        pass
+
+    class FakeClientSession:
+        def __init__(self, connector=None, **kwargs):
+            captured["connector"] = connector
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("localclaw.skills.registry.clawhub.aiohttp.ThreadedResolver", FakeThreadedResolver)
+    monkeypatch.setattr("localclaw.skills.registry.clawhub.aiohttp.ClientSession", FakeClientSession)
+
+    def fake_tcp_connector(*, resolver=None, **kwargs):
+        captured["resolver"] = resolver
+        captured["connector_kwargs"] = kwargs
+        return {"resolver": resolver, **kwargs}
+
+    monkeypatch.setattr("localclaw.skills.registry.clawhub.aiohttp.TCPConnector", fake_tcp_connector)
+
+    client = ClawHubClient(base_url="https://clawhub.example")
+    session = await client._ensure_session()
+
+    assert isinstance(captured["resolver"], FakeThreadedResolver)
+    assert isinstance(session, FakeClientSession)
+    assert captured["connector"] == {"resolver": captured["resolver"]}
 
     await client.close()
 

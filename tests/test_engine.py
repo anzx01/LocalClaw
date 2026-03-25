@@ -148,8 +148,8 @@ async def test_engine_local_model_mode_bypasses_parser():
 
 
 @pytest.mark.asyncio
-async def test_engine_local_model_unknown_uses_deterministic_fallback(monkeypatch):
-    """If the runtime returns unknown, engine should fall back to planner understanding."""
+async def test_engine_local_model_unknown_does_not_use_legacy_parser_fallback(monkeypatch):
+    """In llm_parse_only mode, planner retries should stay on the local-model path."""
 
     class UnknownRuntime(OpenClawRuntime):
         def __init__(self):
@@ -173,7 +173,12 @@ async def test_engine_local_model_unknown_uses_deterministic_fallback(monkeypatc
 
             return Response()
 
+    class UnavailableChatProvider:
+        async def is_available(self):
+            return False
+
     monkeypatch.setattr("localclaw.core.planner.get_llm_provider", lambda: FakeProvider())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: UnavailableChatProvider())
 
     engine = ExecutionEngine(
         settings=Settings(_env_file=None, llm_enabled=True, llm_parse_only=True),
@@ -188,8 +193,201 @@ async def test_engine_local_model_unknown_uses_deterministic_fallback(monkeypatc
 
     assert task.state == TaskState.COMPLETED
     assert task.intent is not None
-    assert task.intent.intent == "help"
-    assert task.intent.source == "planner_fallback"
+    assert task.intent.intent == "unknown"
+    assert task.intent.source == "planner_llm"
+
+
+@pytest.mark.asyncio
+async def test_engine_local_model_unknown_falls_back_to_free_chat(monkeypatch):
+    """If planning still resolves to unknown, LocalClaw should use the local model's free-chat answer."""
+
+    class UnknownRuntime(OpenClawRuntime):
+        def __init__(self):
+            pass
+
+        async def decide(self, message, context=None):
+            return AgentDecision(
+                mode=AgentDecisionMode.UNKNOWN,
+                confidence=0.0,
+                source="openclaw_runtime",
+                raw_message=message.content,
+            )
+
+    class PlannerProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"intent":"unknown","params":{}}'
+
+            return Response()
+
+    class ChatFallbackProvider:
+        async def is_available(self):
+            return True
+
+        async def chat(self, messages, max_tokens=None, temperature=None):
+            class Response:
+                content = "\u8fd9\u4e2a\u8bf7\u6c42\u76ee\u524d\u6ca1\u6709\u5bf9\u5e94\u7684\u52a8\u4f5c\uff0c\u4f46\u6211\u53ef\u4ee5\u5148\u7528\u81ea\u7531\u804a\u5929\u65b9\u5f0f\u56de\u7b54\u4f60\u3002"
+
+            return Response()
+
+        async def generate(self, prompt, system_prompt=None, max_tokens=None, temperature=None):
+            class Response:
+                content = "\u8fd9\u4e2a\u8bf7\u6c42\u76ee\u524d\u6ca1\u6709\u5bf9\u5e94\u7684\u52a8\u4f5c\uff0c\u4f46\u6211\u53ef\u4ee5\u5148\u7528\u81ea\u7531\u804a\u5929\u65b9\u5f0f\u56de\u7b54\u4f60\u3002"
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.planner.get_llm_provider", lambda: PlannerProvider())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: ChatFallbackProvider())
+
+    engine = ExecutionEngine(
+        settings=Settings(_env_file=None, llm_enabled=True, llm_parse_only=True),
+        planner=create_default_planner(),
+        verifier=create_default_verifier(),
+        tool_registry=ToolRegistry(),
+        skill_registry=SkillRegistry(),
+        openclaw_runtime=UnknownRuntime(),
+    )
+
+    task = await engine.process_message(Message(content="\u968f\u4fbf\u804a\u804a\u4f60\u600e\u4e48\u770b\u5f85\u8fd9\u4ef6\u4e8b", user_id="u1", channel="test"))
+
+    assert task.state == TaskState.COMPLETED
+    assert task.intent is not None
+    assert task.intent.intent == "answer"
+    assert task.intent.source == "openclaw_runtime_chat_fallback"
+    assert (
+        task.result.data["result"]
+        == "\u8fd9\u4e2a\u8bf7\u6c42\u76ee\u524d\u6ca1\u6709\u5bf9\u5e94\u7684\u52a8\u4f5c\uff0c\u4f46\u6211\u53ef\u4ee5\u5148\u7528\u81ea\u7531\u804a\u5929\u65b9\u5f0f\u56de\u7b54\u4f60\u3002"
+    )
+
+
+@pytest.mark.asyncio
+async def test_engine_local_model_can_plan_drive_directory_listing(monkeypatch):
+    """Drive-root folder questions should be handled by the local-model planner path."""
+
+    class UnknownRuntime(OpenClawRuntime):
+        def __init__(self):
+            pass
+
+        async def decide(self, message, context=None):
+            return AgentDecision(
+                mode=AgentDecisionMode.UNKNOWN,
+                confidence=0.0,
+                source="openclaw_runtime",
+                raw_message=message.content,
+            )
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"intent":"list_folders","params":{"path":"D:/","folders_only":true}}'
+
+            return Response()
+
+    class MockFileListTool(Tool):
+        name = "file_list"
+        description = "Mock file list tool"
+        inputs = {"path": "string"}
+        outputs = {"directories": "list"}
+
+        async def execute(self, path: str = ".", folders_only: bool = False, **kwargs):
+            return ExecutionResult.success(
+                data={
+                    "path": path,
+                    "directories": ["Projects", "Temp"],
+                    "files": ["notes.txt"],
+                    "folders_only": folders_only,
+                }
+            )
+
+    monkeypatch.setattr("localclaw.core.planner.get_llm_provider", lambda: FakeProvider())
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(MockFileListTool())
+
+    engine = ExecutionEngine(
+        settings=Settings(_env_file=None, llm_enabled=True, llm_parse_only=True),
+        planner=create_default_planner(),
+        verifier=create_default_verifier(),
+        tool_registry=tool_registry,
+        skill_registry=SkillRegistry(),
+        openclaw_runtime=UnknownRuntime(),
+    )
+
+    task = await engine.process_message(Message(content="我d盘有哪些目录？", user_id="u1", channel="test"))
+
+    assert task.state == TaskState.COMPLETED
+    assert task.intent is not None
+    assert task.intent.intent == "list_folders"
+    assert task.intent.source == "planner_llm"
+    step_id = task.plan.steps[0].id
+    assert task.result.data[step_id]["path"] == "D:/"
+    assert task.result.data[step_id]["directories"] == ["Projects", "Temp"]
+
+
+@pytest.mark.asyncio
+async def test_engine_local_model_can_check_drive_disk_space(monkeypatch):
+    """Drive free-space questions should execute through the disk_usage tool."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"unknown","params":{}}'
+
+            return Response()
+
+    class MockDiskUsageTool(Tool):
+        name = "disk_usage"
+        description = "Mock disk usage tool"
+        inputs = {"path": "string"}
+        outputs = {"free_bytes": "integer", "total_bytes": "integer"}
+
+        async def execute(self, path: str = ".", **kwargs):
+            return ExecutionResult.success(
+                data={
+                    "path": path,
+                    "free_bytes": 400,
+                    "total_bytes": 1000,
+                    "used_bytes": 600,
+                    "free": "400 GB",
+                    "used": "600 GB",
+                    "total": "1.0 TB",
+                    "free_percent": 40.0,
+                    "used_percent": 60.0,
+                }
+            )
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(MockDiskUsageTool())
+
+    engine = ExecutionEngine(
+        settings=Settings(_env_file=None, llm_enabled=True, llm_parse_only=True),
+        planner=create_default_planner(),
+        verifier=create_default_verifier(),
+        tool_registry=tool_registry,
+        skill_registry=SkillRegistry(),
+        openclaw_runtime=OpenClawRuntime(SkillRegistry(), tool_registry),
+    )
+
+    task = await engine.process_message(Message(content="我c盘空间还剩多少？", user_id="u1", channel="test"))
+
+    assert task.state == TaskState.COMPLETED
+    assert task.intent is not None
+    assert task.intent.intent == "check_disk_space"
+    step_id = task.plan.steps[0].id
+    assert task.result.data[step_id]["path"] == "C:/"
+    assert task.result.data[step_id]["free"] == "400 GB"
+    assert task.result.data[step_id]["free_percent"] == 40.0
 
 
 @pytest.mark.asyncio
@@ -498,6 +696,70 @@ async def test_engine_blocks_post_install_protected_tool():
     assert task.state == TaskState.FAILED
     assert task.error is not None
     assert "blocked by post-install protection" in task.error
+
+
+@pytest.mark.asyncio
+async def test_engine_allows_bundled_catalog_skill_even_with_legacy_guard():
+    """Bundled catalog installs should not be blocked by legacy third-party guard metadata."""
+
+    class BundledSkillParser:
+        async def parse(self, message):
+            return Intent(intent="skill.repo.fs", params={"action": "list", "path": "."})
+
+    class MockFileListTool(Tool):
+        name = "file_list"
+        description = "Mock file list tool"
+        inputs = {"path": "string"}
+        outputs = {"directories": "list", "files": "list"}
+
+        async def execute(self, path: str = ".", **kwargs):
+            return ExecutionResult.success(data={"path": path, "directories": ["src"], "files": ["README.md"]})
+
+    registry = SkillRegistry()
+    skill = create_skill_from_dict(
+        {
+            "name": "repo.fs",
+            "description": "Bundled repo fs helper",
+            "type": "workflow",
+            "inputs": {"action": "string", "path": "string"},
+            "actions": [
+                {
+                    "type": "tool_call",
+                    "tool": "file_list",
+                    "condition": "{{action == 'list'}}",
+                    "params": {"path": "{{path}}"},
+                }
+            ],
+            "metadata": {
+                "catalog_source": "bundled",
+                "localclaw_guard": {
+                    "mode": "disable_high_risk",
+                    "blocked_tools": ["file_list"],
+                    "approval_required_tools": [],
+                },
+            },
+        }
+    )
+    skill.enable()
+    registry.register(skill)
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(MockFileListTool())
+
+    engine = ExecutionEngine(
+        settings=Settings(_env_file=None, llm_enabled=False, llm_parse_only=False),
+        parser=BundledSkillParser(),
+        planner=create_default_planner(),
+        verifier=create_default_verifier(settings=Settings(_env_file=None), skill_registry=registry),
+        tool_registry=tool_registry,
+        skill_registry=registry,
+    )
+
+    task = await engine.process_message(Message(content="list repo", user_id="u1", channel="test"))
+
+    assert task.state == TaskState.COMPLETED
+    step_id = next(iter(task.result.data.keys()))
+    assert task.result.data[step_id]["directories"] == ["src"]
 
 
 @pytest.mark.asyncio

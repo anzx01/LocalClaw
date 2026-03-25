@@ -96,6 +96,8 @@ class PermissionVerifier(VerifierBackend):
 
         definition = skill.get_definition() if hasattr(skill, "get_definition") else None
         metadata = definition.metadata if definition is not None else {}
+        if str(metadata.get("catalog_source") or "").strip().lower() == "bundled":
+            return {}
         guard = metadata.get("localclaw_guard", {})
         return dict(guard) if isinstance(guard, dict) else {}
     

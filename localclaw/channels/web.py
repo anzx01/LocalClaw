@@ -1308,6 +1308,9 @@ def get_web_ui_html() -> str:
                         }
                     } catch (e) {
                         console.error('Failed to search ClawHub:', e);
+                        if (e.response && e.response.status === 429) {
+                            console.warn('ClawHub rate limit exceeded, using fallback skills');
+                        }
                         this.availableSkills = _FALLBACK_SKILLS;
                     }
                 },

@@ -107,6 +107,44 @@ def test_format_task_for_chat_weather_forecast():
     assert "降雨概率：82%" in reply
 
 
+def test_format_task_for_chat_weather_prefers_requested_location():
+    """Weather replies should prefer the queried location over wttr.in's nearest-area alias."""
+
+    from localclaw.channels.result_formatter import format_task_for_chat
+
+    task = Task(
+        state=TaskState.COMPLETED,
+        message=Message(content="明天西安天气？", user_id="web", channel="web"),
+        intent=Intent(
+            intent="check_weather",
+            params={"location": "西安", "day_offset": 1, "day_label": "明天"},
+            raw_message="明天西安天气？",
+        ),
+    )
+    task.result = ExecutionResult.success(
+        message="Task completed successfully",
+        data={
+            "step-weather": {
+                "status_code": 200,
+                "body": {
+                    **_sample_weather_body(),
+                    "nearest_area": [
+                        {
+                            "areaName": [{"value": "Guodu"}],
+                            "country": [{"value": "China"}],
+                        }
+                    ],
+                },
+            }
+        },
+    )
+
+    reply = format_task_for_chat(task)
+
+    assert "地点：西安" in reply
+    assert "Guodu" not in reply
+
+
 def test_format_task_for_chat_rss_headlines():
     """RSS headline responses should become a readable news list."""
 
@@ -171,6 +209,44 @@ def test_format_task_for_chat_desktop_folders_only():
     assert "- Projects" in reply
     assert "Files:" not in reply
     assert "todo.txt" not in reply
+
+
+def test_format_task_for_chat_disk_usage():
+    """Disk-usage tool output should become a readable storage summary."""
+
+    from localclaw.channels.result_formatter import format_task_for_chat
+
+    task = Task(
+        state=TaskState.COMPLETED,
+        message=Message(content="我c盘空间还剩多少？", user_id="web", channel="web"),
+        intent=Intent(
+            intent="check_disk_space",
+            params={"path": "C:/", "drive": "C"},
+            raw_message="我c盘空间还剩多少？",
+        ),
+    )
+    task.result = ExecutionResult.success(
+        message="Task completed successfully",
+        data={
+            "step-disk": {
+                "path": "C:/",
+                "free_bytes": 400,
+                "total_bytes": 1000,
+                "used_bytes": 600,
+                "free": "400 GB",
+                "used": "600 GB",
+                "total": "1.0 TB",
+                "free_percent": 40.0,
+                "used_percent": 60.0,
+            }
+        },
+    )
+
+    reply = format_task_for_chat(task)
+
+    assert "Path: C:/" in reply
+    assert "Free: 400 GB (40.0%)" in reply
+    assert "Total: 1.0 TB" in reply
 
 
 def test_api_message_returns_formatted_weather_reply(monkeypatch):
