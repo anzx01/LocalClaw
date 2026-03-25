@@ -83,6 +83,8 @@
         .ghost-btn:hover { background: #f8fbff; }
         .hint { font-size: 12px; color: #667085; }
         .empty-state { padding: 28px 16px; text-align: center; color: #667085; }
+        .empty-state-title { display: block; margin-bottom: 8px; font-weight: 700; color: #344054; }
+        .empty-state-note { margin-top: 6px; color: #667085; line-height: 1.5; }
         .channel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
         .channel-card { border: 1px solid #e3ebf5; border-radius: 16px; padding: 18px; background: linear-gradient(180deg, #fff, #f8fbff); box-shadow: 0 8px 24px rgba(15,23,42,0.04); }
         .channel-header { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 12px; }
@@ -120,6 +122,8 @@
         .test-form textarea { min-height: 92px; resize: vertical; }
         .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
         .result-note { font-size: 12px; color: #667085; }
+        .result-ok { color: #0f8a4f; font-weight: 700; }
+        .result-error { color: #b42318; font-weight: 700; }
         .skill-note { margin-top: 8px; color: #667085; font-size: 13px; line-height: 1.5; }
         .skills-shell { display: grid; gap: 18px; }
         .skills-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
@@ -197,10 +201,10 @@
         
         <div class="tabs">
             <div class="tab" :class="{active: activeTab === 'chat'}" @click="activeTab = 'chat'">Chat</div>
-            <div class="tab" :class="{active: activeTab === 'tasks'}" @click="activeTab = 'tasks'">Tasks</div>
             <div class="tab" :class="{active: activeTab === 'approvals'}" @click="activeTab = 'approvals'">Approvals</div>
             <div class="tab" :class="{active: activeTab === 'skills'}" @click="activeTab = 'skills'">Skills</div>
             <div class="tab" :class="{active: activeTab === 'channels'}" @click="activeTab = 'channels'">Channels</div>
+            <div class="tab" :class="{active: activeTab === 'settings'}" @click="activeTab = 'settings'">Settings</div>
         </div>
         
         <div class="tab-content" x-show="activeTab === 'chat'">
@@ -272,38 +276,6 @@
             </div>
         </div>
         
-        <div class="tab-content" x-show="activeTab === 'tasks'">
-            <div class="section-header">
-                <div>
-                    <h2>Task History</h2>
-                    <p>Review recent executions, failures, and tool output snapshots.</p>
-                </div>
-                <div class="toolbar">
-                    <button class="ghost-btn" @click="loadTasks()">Refresh</button>
-                </div>
-            </div>
-            <div class="task-list">
-                <template x-if="tasks.length === 0">
-                    <div class="empty-state">No tasks yet.</div>
-                </template>
-                <template x-for="task in tasks" :key="task.id">
-                    <div class="task">
-                        <h4 x-text="'Task ' + task.id"></h4>
-                        <p><strong>Status:</strong> <span class="task-status" :class="task.state.toLowerCase()" x-text="task.state"></span></p>
-                        <p><strong>Prompt:</strong> <span x-text="task.message || 'N/A'"></span></p>
-                        <p><strong>Channel:</strong> <span x-text="task.channel || 'N/A'"></span></p>
-                        <p><strong>Created:</strong> <span x-text="new Date(task.created_at).toLocaleString()"></span></p>
-                        <p><strong>Completed:</strong> <span x-text="task.completed_at ? new Date(task.completed_at).toLocaleString() : 'N/A'"></span></p>
-                        <template x-if="task.current_step">
-                            <p><strong>Current Step:</strong> <span x-text="task.current_step.tool_name || task.current_step.name || task.current_step.id"></span></p>
-                        </template>
-                        <p><strong>Result:</strong> <span x-text="JSON.stringify(task.result)"></span></p>
-                        <p><strong>Error:</strong> <span x-text="task.error || 'N/A'"></span></p>
-                    </div>
-                </template>
-            </div>
-        </div>
-
         <div class="tab-content" x-show="activeTab === 'approvals'">
             <div class="section-header">
                 <div>
@@ -321,7 +293,11 @@
 
             <div class="approval-list">
                 <template x-if="approvals.length === 0">
-                    <div class="empty-state">No pending approvals.</div>
+                    <div class="empty-state">
+                        <span class="empty-state-title">No pending approvals.</span>
+                        <p class="empty-state-note">This page is only used when a request contains a high-risk action, such as raw <code>/shell</code> commands, browser automation, or protected operations.</p>
+                        <p class="empty-state-note">For routine commands, use <code>/cmd ...</code> in Chat and they usually run without manual approval.</p>
+                    </div>
                 </template>
                 <template x-for="approval in approvals" :key="approval.task_id + ':' + approval.step.id">
                     <div class="approval-card">
@@ -575,7 +551,7 @@
             <div class="section-header">
                 <div>
                     <h2>Channel Configuration</h2>
-                    <p>Connect personal WeChat bridges and WhatsApp Cloud API with the exact webhook paths, readiness checks, and sample requests below.</p>
+                    <p>Connect Personal WeChat bridges, Weixin webhook bots, and WhatsApp Cloud API with exact webhook paths, readiness checks, and sample requests below.</p>
                 </div>
                 <div class="toolbar">
                     <button class="ghost-btn" @click="loadChannels()">Refresh</button>
@@ -673,6 +649,29 @@
                         <div class="channel-block">
                             <h4>Connectivity Test</h4>
                             <div class="test-form">
+                                <template x-if="channel.key === 'weixin'">
+                                    <div class="test-form">
+                                        <div class="form-grid">
+                                            <label>
+                                                Recipient (to_user_id)
+                                                <input type="text" x-model="channelTests.weixin.recipient" placeholder="alice@im.wechat">
+                                            </label>
+                                            <label>
+                                                Account ID
+                                                <input type="text" x-model="channelTests.weixin.account_id" placeholder="Optional">
+                                            </label>
+                                        </div>
+                                        <label>
+                                            Context Token
+                                            <input type="text" x-model="channelTests.weixin.context_token" placeholder="Optional if cached from inbound">
+                                        </label>
+                                        <label>
+                                            Test Message
+                                            <textarea x-model="channelTests.weixin.text" placeholder="LocalClaw connectivity test"></textarea>
+                                        </label>
+                                    </div>
+                                </template>
+
                                 <template x-if="channel.key === 'wechat_personal'">
                                     <div class="test-form">
                                         <div class="form-grid">
@@ -731,6 +730,69 @@
                             </ul>
                         </div>
                     </div>
+                </template>
+            </div>
+        </div>
+
+        <div class="tab-content" x-show="activeTab === 'settings'">
+            <div class="section-header">
+                <div>
+                    <h2>System Settings</h2>
+                    <p>Install LocalClaw as a Windows background service so it keeps running after you close the terminal.</p>
+                </div>
+                <div class="toolbar">
+                    <button class="ghost-btn" @click="loadServiceStatus()">Refresh</button>
+                </div>
+            </div>
+
+            <template x-if="serviceLoadError">
+                <div class="notice" x-text="serviceLoadError"></div>
+            </template>
+
+            <div class="channel-card">
+                <div class="channel-header">
+                    <div>
+                        <h3 x-text="(serviceStatus && serviceStatus.display_name) ? serviceStatus.display_name : 'LocalClaw Background Service'"></h3>
+                        <p class="channel-summary">Use this when you want LocalClaw to auto-start and keep serving at <code>127.0.0.1:8016</code>.</p>
+                    </div>
+                    <div class="toolbar">
+                        <span class="pill" :class="serviceStatus && serviceStatus.installed ? 'enabled' : 'disabled'" x-text="serviceStatus && serviceStatus.installed ? 'Installed' : 'Not Installed'"></span>
+                        <span class="pill mode" x-text="serviceStatus ? serviceStatus.state : 'Unknown'"></span>
+                    </div>
+                </div>
+
+                <div class="channel-block">
+                    <h4>Service Status</h4>
+                    <ul class="channel-list">
+                        <li><span>Service Name</span><code x-text="serviceStatus ? serviceStatus.service_name : 'LocalClaw'"></code></li>
+                        <li><span>Running</span><span class="pill" :class="serviceStatus && serviceStatus.running ? 'enabled' : 'disabled'" x-text="serviceStatus && serviceStatus.running ? 'Running' : 'Stopped'"></span></li>
+                        <li><span>Startup Type</span><span x-text="serviceStatus ? serviceStatus.startup_type : 'UNKNOWN'"></span></li>
+                        <li><span>Admin Permission</span><span class="pill" :class="serviceStatus && serviceStatus.can_manage ? 'enabled' : 'disabled'" x-text="serviceStatus && serviceStatus.can_manage ? 'Granted' : 'Required'"></span></li>
+                    </ul>
+                </div>
+
+                <div class="channel-block">
+                    <h4>Runtime Command</h4>
+                    <div class="code-block" x-text="serviceStatus && serviceStatus.command ? serviceStatus.command : 'N/A'"></div>
+                    <button class="mini-btn" @click="copyText(serviceStatus && serviceStatus.command ? serviceStatus.command : '')">Copy Command</button>
+                </div>
+
+                <template x-if="serviceStatus && serviceStatus.message">
+                    <div class="channel-block">
+                        <h4>System Note</h4>
+                        <div class="code-block" x-text="serviceStatus.message"></div>
+                    </div>
+                </template>
+
+                <div class="approval-actions">
+                    <button class="primary-btn" @click="runServiceAction('install')" :disabled="serviceActionLoading === 'install' || !serviceStatus || !serviceStatus.supported || !serviceStatus.can_manage" x-text="serviceActionLoading === 'install' ? 'Installing...' : 'Install Service'"></button>
+                    <button class="primary-btn" @click="runServiceAction('start')" :disabled="serviceActionLoading === 'start' || !serviceStatus || !serviceStatus.installed || !serviceStatus.can_manage || serviceStatus.running" x-text="serviceActionLoading === 'start' ? 'Starting...' : 'Start'"></button>
+                    <button class="secondary-btn" @click="runServiceAction('stop')" :disabled="serviceActionLoading === 'stop' || !serviceStatus || !serviceStatus.installed || !serviceStatus.can_manage || !serviceStatus.running" x-text="serviceActionLoading === 'stop' ? 'Stopping...' : 'Stop'"></button>
+                    <button class="danger-btn" @click="runServiceAction('uninstall')" :disabled="serviceActionLoading === 'uninstall' || !serviceStatus || !serviceStatus.installed || !serviceStatus.can_manage" x-text="serviceActionLoading === 'uninstall' ? 'Removing...' : 'Uninstall'"></button>
+                </div>
+
+                <template x-if="serviceActionMessage">
+                    <p class="result-note" :class="serviceActionError ? 'result-error' : 'result-ok'" x-text="serviceActionMessage"></p>
                 </template>
             </div>
         </div>
@@ -854,9 +916,15 @@
                 skillSearchQuery: '',
                 skillSourceFilter: 'all',
                 tasks: [],
+                chatTaskIds: {},
                 approvals: [],
                 config: {},
                 channels: [],
+                serviceStatus: null,
+                serviceLoadError: '',
+                serviceActionLoading: '',
+                serviceActionMessage: '',
+                serviceActionError: false,
                 approvalLoadError: '',
                 channelLoadError: '',
                 copyStatus: '',
@@ -868,6 +936,12 @@
                 installReview: null,
                 installReviewError: '',
                 channelTests: {
+                    weixin: {
+                        recipient: '',
+                        account_id: '',
+                        context_token: '',
+                        text: 'LocalClaw connectivity test'
+                    },
                     wechat_personal: {
                         reply_target: '',
                         sender_id: '',
@@ -885,17 +959,23 @@
                 async init() {
                     await this.loadConfig();
                     await this.refreshSkillCatalog();
-                    await this.loadTasks();
+                    await this.loadTasks({ syncChatHistory: true });
                     await this.loadApprovals();
                     await this.loadChannels();
+                    await this.loadServiceStatus();
                     
                     setInterval(() => {
                         if (this.activeTab === 'skills') {
                             this.refreshSkillCatalog({ showLoading: false });
                         }
-                        this.loadTasks();
+                        if (!this.loading) {
+                            this.loadTasks({ syncChatHistory: true });
+                        }
                         this.loadApprovals();
                         this.loadChannels();
+                        if (this.activeTab === 'settings') {
+                            this.loadServiceStatus();
+                        }
                     }, 5000);
                 },
 
@@ -934,7 +1014,9 @@
                         time: options.time || this.formatMessageTime(),
                         title: options.title || '',
                         content: resolvedContent,
-                        blocks: blocks.length ? blocks : [{ type: 'paragraph', text: resolvedContent || 'No output' }]
+                        blocks: blocks.length ? blocks : [{ type: 'paragraph', text: resolvedContent || 'No output' }],
+                        taskId: options.taskId || '',
+                        source: options.source || 'live'
                     };
                 },
 
@@ -1221,6 +1303,84 @@
                             blocks: structured.blocks
                         }
                     );
+                },
+
+                getTaskDisplayText(task) {
+                    if (!task || typeof task !== 'object') {
+                        return 'Done';
+                    }
+                    if (task.error) {
+                        return String(task.error);
+                    }
+
+                    const result = task.result;
+                    if (result && typeof result === 'object') {
+                        if (typeof result.result === 'string' && result.result.trim()) {
+                            return result.result.trim();
+                        }
+                        if (typeof result.message === 'string' && result.message.trim()) {
+                            return result.message.trim();
+                        }
+
+                        const primary = this.extractPrimaryStepResult(result);
+                        if (primary && typeof primary === 'object') {
+                            if (typeof primary.result === 'string' && primary.result.trim()) {
+                                return primary.result.trim();
+                            }
+                            if (typeof primary.message === 'string' && primary.message.trim()) {
+                                return primary.message.trim();
+                            }
+                        }
+                    }
+
+                    return task.state === 'failed' ? 'Task failed.' : 'Done';
+                },
+
+                syncChatHistoryFromTasks(tasks) {
+                    const orderedTasks = Array.isArray(tasks)
+                        ? [...tasks].sort((left, right) => new Date(left.created_at) - new Date(right.created_at))
+                        : [];
+
+                    const historyMessages = [];
+
+                    orderedTasks.forEach(task => {
+                        if (!task || !task.id || this.chatTaskIds[task.id]) {
+                            return;
+                        }
+
+                        if (task.message && String(task.message).trim()) {
+                            historyMessages.push(
+                                this.createChatMessage('user', String(task.message).trim(), {
+                                    label: 'You',
+                                    time: this.formatMessageTime(task.created_at ? new Date(task.created_at) : new Date()),
+                                    taskId: task.id,
+                                    source: 'history'
+                                })
+                            );
+                        }
+
+                        const apiLikeResponse = {
+                            task_id: task.id,
+                            status: task.state || 'completed',
+                            message: this.getTaskDisplayText(task),
+                            data: task.result || {},
+                            error: task.error || null
+                        };
+                        const systemMessage = this.buildChatMessageFromApi(apiLikeResponse);
+                        systemMessage.time = this.formatMessageTime(
+                            task.completed_at ? new Date(task.completed_at) : (task.created_at ? new Date(task.created_at) : new Date())
+                        );
+                        systemMessage.taskId = task.id;
+                        systemMessage.source = 'history';
+                        historyMessages.push(systemMessage);
+
+                        this.chatTaskIds[task.id] = true;
+                    });
+
+                    if (historyMessages.length) {
+                        this.messages.push(...historyMessages);
+                        this.scrollChatToBottom();
+                    }
                 },
 
                 enabledChannelCount() {
@@ -1511,7 +1671,8 @@
                     const replyModeLabels = {
                         bridge_proxy: 'Bridge proxy',
                         inline_response: 'Inline response',
-                        cloud_api: 'Cloud API'
+                        cloud_api: 'Cloud API',
+                        weixin_api: 'Weixin API'
                     };
 
                     return {
@@ -1544,6 +1705,24 @@
                             '      "fromUser": "wxid_alice",',
                             '      "roomId": "room-1"',
                             '    }',
+                            "  }'"
+                        ].join('\n');
+                    }
+
+                    if (channel.key === 'weixin') {
+                        return [
+                            'curl -X POST ' + channel.webhook_url + ' \\',
+                            '  -H "Content-Type: application/json" \\',
+                            '  -H "x-weixin-webhook-token: <shared-token>" \\',
+                            "  -d '{",
+                            '    "account_id": "main",',
+                            '    "from_user_id": "alice@im.wechat",',
+                            '    "message_id": 42,',
+                            '    "context_token": "ctx-from-weixin",',
+                            '    "item_list": [{',
+                            '      "type": 1,',
+                            '      "text_item": {"text": "执行命令 git status"}',
+                            '    }]',
                             "  }'"
                         ].join('\n');
                     }
@@ -1673,6 +1852,40 @@
                     }
                 },
 
+                async loadServiceStatus() {
+                    try {
+                        const response = await axios.get('/api/system/service');
+                        this.serviceStatus = response.data || null;
+                        this.serviceLoadError = '';
+                    } catch (e) {
+                        console.error('Failed to load service status:', e);
+                        this.serviceLoadError = 'Failed to load service status: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message);
+                    }
+                },
+
+                async runServiceAction(action) {
+                    if (!action || this.serviceActionLoading) {
+                        return;
+                    }
+
+                    this.serviceActionLoading = action;
+                    this.serviceActionMessage = '';
+                    this.serviceActionError = false;
+
+                    try {
+                        const response = await axios.post('/api/system/service/' + action);
+                        const payload = response.data || {};
+                        this.serviceActionMessage = payload.message || 'Action completed.';
+                        this.serviceActionError = !payload.ok;
+                        this.serviceStatus = payload.status || this.serviceStatus;
+                    } catch (e) {
+                        this.serviceActionError = true;
+                        this.serviceActionMessage = 'Service action failed: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message);
+                    } finally {
+                        this.serviceActionLoading = '';
+                    }
+                },
+
                 async loadApprovals() {
                     try {
                         const response = await axios.get('/api/approvals');
@@ -1701,10 +1914,13 @@
                     }
                 },
                 
-                async loadTasks() {
+                async loadTasks(options = {}) {
                     try {
                         const response = await axios.get('/api/tasks');
-                        this.tasks = response.data;
+                        this.tasks = Array.isArray(response.data) ? response.data : [];
+                        if (options.syncChatHistory) {
+                            this.syncChatHistoryFromTasks(this.tasks);
+                        }
                     } catch (e) {
                         console.error('Failed to load tasks:', e);
                     }
@@ -1718,13 +1934,15 @@
                         const response = await axios.post('/api/tasks/' + approval.task_id + '/approve/' + approval.step.id);
                         const task = response.data;
                         await this.loadApprovals();
-                        await this.loadTasks();
+                        await this.loadTasks({ syncChatHistory: true });
 
-                        this.messages.push({
-                            id: Date.now(),
-                            type: task.state === 'failed' ? 'error' : 'system',
-                            content: 'Approved ' + (approval.step.command_preview || approval.step.tool_name || approval.step.id) + '. Task ' + task.id + ' is now ' + task.state + '.'
-                        });
+                        this.messages.push(
+                            this.createChatMessage(
+                                task.state === 'failed' ? 'error' : 'system',
+                                'Approved ' + (approval.step.command_preview || approval.step.tool_name || approval.step.id) + '. Task ' + task.id + ' is now ' + task.state + '.',
+                                { title: 'Approval Updated' }
+                            )
+                        );
                     } catch (e) {
                         alert('Approval failed: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message));
                     } finally {
@@ -1862,9 +2080,12 @@
                         }
 
                         this.messages.push(this.buildChatMessageFromApi(data));
+                        if (data.task_id) {
+                            this.chatTaskIds[data.task_id] = true;
+                        }
                         this.scrollChatToBottom();
 
-                        await this.loadTasks();
+                        await this.loadTasks({ syncChatHistory: true });
                     } catch (e) {
                         this.messages.push(
                             this.createChatMessage(

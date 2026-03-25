@@ -1,5 +1,6 @@
 """OpenAI-compatible local LLM provider."""
 
+import time
 from typing import Dict, List, Optional
 
 import httpx
@@ -13,6 +14,9 @@ class OpenAICompatibleProvider(LLMProvider):
     def __init__(self, config: LLMConfig) -> None:
         super().__init__(config)
         self._base_url = self._normalize_base_url(config.base_url)
+        self._availability_cache_seconds: float = 3.0
+        self._availability_cache_until: float = 0.0
+        self._availability_cached_value: bool = False
 
     @staticmethod
     def _normalize_base_url(base_url: Optional[str]) -> str:
@@ -26,6 +30,12 @@ class OpenAICompatibleProvider(LLMProvider):
         if self._config.api_key:
             headers["Authorization"] = f"Bearer {self._config.api_key}"
         return headers
+
+    def _cache_availability(self, value: bool) -> bool:
+        """Cache endpoint availability for a short duration to reduce ping overhead."""
+        self._availability_cached_value = value
+        self._availability_cache_until = time.monotonic() + self._availability_cache_seconds
+        return value
 
     async def generate(
         self,
@@ -84,12 +94,15 @@ class OpenAICompatibleProvider(LLMProvider):
 
     async def is_available(self) -> bool:
         """Check whether the local endpoint is reachable."""
+        if time.monotonic() < self._availability_cache_until:
+            return self._availability_cached_value
+
         try:
             async with httpx.AsyncClient(timeout=min(self._config.timeout, 5.0)) as client:
                 response = await client.get(
                     f"{self._base_url}/models",
                     headers=self._build_headers(),
                 )
-            return response.status_code == 200
+            return self._cache_availability(response.status_code == 200)
         except Exception:
-            return False
+            return self._cache_availability(False)

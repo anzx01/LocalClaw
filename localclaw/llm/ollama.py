@@ -1,6 +1,7 @@
 """Ollama LLM client integration."""
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -43,6 +44,9 @@ class OllamaClient(LLMProvider):
         self._ollama_config = config or OllamaConfig()
         self._ollama_config.base_url = self._ollama_config.base_url.rstrip("/")
         self._session: Optional[aiohttp.ClientSession] = None
+        self._availability_cache_seconds: float = 3.0
+        self._availability_cache_until: float = 0.0
+        self._availability_cached_value: bool = False
 
     @staticmethod
     def _is_vision_or_multimodal_model(model_name: str) -> bool:
@@ -123,6 +127,13 @@ class OllamaClient(LLMProvider):
         """Close the HTTP session."""
         if self._session and not self._session.closed:
             await self._session.close()
+        self._availability_cache_until = 0.0
+
+    def _cache_availability(self, value: bool) -> bool:
+        """Cache endpoint availability for a short duration to avoid repeated probes."""
+        self._availability_cached_value = value
+        self._availability_cache_until = time.monotonic() + self._availability_cache_seconds
+        return value
     
     async def generate(
         self,
@@ -238,14 +249,17 @@ class OllamaClient(LLMProvider):
     
     async def is_available(self) -> bool:
         """Check if Ollama is available."""
+        if time.monotonic() < self._availability_cache_until:
+            return self._availability_cached_value
+
         try:
+            session = await self._get_session()
             url = f"{self._ollama_config.base_url}/api/tags"
             timeout = aiohttp.ClientTimeout(total=min(self._ollama_config.timeout, 5.0))
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url) as response:
-                    return response.status == 200
+            async with session.get(url, timeout=timeout) as response:
+                return self._cache_availability(response.status == 200)
         except Exception:
-            return False
+            return self._cache_availability(False)
 
     async def list_models(self) -> List[Dict[str, Any]]:
         """List available models."""

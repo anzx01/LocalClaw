@@ -19,6 +19,13 @@ from localclaw.core.models import ExecutionResult, Message, Step, Task, TaskStat
 from localclaw.llm.provider import initialize_llm_provider
 from localclaw.security.audit import configure_audit_logger
 from localclaw.skills.loader import load_skills_from_settings
+from localclaw.system.windows_service import (
+    get_background_service_status,
+    install_background_service,
+    start_background_service,
+    stop_background_service,
+    uninstall_background_service,
+)
 from localclaw.tools.base import Tool, get_tool_registry
 from localclaw.tools.file_tool import register_file_tools
 from localclaw.tools.http_tool import register_http_tools
@@ -42,6 +49,18 @@ from localclaw.channels.whatsapp import (
     is_valid_whatsapp_verify_token,
     normalize_whatsapp_webhook_payload,
     send_whatsapp_text_reply,
+)
+from localclaw.channels.weixin import (
+    WeixinEnvelope,
+    build_weixin_message,
+    format_task_for_weixin,
+    get_cached_weixin_context_token,
+    is_allowed_weixin_sender,
+    is_valid_weixin_webhook_token,
+    normalize_weixin_webhook_payload,
+    provided_weixin_webhook_token,
+    resolve_weixin_context_token,
+    send_weixin_text_reply,
 )
 from localclaw.channels.result_formatter import format_task_for_chat
 
@@ -154,6 +173,17 @@ class WhatsAppWebhookResponse(BaseModel):
     outbound_delivery: Optional[Dict[str, Any]] = None
 
 
+class WeixinWebhookResponse(BaseModel):
+    """Response model for the Weixin webhook bridge."""
+
+    accepted: bool
+    event_type: str
+    task_id: Optional[str] = None
+    status: Optional[str] = None
+    reply: Optional[Dict[str, Any]] = None
+    outbound_delivery: Optional[Dict[str, Any]] = None
+
+
 class ChannelsOverviewResponse(BaseModel):
     """Aggregated channel metadata used by the Web UI."""
 
@@ -181,6 +211,15 @@ class WhatsAppTestRequest(BaseModel):
     text: str = "LocalClaw connectivity test"
 
 
+class WeixinTestRequest(BaseModel):
+    """Manual connectivity test request for the Weixin channel."""
+
+    recipient: Optional[str] = None
+    account_id: Optional[str] = None
+    context_token: Optional[str] = None
+    text: str = "LocalClaw connectivity test"
+
+
 class ChannelTestResponse(BaseModel):
     """Structured result for manual channel tests."""
 
@@ -202,6 +241,35 @@ class SkillInstallResponse(BaseModel):
     error: Optional[str] = None
     scan: Optional[SkillSecurityReviewResponse] = None
     guard: Optional[Dict[str, Any]] = None
+
+
+class BackgroundServiceStatusResponse(BaseModel):
+    """Status payload for LocalClaw background service management."""
+
+    supported: bool
+    platform: str
+    service_name: str
+    display_name: str
+    installed: bool
+    state: str
+    running: bool
+    startup_type: str
+    binary_path: str
+    can_manage: bool
+    python_executable: str
+    script_path: str
+    command: str
+    message: str = ""
+
+
+class BackgroundServiceActionResponse(BaseModel):
+    """Action response for service install/start/stop/uninstall operations."""
+
+    ok: bool
+    action: str
+    changed: bool
+    message: str
+    status: BackgroundServiceStatusResponse
 
 
 class ConnectionManager:
@@ -230,6 +298,17 @@ class ConnectionManager:
 
 
 _manager = ConnectionManager()
+
+
+def _normalize_path(path: str, fallback: str) -> str:
+    """Normalize API path-style strings and ensure a leading slash."""
+
+    cleaned = (path or "").strip()
+    if not cleaned:
+        cleaned = fallback
+    if not cleaned.startswith("/"):
+        cleaned = f"/{cleaned}"
+    return cleaned
 
 
 def _serialize_step(step: Optional[Step]) -> Optional[Dict[str, Any]]:
@@ -687,6 +766,11 @@ def create_app() -> FastAPI:
             "wechat_personal_enabled": settings.wechat_personal_enabled,
             "wechat_personal_reply_via_proxy": settings.wechat_personal_reply_via_proxy,
             "wechat_personal_has_proxy_url": bool(settings.wechat_personal_proxy_url),
+            "weixin_enabled": settings.weixin_enabled,
+            "weixin_webhook_path": _normalize_path(settings.weixin_webhook_path, "/weixin/messages"),
+            "weixin_reply_via_api": settings.weixin_reply_via_api,
+            "weixin_has_webhook_token": bool(settings.weixin_webhook_token),
+            "weixin_has_bot_token": bool(settings.weixin_bot_token),
             "whatsapp_enabled": settings.whatsapp_enabled,
             "whatsapp_reply_via_cloud_api": settings.whatsapp_reply_via_cloud_api,
             "whatsapp_has_phone_number_id": bool(settings.whatsapp_phone_number_id),
@@ -694,6 +778,36 @@ def create_app() -> FastAPI:
             "skill_isolation_require_approval": settings.skill_isolation_require_approval,
             "skill_isolation_block_critical": settings.skill_isolation_block_critical,
         }
+
+    @app.get("/api/system/service", response_model=BackgroundServiceStatusResponse)
+    async def get_system_service_status():
+        """Return LocalClaw background-service status for the Settings UI."""
+
+        return get_background_service_status()
+
+    @app.post("/api/system/service/install", response_model=BackgroundServiceActionResponse)
+    async def install_system_service():
+        """Install LocalClaw as a Windows background service."""
+
+        return install_background_service()
+
+    @app.post("/api/system/service/start", response_model=BackgroundServiceActionResponse)
+    async def start_system_service():
+        """Start the LocalClaw Windows service."""
+
+        return start_background_service()
+
+    @app.post("/api/system/service/stop", response_model=BackgroundServiceActionResponse)
+    async def stop_system_service():
+        """Stop the LocalClaw Windows service."""
+
+        return stop_background_service()
+
+    @app.post("/api/system/service/uninstall", response_model=BackgroundServiceActionResponse)
+    async def uninstall_system_service():
+        """Uninstall the LocalClaw Windows service."""
+
+        return uninstall_background_service()
 
     @app.get("/api/channels/wechat-personal/status")
     async def get_personal_wechat_status():
@@ -705,6 +819,20 @@ def create_app() -> FastAPI:
             "has_inbound_token": bool(settings.wechat_personal_inbound_token),
             "has_proxy_url": bool(settings.wechat_personal_proxy_url),
             "has_api_key": bool(settings.wechat_personal_api_key),
+        }
+
+    @app.get("/api/channels/weixin/status")
+    async def get_weixin_status():
+        """Return status information for the Weixin webhook channel."""
+        settings = get_settings()
+        return {
+            "enabled": settings.weixin_enabled,
+            "reply_via_api": settings.weixin_reply_via_api,
+            "webhook_path": _normalize_path(settings.weixin_webhook_path, "/weixin/messages"),
+            "has_webhook_token": bool(settings.weixin_webhook_token),
+            "has_bot_token": bool(settings.weixin_bot_token),
+            "has_allowed_user_ids": bool((settings.weixin_allowed_user_ids or "").strip()),
+            "base_url": settings.weixin_base_url,
         }
 
     @app.get("/api/channels/whatsapp/status")
@@ -788,6 +916,86 @@ def create_app() -> FastAPI:
             ok=ok,
             mode="live",
             channel="wechat_personal",
+            summary=summary,
+            request=request_preview,
+            delivery=delivery,
+        )
+
+    @app.post("/api/channels/weixin/test", response_model=ChannelTestResponse)
+    async def test_weixin_channel(request: WeixinTestRequest):
+        """Run a manual connectivity test against the Weixin outbound API."""
+
+        settings = get_settings()
+        recipient = (request.recipient or "").strip()
+        account_id = (request.account_id or "").strip()
+        provided_context_token = (request.context_token or "").strip()
+        cached_context_token = (
+            get_cached_weixin_context_token(account_id, recipient) if recipient else None
+        )
+        resolved_context_token = provided_context_token or (cached_context_token or "")
+        request_preview = {
+            "recipient": recipient,
+            "account_id": account_id,
+            "context_token_source": (
+                "provided"
+                if provided_context_token
+                else ("cache" if cached_context_token else "missing")
+            ),
+            "text": request.text,
+        }
+
+        missing: List[str] = []
+        if not settings.weixin_enabled:
+            missing.append("LOCALCLAW_WEIXIN_ENABLED")
+        if not settings.weixin_reply_via_api:
+            missing.append("LOCALCLAW_WEIXIN_REPLY_VIA_API")
+        if not settings.weixin_bot_token:
+            missing.append("LOCALCLAW_WEIXIN_BOT_TOKEN")
+        if not recipient:
+            missing.append("recipient")
+        if not resolved_context_token:
+            missing.append("context_token")
+
+        if missing:
+            return ChannelTestResponse(
+                ok=True,
+                mode="dry_run",
+                channel="weixin",
+                summary=(
+                    "Dry run only. Provide outbound API credentials, recipient, and context_token "
+                    "or trigger an inbound message first so LocalClaw can cache it."
+                ),
+                request=request_preview,
+                missing=missing,
+            )
+
+        envelope = WeixinEnvelope(
+            content=request.text,
+            sender_id=recipient,
+            account_id=account_id,
+            message_id="",
+            timestamp_ms=None,
+            timestamp=None,
+            context_token=provided_context_token,
+            raw_payload={"manual_test": True},
+        )
+        delivery = await send_weixin_text_reply(
+            envelope=envelope,
+            reply_text=request.text,
+            settings=settings,
+            context_token_override=resolved_context_token,
+        )
+        status_code = int((delivery or {}).get("status_code", 0))
+        ok = 200 <= status_code < 300
+        summary = (
+            f"Live Weixin test delivered with HTTP {status_code}."
+            if ok
+            else f"Weixin API returned HTTP {status_code or 'unknown'}."
+        )
+        return ChannelTestResponse(
+            ok=ok,
+            mode="live",
+            channel="weixin",
             summary=summary,
             request=request_preview,
             delivery=delivery,
@@ -904,6 +1112,42 @@ def create_app() -> FastAPI:
                     ],
                 },
                 {
+                    "key": "weixin",
+                    "name": "Weixin",
+                    "kind": "official",
+                    "enabled": settings.weixin_enabled,
+                    "reply_mode": (
+                        "weixin_api"
+                        if settings.weixin_reply_via_api
+                        else "inline_response"
+                    ),
+                    "webhook_path": _normalize_path(settings.weixin_webhook_path, "/weixin/messages"),
+                    "status_path": "/api/channels/weixin/status",
+                    "test_path": "/api/channels/weixin/test",
+                    "required_env": [
+                        "LOCALCLAW_WEIXIN_ENABLED",
+                    ],
+                    "optional_env": [
+                        "LOCALCLAW_WEIXIN_WEBHOOK_PATH",
+                        "LOCALCLAW_WEIXIN_WEBHOOK_TOKEN",
+                        "LOCALCLAW_WEIXIN_ALLOWED_USER_IDS",
+                        "LOCALCLAW_WEIXIN_BASE_URL",
+                        "LOCALCLAW_WEIXIN_BOT_TOKEN",
+                        "LOCALCLAW_WEIXIN_REPLY_VIA_API",
+                    ],
+                    "checks": {
+                        "has_webhook_token": bool(settings.weixin_webhook_token),
+                        "has_bot_token": bool(settings.weixin_bot_token),
+                        "has_allowed_user_ids": bool((settings.weixin_allowed_user_ids or "").strip()),
+                    },
+                    "summary": "Weixin inbound webhook channel with optional outbound ilink API replies.",
+                    "notes": [
+                        "Webhook token can be sent via x-weixin-webhook-token or Authorization: Bearer.",
+                        "Inbound payload supports both top-level fields and nested message objects.",
+                        "Outbound API replies require a context_token from the latest inbound message.",
+                    ],
+                },
+                {
                     "key": "whatsapp",
                     "name": "WhatsApp Cloud API",
                     "kind": "official",
@@ -1007,6 +1251,79 @@ def create_app() -> FastAPI:
                 "reply_to_message_id": envelope.message_id,
             },
             outbound_delivery=outbound_delivery,
+        )
+
+    async def weixin_webhook(payload: Dict[str, Any], request: Request) -> WeixinWebhookResponse:
+        """Receive inbound Weixin webhook messages."""
+        settings = get_settings()
+        if not settings.weixin_enabled:
+            raise HTTPException(status_code=503, detail="Weixin channel is disabled")
+
+        provided_token = provided_weixin_webhook_token(request.headers)
+        if not is_valid_weixin_webhook_token(settings.weixin_webhook_token, provided_token):
+            raise HTTPException(status_code=401, detail="Invalid Weixin webhook token")
+
+        try:
+            envelope = normalize_weixin_webhook_payload(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if not is_allowed_weixin_sender(settings.weixin_allowed_user_ids, envelope.sender_id):
+            return WeixinWebhookResponse(
+                accepted=True,
+                event_type="filtered",
+                status="ignored",
+                reply={
+                    "type": "text",
+                    "text": "sender filtered by allowed_user_ids",
+                    "to_user_id": envelope.sender_id,
+                    "account_id": envelope.account_id,
+                },
+            )
+
+        engine = get_engine()
+        task = await engine.process_message(build_weixin_message(envelope))
+        reply_text = format_task_for_weixin(task)
+        outbound_delivery = await send_weixin_text_reply(
+            envelope=envelope,
+            reply_text=reply_text,
+            settings=settings,
+        )
+        resolved_context_token = resolve_weixin_context_token(envelope)
+
+        return WeixinWebhookResponse(
+            accepted=True,
+            event_type="message",
+            task_id=task.id,
+            status=task.state.value,
+            reply={
+                "type": "text",
+                "text": reply_text,
+                "to_user_id": envelope.sender_id,
+                "account_id": envelope.account_id,
+                "context_token": resolved_context_token or "",
+            },
+            outbound_delivery=outbound_delivery,
+        )
+
+    configured_weixin_webhook_path = _normalize_path(
+        get_settings().weixin_webhook_path,
+        "/weixin/messages",
+    )
+    app.add_api_route(
+        configured_weixin_webhook_path,
+        weixin_webhook,
+        methods=["POST"],
+        response_model=WeixinWebhookResponse,
+        name="weixin_webhook_configured",
+    )
+    if configured_weixin_webhook_path != "/api/channels/weixin/webhook":
+        app.add_api_route(
+            "/api/channels/weixin/webhook",
+            weixin_webhook,
+            methods=["POST"],
+            response_model=WeixinWebhookResponse,
+            name="weixin_webhook_debug",
         )
 
     @app.post(

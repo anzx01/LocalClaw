@@ -30,23 +30,16 @@ class OpenClawRuntime:
         self,
         skill_registry: SkillRegistry,
         tool_registry: ToolRegistry,
+        refine_skill_decision: bool = True,
     ) -> None:
         self._skill_registry = skill_registry
         self._tool_registry = tool_registry
+        self._enable_skill_refinement = refine_skill_decision
 
     async def decide(self, message: Message, context: Optional[Context] = None) -> AgentDecision:
         """Return the model's handling decision for a user message."""
 
         del context  # Reserved for future multi-turn skill prompting.
-
-        llm_provider = get_llm_provider()
-        if not await llm_provider.is_available():
-            return AgentDecision(
-                mode=AgentDecisionMode.UNKNOWN,
-                confidence=0.0,
-                source="openclaw_runtime",
-                raw_message=message.content,
-            )
 
         decision = AgentDecision(
             mode=AgentDecisionMode.UNKNOWN,
@@ -54,6 +47,21 @@ class OpenClawRuntime:
             source="openclaw_runtime",
             raw_message=message.content,
         )
+        fast_intent = self._build_basic_intent_guardrail(str(message.content or "").strip())
+        if fast_intent:
+            return AgentDecision(
+                mode=AgentDecisionMode.INTENT,
+                intent_name=fast_intent,
+                params={},
+                confidence=0.99,
+                source="openclaw_runtime_guardrail",
+                raw_message=message.content,
+                rationale="basic_intent_guardrail",
+            )
+
+        llm_provider = get_llm_provider()
+        if not await llm_provider.is_available():
+            return decision
 
         prompts = [
             (self._build_decision_prompt(message), 384),
@@ -79,7 +87,7 @@ class OpenClawRuntime:
         if decision.mode == AgentDecisionMode.SKILL and decision.source == "openclaw_runtime_guardrail":
             return decision
 
-        if decision.mode == AgentDecisionMode.SKILL:
+        if decision.mode == AgentDecisionMode.SKILL and self._enable_skill_refinement:
             refined = await self._refine_skill_decision(decision, message)
             if refined.mode != AgentDecisionMode.UNKNOWN:
                 return refined
@@ -185,11 +193,11 @@ Output one JSON object with exactly one mode:
 - {{"mode":"intent","intent":"help","params":{{...}}}}
 
 <available_skills>
-{self._build_skill_catalog()}
+{self._build_skill_catalog(compact=True)}
 </available_skills>
 
 <available_tools>
-{self._build_tool_catalog()}
+{self._build_tool_catalog(compact=True)}
 </available_tools>
 
 User: {user_request}
@@ -500,6 +508,17 @@ User: {user_request}
         """Override obviously wrong model decisions for deterministic request types."""
 
         request = str(message.content or "").strip()
+        basic_intent = self._build_basic_intent_guardrail(request)
+        if basic_intent and decision.mode not in {AgentDecisionMode.SKILL, AgentDecisionMode.TOOL}:
+            return AgentDecision(
+                mode=AgentDecisionMode.INTENT,
+                intent_name=basic_intent,
+                params={},
+                confidence=max(decision.confidence, 0.98),
+                source="openclaw_runtime_guardrail",
+                raw_message=message.content,
+                rationale="basic_intent_guardrail",
+            )
 
         desktop_listing_params = self._build_desktop_listing_intent_params(request)
         if desktop_listing_params:
@@ -621,6 +640,30 @@ User: {user_request}
             )
 
         return decision
+
+    def _build_basic_intent_guardrail(self, request: str) -> Optional[str]:
+        """Detect obvious greeting/help requests without invoking the model."""
+
+        normalized = self._normalize_request_text(request)
+        if not normalized or normalized.startswith("/"):
+            return None
+
+        if re.fullmatch(r"(?:hi+|hello+|hey+|你好+|您好+|哈喽+|嗨+|在吗|在么|在嗎)[!,.?\s]*", normalized):
+            return "greeting"
+
+        help_markers = (
+            "help",
+            "你会什么",
+            "你会做什么",
+            "你能做什么",
+            "你可以做什么",
+            "有什么功能",
+            "功能介绍",
+            "怎么用",
+        )
+        if len(normalized) <= 32 and any(marker in normalized for marker in help_markers):
+            return "help"
+        return None
 
     def _select_available_skill(self, *identifiers: str) -> Optional[str]:
         """Return the first model-invocable available skill from the preference list."""

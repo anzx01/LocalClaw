@@ -54,6 +54,13 @@ class Settings(BaseSettings):
         default=True,
         description="Route all user input through the local LLM understanding chain without automatic legacy parser fallback",
     )
+    runtime_refine_skill_decision: bool = Field(
+        default=True,
+        description=(
+            "Whether OpenClaw runtime should run an extra model pass to refine skill params "
+            "after initial skill/tool routing"
+        ),
+    )
 
     bundled_skill_catalog_dir: Path = Field(
         default=PROJECT_ROOT / "bundled_skills",
@@ -122,6 +129,35 @@ class Settings(BaseSettings):
     wechat_personal_reply_via_proxy: bool = Field(
         default=False,
         description="Whether replies should also be posted to the configured bridge proxy URL",
+    )
+
+    weixin_enabled: bool = Field(
+        default=False,
+        description="Enable the Weixin webhook channel",
+    )
+    weixin_webhook_path: str = Field(
+        default="/weixin/messages",
+        description="Inbound webhook path for Weixin messages",
+    )
+    weixin_webhook_token: Optional[str] = Field(
+        default=None,
+        description="Shared secret expected in x-weixin-webhook-token or Authorization: Bearer",
+    )
+    weixin_allowed_user_ids: Optional[str] = Field(
+        default=None,
+        description="Optional CSV allowlist for inbound Weixin sender IDs",
+    )
+    weixin_base_url: str = Field(
+        default="https://ilinkai.weixin.qq.com",
+        description="Base URL for Weixin ilink bot APIs",
+    )
+    weixin_bot_token: Optional[str] = Field(
+        default=None,
+        description="Bearer token used for outbound Weixin replies",
+    )
+    weixin_reply_via_api: bool = Field(
+        default=False,
+        description="Whether LocalClaw should send Weixin replies via ilink/bot/sendmessage",
     )
 
     whatsapp_enabled: bool = Field(

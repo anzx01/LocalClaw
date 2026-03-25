@@ -18,6 +18,10 @@ def test_channels_overview_endpoint(monkeypatch):
     settings = Settings(
         wechat_personal_enabled=True,
         wechat_personal_inbound_token="wechat-secret",
+        weixin_enabled=True,
+        weixin_webhook_token="weixin-secret",
+        weixin_reply_via_api=True,
+        weixin_bot_token="bot-token",
         whatsapp_enabled=True,
         whatsapp_verify_token="verify-token",
         whatsapp_phone_number_id="1234567890",
@@ -33,14 +37,20 @@ def test_channels_overview_endpoint(monkeypatch):
 
     assert response.status_code == 200
     data = response.json()
-    assert len(data["channels"]) == 2
+    assert len(data["channels"]) == 3
 
     wechat_channel = next(channel for channel in data["channels"] if channel["key"] == "wechat_personal")
+    weixin_channel = next(channel for channel in data["channels"] if channel["key"] == "weixin")
     whatsapp_channel = next(channel for channel in data["channels"] if channel["key"] == "whatsapp")
 
     assert wechat_channel["enabled"] is True
     assert wechat_channel["webhook_path"] == "/api/channels/wechat-personal/webhook"
     assert wechat_channel["checks"]["has_inbound_token"] is True
+
+    assert weixin_channel["enabled"] is True
+    assert weixin_channel["reply_mode"] == "weixin_api"
+    assert weixin_channel["webhook_path"] == "/weixin/messages"
+    assert weixin_channel["checks"]["has_webhook_token"] is True
 
     assert whatsapp_channel["enabled"] is True
     assert whatsapp_channel["reply_mode"] == "cloud_api"
@@ -64,9 +74,11 @@ def test_static_ui_contains_channels_tab(monkeypatch):
     assert response.status_code == 200
     assert "Channels" in response.text
     assert "Approvals" in response.text
+    assert "Settings" in response.text
     assert "Channel Configuration" in response.text
     assert "/api/channels" in response.text
     assert "/api/approvals" in response.text
+    assert "/api/system/service" in response.text
     assert "/api/clawhub/search" in response.text
     assert "translator" not in response.text.lower()
 
@@ -249,3 +261,67 @@ def test_skills_endpoint_marks_managed_skills_as_removable(monkeypatch, tmp_path
 
     assert runtime["removable"] is False
     assert runtime["source_scope"] == "runtime"
+
+
+def test_background_service_endpoints(monkeypatch):
+    """The Settings tab should be able to read and mutate service status via API."""
+
+    from localclaw.channels import web as web_channel
+
+    status_payload = {
+        "supported": True,
+        "platform": "win32",
+        "service_name": "LocalClaw",
+        "display_name": "LocalClaw Runtime",
+        "installed": False,
+        "state": "NOT_INSTALLED",
+        "running": False,
+        "startup_type": "UNKNOWN",
+        "binary_path": "",
+        "can_manage": True,
+        "python_executable": "C:/Python/python.exe",
+        "script_path": "G:/myaist/LocalClaw/run_server.py",
+        "command": '"C:/Python/python.exe" "G:/myaist/LocalClaw/run_server.py"',
+        "message": "Service is not installed.",
+    }
+
+    action_payload = {
+        "ok": True,
+        "action": "install",
+        "changed": True,
+        "message": "Service installed successfully.",
+        "status": {**status_payload, "installed": True, "state": "STOPPED", "message": ""},
+    }
+
+    monkeypatch.setattr(web_channel, "get_settings", lambda: Settings())
+    monkeypatch.setattr(web_channel, "initialize_system", lambda: None)
+    monkeypatch.setattr(web_channel, "get_background_service_status", lambda: status_payload)
+    monkeypatch.setattr(web_channel, "install_background_service", lambda: action_payload)
+    monkeypatch.setattr(web_channel, "start_background_service", lambda: {**action_payload, "action": "start"})
+    monkeypatch.setattr(web_channel, "stop_background_service", lambda: {**action_payload, "action": "stop"})
+    monkeypatch.setattr(web_channel, "uninstall_background_service", lambda: {**action_payload, "action": "uninstall"})
+
+    app = web_channel.create_app()
+    with TestClient(app) as client:
+        status_response = client.get("/api/system/service")
+        install_response = client.post("/api/system/service/install")
+        start_response = client.post("/api/system/service/start")
+        stop_response = client.post("/api/system/service/stop")
+        uninstall_response = client.post("/api/system/service/uninstall")
+
+    assert status_response.status_code == 200
+    assert status_response.json()["service_name"] == "LocalClaw"
+    assert status_response.json()["installed"] is False
+
+    assert install_response.status_code == 200
+    assert install_response.json()["ok"] is True
+    assert install_response.json()["action"] == "install"
+
+    assert start_response.status_code == 200
+    assert start_response.json()["action"] == "start"
+
+    assert stop_response.status_code == 200
+    assert stop_response.json()["action"] == "stop"
+
+    assert uninstall_response.status_code == 200
+    assert uninstall_response.json()["action"] == "uninstall"

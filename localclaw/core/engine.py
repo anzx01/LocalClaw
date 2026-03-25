@@ -71,6 +71,7 @@ class ExecutionEngine:
         self._openclaw_runtime = openclaw_runtime or OpenClawRuntime(
             skill_registry=self._skill_registry,
             tool_registry=self._tool_registry,
+            refine_skill_decision=self._settings.runtime_refine_skill_decision,
         )
         self._verifier = verifier or create_default_verifier(
             settings=self._settings,
