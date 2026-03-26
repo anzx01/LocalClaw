@@ -124,6 +124,14 @@
         .result-note { font-size: 12px; color: #667085; }
         .result-ok { color: #0f8a4f; font-weight: 700; }
         .result-error { color: #b42318; font-weight: 700; }
+        .weixin-login-card { display: grid; gap: 14px; padding: 16px; border-radius: 16px; border: 1px solid #dbe5f0; background: linear-gradient(180deg, #fcfeff, #f6fbff); }
+        .weixin-login-grid { display: grid; grid-template-columns: minmax(220px, 250px) minmax(0, 1fr); gap: 16px; align-items: start; }
+        .weixin-qr-box { min-height: 240px; display: flex; align-items: center; justify-content: center; padding: 12px; border-radius: 16px; border: 1px dashed #c5d3e3; background: white; color: #667085; text-align: center; }
+        .weixin-qr-box canvas, .weixin-qr-box img { max-width: 100%; height: auto; }
+        .weixin-login-status { display: grid; gap: 10px; padding: 14px; border-radius: 14px; border: 1px solid #dbe5f0; background: rgba(255,255,255,0.82); }
+        .weixin-login-status p { color: #475467; line-height: 1.55; }
+        .weixin-login-meta { display: grid; gap: 12px; }
+        .weixin-connected-note { color: #475467; line-height: 1.5; }
         .skill-note { margin-top: 8px; color: #667085; font-size: 13px; line-height: 1.5; }
         .skills-shell { display: grid; gap: 18px; }
         .skills-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
@@ -184,95 +192,947 @@
         .meta-item { border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px 12px; background: #f8fafc; }
         .meta-item strong { display: block; margin-bottom: 4px; color: #344054; font-size: 12px; text-transform: uppercase; }
         .modal-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+        :root {
+            --bg-app: #09090b;
+            --bg-sidebar: #111113;
+            --bg-card: #18181b;
+            --bg-card-hover: #202024;
+            --bg-elevated: #27272a;
+            --bg-code: #121216;
+            --bg-input: #141418;
+            --border-primary: #2a2a31;
+            --border-secondary: #34343b;
+            --text-primary: #f4f4f5;
+            --text-secondary: #c4c4cc;
+            --text-tertiary: #8c8c98;
+            --accent-primary: #f97352;
+            --accent-soft: rgba(249, 115, 82, 0.16);
+            --accent-line: rgba(249, 115, 82, 0.45);
+            --success-soft: rgba(34, 197, 94, 0.16);
+            --warning-soft: rgba(245, 158, 11, 0.16);
+            --danger-soft: rgba(239, 68, 68, 0.16);
+            --shadow-card: 0 24px 60px rgba(0, 0, 0, 0.28);
+        }
+        body {
+            font-family: "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background:
+                radial-gradient(circle at top, rgba(249, 115, 82, 0.12), transparent 34%),
+                linear-gradient(180deg, #0b0b0f 0%, #07070a 100%);
+            color: var(--text-primary);
+        }
+        .container {
+            max-width: none;
+            margin: 0;
+            padding: 0;
+        }
+        .header, .tabs {
+            display: none;
+        }
+        .app-shell {
+            min-height: 100vh;
+            display: grid;
+            grid-template-columns: 280px minmax(0, 1fr);
+            background: transparent;
+        }
+        .app-sidebar-shell {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            padding: 22px 18px 18px;
+            background: rgba(14, 14, 18, 0.9);
+            border-right: 1px solid rgba(255,255,255,0.04);
+            backdrop-filter: blur(18px);
+        }
+        .app-brand {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 4px 8px 18px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .brand-mark {
+            width: 42px;
+            height: 42px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #fb7b5b, #c2410c);
+            color: white;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+        }
+        .brand-title {
+            font-size: 18px;
+            font-weight: 800;
+            color: var(--text-primary);
+        }
+        .brand-subtitle {
+            font-size: 13px;
+            color: var(--text-tertiary);
+        }
+        .nav-caption {
+            margin: 18px 10px 10px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--text-tertiary);
+        }
+        .app-nav-list {
+            display: grid;
+            gap: 8px;
+        }
+        .app-nav-item {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid transparent;
+            border-radius: 16px;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: left;
+        }
+        .app-nav-item:hover {
+            background: rgba(255,255,255,0.04);
+            color: var(--text-primary);
+        }
+        .app-nav-item.active {
+            background: rgba(255,255,255,0.08);
+            border-color: rgba(255,255,255,0.06);
+            color: var(--text-primary);
+            box-shadow: inset 3px 0 0 var(--accent-primary);
+        }
+        .app-nav-icon {
+            width: 34px;
+            height: 34px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.05);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+        }
+        .app-nav-item.active .app-nav-icon {
+            background: var(--accent-soft);
+            color: #ffd8ce;
+        }
+        .app-sidebar-footer {
+            margin-top: auto;
+            padding-top: 18px;
+        }
+        .service-mini-card {
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,0.05);
+            background: rgba(255,255,255,0.04);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+        }
+        .service-mini-title {
+            margin-bottom: 8px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--text-tertiary);
+        }
+        .service-mini-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            color: var(--text-primary);
+            font-weight: 700;
+        }
+        .service-mini-card p {
+            font-size: 13px;
+            color: var(--text-tertiary);
+            line-height: 1.5;
+        }
+        .status-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 999px;
+            display: inline-block;
+        }
+        .status-dot.running {
+            background: #4ade80;
+            box-shadow: 0 0 12px rgba(74, 222, 128, 0.75);
+        }
+        .status-dot.stopped {
+            background: #fb7185;
+            box-shadow: 0 0 12px rgba(251, 113, 133, 0.6);
+        }
+        .app-main-shell {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            padding: 26px 28px 28px;
+            gap: 20px;
+        }
+        .app-topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 18px;
+            padding: 4px 4px 0;
+        }
+        .page-overline {
+            margin-bottom: 8px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #fca58f;
+        }
+        .app-topbar h1 {
+            margin-bottom: 6px;
+            font-size: 30px;
+            line-height: 1.08;
+            color: var(--text-primary);
+        }
+        .app-topbar p {
+            max-width: 760px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+        .page-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 14px;
+        }
+        .summary-card {
+            padding: 18px 18px 16px;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03));
+            box-shadow: var(--shadow-card);
+        }
+        .summary-card strong {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--text-tertiary);
+        }
+        .summary-value {
+            font-size: 29px;
+            font-weight: 800;
+            line-height: 1.05;
+            color: var(--text-primary);
+        }
+        .summary-note {
+            margin-top: 10px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .content-scroll {
+            display: grid;
+            gap: 18px;
+        }
+        .tab-content {
+            background: transparent;
+            border-radius: 0;
+            box-shadow: none;
+            padding: 0;
+        }
+        .section-header h2,
+        .channel-header h3,
+        .skills-panel-header h3,
+        .modal-header h2,
+        .approval-head h3,
+        .task h4,
+        .skill-card-title {
+            color: var(--text-primary);
+        }
+        .section-header p,
+        .channel-summary,
+        .hint,
+        .result-note,
+        .skill-note,
+        .skill-subtle,
+        .metric-subtle {
+            color: var(--text-secondary);
+        }
+        .chat-container,
+        .channel-card,
+        .skills-panel,
+        .skill-card,
+        .approval-card,
+        .metric-card,
+        .modal-card,
+        .task {
+            border: 1px solid rgba(255,255,255,0.06);
+            background: linear-gradient(180deg, rgba(28,28,32,0.94), rgba(18,18,22,0.94));
+            box-shadow: var(--shadow-card);
+        }
+        .messages {
+            background: linear-gradient(180deg, rgba(15, 15, 19, 0.75), rgba(11, 11, 15, 0.94));
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .message-shell {
+            border-color: rgba(255,255,255,0.07);
+            box-shadow: 0 14px 28px rgba(0,0,0,0.2);
+        }
+        .message.system .message-shell {
+            background: rgba(255,255,255,0.04);
+            color: var(--text-primary);
+        }
+        .message.error .message-shell {
+            background: rgba(127, 29, 29, 0.22);
+            color: #fecaca;
+            border-color: rgba(248,113,113,0.28);
+        }
+        .message-list-item,
+        .message-fact,
+        .message-list-item,
+        .message-code,
+        .code-block,
+        .meta-item,
+        .choice-item,
+        .finding-card,
+        .weixin-login-status,
+        .weixin-qr-box {
+            background: rgba(255,255,255,0.04);
+            border-color: rgba(255,255,255,0.07);
+            color: var(--text-secondary);
+        }
+        .code-block,
+        .message-code {
+            background: var(--bg-code);
+            color: #dddde3;
+        }
+        .message-code { border-color: rgba(255,255,255,0.06); }
+        .empty-state {
+            border: 1px dashed rgba(255,255,255,0.08);
+            border-radius: 18px;
+            background: rgba(255,255,255,0.03);
+            color: var(--text-secondary);
+        }
+        .empty-state-title { color: var(--text-primary); }
+        .ghost-btn,
+        .secondary-btn,
+        .mini-btn {
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.04);
+            color: var(--text-secondary);
+        }
+        .ghost-btn:hover,
+        .secondary-btn:hover,
+        .mini-btn:hover {
+            background: rgba(255,255,255,0.08);
+            color: var(--text-primary);
+        }
+        .primary-btn {
+            background: linear-gradient(135deg, #f97352, #ea580c);
+            color: white;
+            box-shadow: 0 18px 30px rgba(234, 88, 12, 0.24);
+        }
+        .danger-btn {
+            background: linear-gradient(135deg, #dc2626, #991b1b);
+            color: white;
+        }
+        .test-form input,
+        .test-form textarea,
+        .skill-filter-row input,
+        .skill-filter-row select,
+        .input-area input {
+            background: var(--bg-input);
+            border-color: rgba(255,255,255,0.08);
+            color: var(--text-primary);
+        }
+        .input-area button {
+            background: linear-gradient(135deg, #f97352, #ea580c);
+            border-radius: 12px;
+        }
+        .input-area button:hover {
+            background: linear-gradient(135deg, #fb8d71, #f97316);
+        }
+        .pill.enabled,
+        .pill.state-available,
+        .pill.state-enabled,
+        .pill.source-bundled {
+            background: var(--success-soft);
+            color: #86efac;
+        }
+        .pill.disabled,
+        .pill.state-blocked,
+        .pill.state-stopped {
+            background: var(--danger-soft);
+            color: #fca5a5;
+        }
+        .pill.mode,
+        .pill.state-installed,
+        .pill.source-remote {
+            background: var(--accent-soft);
+            color: #fec7b8;
+        }
+        .notice {
+            border-color: rgba(248,113,113,0.22);
+            background: rgba(127, 29, 29, 0.2);
+            color: #fecaca;
+        }
+        .workspace-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.72fr);
+            gap: 18px;
+            align-items: start;
+        }
+        .workspace-side {
+            display: grid;
+            gap: 16px;
+        }
+        .workspace-card {
+            padding: 18px;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: linear-gradient(180deg, rgba(28,28,32,0.94), rgba(18,18,22,0.94));
+            box-shadow: var(--shadow-card);
+        }
+        .workspace-card h3 {
+            margin-bottom: 10px;
+            color: var(--text-primary);
+        }
+        .workspace-card p {
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+        .workspace-card .channel-list {
+            margin-top: 12px;
+        }
+        .channels-layout {
+            display: grid;
+            grid-template-columns: minmax(260px, 0.82fr) minmax(0, 1.4fr);
+            gap: 18px;
+            align-items: start;
+        }
+        .channel-index-panel {
+            display: grid;
+            gap: 10px;
+            position: sticky;
+            top: 10px;
+            align-self: start;
+        }
+        .channel-index-header {
+            padding: 18px;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: linear-gradient(180deg, rgba(28,28,32,0.94), rgba(18,18,22,0.94));
+            box-shadow: var(--shadow-card);
+        }
+        .channel-index-header strong {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #fca58f;
+        }
+        .channel-index-header p {
+            color: var(--text-secondary);
+            line-height: 1.6;
+            font-size: 14px;
+        }
+        .channel-selector-card {
+            width: 100%;
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: linear-gradient(180deg, rgba(28,28,32,0.94), rgba(18,18,22,0.94));
+            color: var(--text-primary);
+            text-align: left;
+            cursor: pointer;
+            transition: all 0.18s ease;
+            box-shadow: var(--shadow-card);
+        }
+        .channel-selector-card:hover {
+            border-color: rgba(249,115,82,0.24);
+            transform: translateY(-1px);
+        }
+        .channel-selector-card.active {
+            border-color: var(--accent-line);
+            box-shadow: inset 3px 0 0 var(--accent-primary), var(--shadow-card);
+            background: linear-gradient(180deg, rgba(48, 29, 24, 0.94), rgba(24, 18, 16, 0.94));
+        }
+        .channel-selector-card h3 {
+            margin-bottom: 4px;
+            color: var(--text-primary);
+        }
+        .channel-selector-caption {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: 10px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .channel-selector-note {
+            margin-top: 8px;
+            color: var(--text-tertiary);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+        .channel-detail-panel {
+            min-width: 0;
+            display: grid;
+            gap: 18px;
+        }
+        .channel-detail-card {
+            min-width: 0;
+        }
+        .channel-detail-empty {
+            min-height: 260px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .channel-detail-hero {
+            display: grid;
+            gap: 18px;
+            margin-bottom: 18px;
+        }
+        .channel-stat-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .channel-stat-card {
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.03);
+        }
+        .channel-stat-card strong {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--text-tertiary);
+        }
+        .channel-stat-value {
+            font-size: 24px;
+            font-weight: 800;
+            line-height: 1.12;
+            color: var(--text-primary);
+        }
+        .channel-stat-note {
+            margin-top: 8px;
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text-secondary);
+        }
+        .channel-quick-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .channel-block-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+        }
+        .channel-block-card {
+            margin-bottom: 0;
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.03);
+        }
+        .channel-block-wide {
+            grid-column: 1 / -1;
+        }
+        .activity-list {
+            display: grid;
+            gap: 12px;
+        }
+        .activity-item {
+            padding: 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.03);
+        }
+        .activity-item-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        .activity-item strong {
+            display: block;
+            color: var(--text-primary);
+            line-height: 1.45;
+        }
+        .activity-item p {
+            margin-top: 6px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            line-height: 1.55;
+        }
+        .activity-tag-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .pill.warning,
+        .pill.state-running,
+        .pill.state-verifying,
+        .pill.state-paused {
+            background: var(--warning-soft);
+            color: #fcd34d;
+        }
+        .skills-guidance-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px;
+        }
+        .guardrail-card {
+            padding: 18px;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: linear-gradient(180deg, rgba(28,28,32,0.94), rgba(18,18,22,0.94));
+            box-shadow: var(--shadow-card);
+        }
+        .guardrail-card h3 {
+            margin-bottom: 10px;
+            color: var(--text-primary);
+        }
+        .guardrail-card p {
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+        .ops-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.88fr);
+            gap: 18px;
+            align-items: start;
+        }
+        .ops-main,
+        .ops-side {
+            display: grid;
+            gap: 18px;
+        }
+        .diagnostic-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .diagnostic-list {
+            display: grid;
+            gap: 12px;
+        }
+        .diagnostic-card {
+            padding: 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.03);
+        }
+        .diagnostic-card.pass {
+            border-color: rgba(34,197,94,0.24);
+            background: rgba(34,197,94,0.08);
+        }
+        .diagnostic-card.warn {
+            border-color: rgba(245,158,11,0.24);
+            background: rgba(245,158,11,0.08);
+        }
+        .diagnostic-card.fail {
+            border-color: rgba(239,68,68,0.24);
+            background: rgba(239,68,68,0.08);
+        }
+        .diagnostic-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        .diagnostic-card strong {
+            display: block;
+            color: var(--text-primary);
+        }
+        .diagnostic-card p {
+            color: var(--text-secondary);
+            line-height: 1.55;
+            font-size: 13px;
+        }
+        .diagnostic-detail {
+            margin-top: 8px;
+            color: var(--text-tertiary);
+            font-size: 12px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .tool-inventory-grid {
+            display: grid;
+            gap: 12px;
+            max-height: 460px;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+        .tool-card {
+            padding: 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.03);
+        }
+        .tool-card h4 {
+            color: var(--text-primary);
+            margin-bottom: 6px;
+        }
+        .tool-card p {
+            color: var(--text-secondary);
+            font-size: 13px;
+            line-height: 1.55;
+        }
+        .tool-meta-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
         @media (max-width: 900px) {
+            .app-shell { grid-template-columns: 1fr; }
+            .app-sidebar-shell {
+                min-height: auto;
+                padding-bottom: 14px;
+                border-right: none;
+                border-bottom: 1px solid rgba(255,255,255,0.04);
+            }
+            .app-nav-list {
+                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            }
+            .app-main-shell { padding: 20px 16px 24px; }
+            .app-topbar { flex-direction: column; }
+            .page-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .workspace-layout,
+            .channels-layout {
+                grid-template-columns: 1fr;
+            }
+            .skills-guidance-grid,
+            .ops-grid,
+            .diagnostic-summary-grid {
+                grid-template-columns: 1fr;
+            }
+            .channel-index-panel {
+                position: static;
+            }
+            .channel-stat-grid,
+            .channel-block-grid {
+                grid-template-columns: 1fr;
+            }
             .section-header { flex-direction: column; align-items: start; }
             .modal-header { flex-direction: column; }
             .skills-layout { grid-template-columns: 1fr; }
             .message { max-width: 100%; }
+            .weixin-login-grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 640px) {
+            .page-summary-grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container" x-data="app()" x-init="init()">
-        <div class="header">
-            <h1>LocalClaw</h1>
-            <p class="status">Mode: <span x-text="config.mode || 'loading...'"></span></p>
-        </div>
-        
-        <div class="tabs">
-            <div class="tab" :class="{active: activeTab === 'chat'}" @click="activeTab = 'chat'">Chat</div>
-            <div class="tab" :class="{active: activeTab === 'approvals'}" @click="activeTab = 'approvals'">Approvals</div>
-            <div class="tab" :class="{active: activeTab === 'skills'}" @click="activeTab = 'skills'">Skills</div>
-            <div class="tab" :class="{active: activeTab === 'channels'}" @click="activeTab = 'channels'">Channels</div>
-            <div class="tab" :class="{active: activeTab === 'settings'}" @click="activeTab = 'settings'">Settings</div>
-        </div>
-        
+    <div class="app-shell" x-data="app()" x-init="init()">
+        <aside class="app-sidebar-shell">
+            <div class="app-brand">
+                <div class="brand-mark">LC</div>
+                <div>
+                    <div class="brand-title">LocalClaw</div>
+                    <div class="brand-subtitle">Runtime Console</div>
+                </div>
+            </div>
+
+            <div class="nav-caption">Workspace</div>
+            <nav class="app-nav-list">
+                <template x-for="item in pageNavItems()" :key="item.id">
+                    <button class="app-nav-item" :class="{active: activeTab === item.id}" @click="activeTab = item.id">
+                        <span class="app-nav-icon" x-text="item.short"></span>
+                        <span x-text="item.label"></span>
+                    </button>
+                </template>
+            </nav>
+
+            <div class="app-sidebar-footer">
+                <div class="service-mini-card">
+                    <div class="service-mini-title">Runtime Status</div>
+                    <div class="service-mini-row">
+                        <span class="status-dot" :class="serviceRunningClass()"></span>
+                        <span x-text="serviceSummaryLabel()"></span>
+                    </div>
+                    <p x-text="'Mode: ' + (config.mode || 'loading...')"></p>
+                    <p x-text="'Enabled channels: ' + enabledChannelCount() + ' / ' + channels.length"></p>
+                </div>
+            </div>
+        </aside>
+
+        <main class="app-main-shell">
+            <header class="app-topbar">
+                <div>
+                    <div class="page-overline" x-text="currentPageMeta().eyebrow"></div>
+                    <h1 x-text="currentPageMeta().title"></h1>
+                    <p x-text="currentPageMeta().description"></p>
+                </div>
+                <div class="toolbar">
+                    <button class="ghost-btn" @click="refreshActiveTab()" x-text="activeTabActionLabel()"></button>
+                    <span class="hint" x-text="copyStatus || currentPageMeta().hint"></span>
+                </div>
+            </header>
+
+            <div class="page-summary-grid">
+                <template x-for="card in summaryCardsForActiveTab()" :key="card.label">
+                    <div class="summary-card">
+                        <strong x-text="card.label"></strong>
+                        <div class="summary-value" x-text="card.value"></div>
+                        <div class="summary-note" x-text="card.note"></div>
+                    </div>
+                </template>
+            </div>
+
+            <div class="content-scroll">
         <div class="tab-content" x-show="activeTab === 'chat'">
-            <div class="chat-container">
-                <div class="messages" x-ref="messages">
-                    <template x-for="msg in messages" :key="msg.id">
-                        <div class="message" :class="msg.type">
-                            <div class="message-shell">
-                                <div class="message-meta">
-                                    <span class="message-role" x-text="msg.label"></span>
-                                    <span class="message-time" x-text="msg.time"></span>
-                                </div>
-                                <template x-if="msg.title">
-                                    <div class="message-title" x-text="msg.title"></div>
-                                </template>
-                                <div class="message-body">
-                                    <template x-for="(block, blockIndex) in msg.blocks" :key="msg.id + '-block-' + blockIndex">
-                                        <div>
-                                            <template x-if="block.type === 'paragraph'">
-                                                <p class="message-paragraph" x-text="block.text"></p>
-                                            </template>
-                                            <template x-if="block.type === 'facts'">
-                                                <div>
-                                                    <template x-if="block.label">
-                                                        <div class="message-section-label" x-text="block.label"></div>
-                                                    </template>
-                                                    <div class="message-facts">
-                                                        <template x-for="(item, itemIndex) in block.items" :key="msg.id + '-fact-' + blockIndex + '-' + itemIndex">
-                                                            <div class="message-fact" :class="item.tone ? 'tone-' + item.tone : ''">
-                                                                <span class="message-fact-label" x-text="item.label"></span>
-                                                                <span class="message-fact-value" x-text="item.value"></span>
-                                                            </div>
-                                                        </template>
-                                                    </div>
-                                                </div>
-                                            </template>
-                                            <template x-if="block.type === 'list'">
-                                                <div>
-                                                    <template x-if="block.label">
-                                                        <div class="message-section-label" x-text="block.label"></div>
-                                                    </template>
-                                                    <div class="message-list">
-                                                        <template x-for="(item, itemIndex) in block.items" :key="msg.id + '-list-' + blockIndex + '-' + itemIndex">
-                                                            <div class="message-list-item" x-text="item"></div>
-                                                        </template>
-                                                    </div>
-                                                </div>
-                                            </template>
-                                            <template x-if="block.type === 'code'">
-                                                <div>
-                                                    <template x-if="block.label">
-                                                        <div class="message-section-label" x-text="block.label"></div>
-                                                    </template>
-                                                    <pre class="message-code" x-text="block.value"></pre>
-                                                </div>
-                                            </template>
-                                        </div>
+            <div class="workspace-layout">
+                <div class="chat-container">
+                    <div class="messages" x-ref="messages">
+                        <template x-for="msg in messages" :key="msg.id">
+                            <div class="message" :class="msg.type">
+                                <div class="message-shell">
+                                    <div class="message-meta">
+                                        <span class="message-role" x-text="msg.label"></span>
+                                        <span class="message-time" x-text="msg.time"></span>
+                                    </div>
+                                    <template x-if="msg.title">
+                                        <div class="message-title" x-text="msg.title"></div>
                                     </template>
+                                    <div class="message-body">
+                                        <template x-for="(block, blockIndex) in msg.blocks" :key="msg.id + '-block-' + blockIndex">
+                                            <div>
+                                                <template x-if="block.type === 'paragraph'">
+                                                    <p class="message-paragraph" x-text="block.text"></p>
+                                                </template>
+                                                <template x-if="block.type === 'facts'">
+                                                    <div>
+                                                        <template x-if="block.label">
+                                                            <div class="message-section-label" x-text="block.label"></div>
+                                                        </template>
+                                                        <div class="message-facts">
+                                                            <template x-for="(item, itemIndex) in block.items" :key="msg.id + '-fact-' + blockIndex + '-' + itemIndex">
+                                                                <div class="message-fact" :class="item.tone ? 'tone-' + item.tone : ''">
+                                                                    <span class="message-fact-label" x-text="item.label"></span>
+                                                                    <span class="message-fact-value" x-text="item.value"></span>
+                                                                </div>
+                                                            </template>
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                                <template x-if="block.type === 'list'">
+                                                    <div>
+                                                        <template x-if="block.label">
+                                                            <div class="message-section-label" x-text="block.label"></div>
+                                                        </template>
+                                                        <div class="message-list">
+                                                            <template x-for="(item, itemIndex) in block.items" :key="msg.id + '-list-' + blockIndex + '-' + itemIndex">
+                                                                <div class="message-list-item" x-text="item"></div>
+                                                            </template>
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                                <template x-if="block.type === 'code'">
+                                                    <div>
+                                                        <template x-if="block.label">
+                                                            <div class="message-section-label" x-text="block.label"></div>
+                                                        </template>
+                                                        <pre class="message-code" x-text="block.value"></pre>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </template>
+                                    </div>
                                 </div>
                             </div>
+                        </template>
+                    </div>
+                    
+                    <div class="input-area">
+                        <input type="text" x-model="input" @keyup.enter="sendMessage()" placeholder="Type a message or /cmd git status">
+                        <button @click="sendMessage()" :disabled="loading">Send</button>
+                    </div>
+                </div>
+
+                <aside class="workspace-side">
+                    <div class="workspace-card">
+                        <h3>Runtime Snapshot</h3>
+                        <p>Keep the conversation close to the current system state so you do not need to jump between tabs for basic context.</p>
+                        <ul class="channel-list">
+                            <li><span>Mode</span><span x-text="config.mode || 'loading...'"></span></li>
+                            <li><span>Recent Tasks</span><span x-text="tasks.length"></span></li>
+                            <li><span>Pending Approvals</span><span x-text="approvals.length"></span></li>
+                            <li><span>Enabled Channels</span><span x-text="enabledChannelCount()"></span></li>
+                        </ul>
+                    </div>
+
+                    <div class="workspace-card">
+                        <h3>Quick Routing</h3>
+                        <p>Use the same runtime, but choose the lowest-friction path for the job.</p>
+                        <ul class="note-list">
+                            <li>Use <code>/cmd ...</code> for routine shell-safe operations.</li>
+                            <li>Use raw <code>/shell ...</code> only when you expect an approval gate.</li>
+                            <li>Open Channels when you want to connect or test Weixin, bridge, or WhatsApp delivery.</li>
+                        </ul>
+                    </div>
+
+                    <div class="workspace-card">
+                        <h3>Recent Activity</h3>
+                        <p>Borrowing from openclaw-manager's dashboard and logs flow, this keeps the newest task outcomes visible beside chat.</p>
+                        <template x-if="recentTasks(4).length === 0">
+                            <div class="empty-state">No task history has been captured yet.</div>
+                        </template>
+                        <div class="activity-list" x-show="recentTasks(4).length > 0">
+                            <template x-for="task in recentTasks(4)" :key="'chat-task-' + task.id">
+                                <div class="activity-item">
+                                    <div class="activity-item-head">
+                                        <div class="activity-tag-row">
+                                            <span class="pill" :class="taskStatePillClass(task.state)" x-text="taskStateLabel(task.state)"></span>
+                                            <span class="pill mode" x-text="task.channel || 'web'"></span>
+                                        </div>
+                                        <span class="result-note" x-text="formatDateTime(task.completed_at || task.created_at)"></span>
+                                    </div>
+                                    <strong x-text="truncateText(task.message || 'Untitled request', 72)"></strong>
+                                    <p x-text="taskActivitySummary(task)"></p>
+                                </div>
+                            </template>
                         </div>
-                    </template>
-                </div>
-                
-                <div class="input-area">
-                    <input type="text" x-model="input" @keyup.enter="sendMessage()" placeholder="Type a message or /cmd git status">
-                    <button @click="sendMessage()" :disabled="loading">Send</button>
-                </div>
+                    </div>
+
+                    <div class="workspace-card">
+                        <h3>Operational State</h3>
+                        <ul class="channel-list">
+                            <li><span>Service</span><span x-text="serviceStatus ? serviceStatus.state : 'Unknown'"></span></li>
+                            <li><span>Installed</span><span x-text="serviceStatus && serviceStatus.installed ? 'Yes' : 'No'"></span></li>
+                            <li><span>Admin Access</span><span x-text="serviceStatus && serviceStatus.can_manage ? 'Granted' : 'Required'"></span></li>
+                        </ul>
+                    </div>
+                </aside>
             </div>
         </div>
         
@@ -280,7 +1140,7 @@
             <div class="section-header">
                 <div>
                     <h2>Approval Center</h2>
-                    <p>High-risk steps such as raw shell execution pause here until you explicitly allow them to continue.</p>
+                    <p>High-risk steps such as raw shell execution pause here until you explicitly allow them to continue, with guardrails and recent protected activity visible beside the queue.</p>
                 </div>
                 <div class="toolbar">
                     <button class="ghost-btn" @click="loadApprovals()">Refresh</button>
@@ -291,49 +1151,129 @@
                 <div class="notice" x-text="approvalLoadError"></div>
             </template>
 
-            <div class="approval-list">
-                <template x-if="approvals.length === 0">
-                    <div class="empty-state">
-                        <span class="empty-state-title">No pending approvals.</span>
-                        <p class="empty-state-note">This page is only used when a request contains a high-risk action, such as raw <code>/shell</code> commands, browser automation, or protected operations.</p>
-                        <p class="empty-state-note">For routine commands, use <code>/cmd ...</code> in Chat and they usually run without manual approval.</p>
-                    </div>
-                </template>
-                <template x-for="approval in approvals" :key="approval.task_id + ':' + approval.step.id">
-                    <div class="approval-card">
-                        <div class="approval-head">
-                            <div>
-                                <h3 x-text="approval.step.command_preview || approval.step.tool_name || approval.step.name || 'Pending step'"></h3>
-                                <div class="approval-meta">
-                                    <span x-text="'Task ' + approval.task_id"></span>
-                                    <span x-text="'Risk: ' + (approval.step.risk_level || 'unknown')"></span>
-                                    <span x-text="'Channel: ' + approval.channel"></span>
-                                    <span x-text="'User: ' + approval.user_id"></span>
+            <div class="ops-grid">
+                <div class="ops-main">
+                    <div class="approval-list">
+                        <template x-if="approvals.length === 0">
+                            <div class="empty-state">
+                                <span class="empty-state-title">No pending approvals.</span>
+                                <p class="empty-state-note">This page is only used when a request contains a high-risk action, such as raw <code>/shell</code> commands, browser automation, or protected operations.</p>
+                                <p class="empty-state-note">For routine commands, use <code>/cmd ...</code> in Chat and they usually run without manual approval.</p>
+                            </div>
+                        </template>
+                        <template x-for="approval in approvals" :key="approval.task_id + ':' + approval.step.id">
+                            <div class="approval-card">
+                                <div class="approval-head">
+                                    <div>
+                                        <h3 x-text="approval.step.command_preview || approval.step.tool_name || approval.step.name || 'Pending step'"></h3>
+                                        <div class="approval-meta">
+                                            <span x-text="'Task ' + approval.task_id"></span>
+                                            <span x-text="'Risk: ' + (approval.step.risk_level || 'unknown')"></span>
+                                            <span x-text="'Channel: ' + approval.channel"></span>
+                                            <span x-text="'User: ' + approval.user_id"></span>
+                                        </div>
+                                    </div>
+                                    <span class="pill disabled" x-text="approval.task_state"></span>
+                                </div>
+
+                                <p><strong>Prompt:</strong> <span x-text="approval.message || 'N/A'"></span></p>
+                                <p><strong>Step:</strong> <span x-text="approval.step.tool_name || approval.step.name || approval.step.id"></span></p>
+                                <p><strong>Created:</strong> <span x-text="new Date(approval.created_at).toLocaleString()"></span></p>
+
+                                <div class="channel-block">
+                                    <h4>Step Input</h4>
+                                    <div class="code-block" x-text="formatJson(approval.step.input)"></div>
+                                </div>
+
+                                <div class="approval-actions">
+                                    <button
+                                        class="primary-btn"
+                                        @click="approveTaskStep(approval)"
+                                        :disabled="approvingStepKey === approval.task_id + ':' + approval.step.id"
+                                        x-text="approvingStepKey === approval.task_id + ':' + approval.step.id ? 'Approving...' : 'Approve & Resume'">
+                                    </button>
+                                    <span class="result-note">Routine commands can use <code>/cmd</code>; raw <code>/shell</code> stays gated here.</span>
                                 </div>
                             </div>
-                            <span class="pill disabled" x-text="approval.task_state"></span>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="ops-side">
+                    <div class="workspace-card">
+                        <div class="skills-panel-header">
+                            <div>
+                                <h3>Safety Workflow</h3>
+                                <p>Inspired by openclaw-manager's security visibility, this keeps approval rules and queue pressure clear before you resume a protected step.</p>
+                            </div>
+                            <span class="pill warning" x-text="approvals.length + ' queued'"></span>
                         </div>
 
-                        <p><strong>Prompt:</strong> <span x-text="approval.message || 'N/A'"></span></p>
-                        <p><strong>Step:</strong> <span x-text="approval.step.tool_name || approval.step.name || approval.step.id"></span></p>
-                        <p><strong>Created:</strong> <span x-text="new Date(approval.created_at).toLocaleString()"></span></p>
-
-                        <div class="channel-block">
-                            <h4>Step Input</h4>
-                            <div class="code-block" x-text="formatJson(approval.step.input)"></div>
+                        <div class="diagnostic-summary-grid">
+                            <div class="metric-card">
+                                <strong>Pending</strong>
+                                <div class="metric-value" x-text="approvals.length"></div>
+                                <div class="metric-subtle">Steps waiting for review right now.</div>
+                            </div>
+                            <div class="metric-card">
+                                <strong>Critical</strong>
+                                <div class="metric-value" x-text="approvals.filter(item => item && item.step && item.step.risk_level === 'critical').length"></div>
+                                <div class="metric-subtle">Highest-risk steps in the current queue.</div>
+                            </div>
+                            <div class="metric-card">
+                                <strong>Service</strong>
+                                <div class="metric-value" x-text="serviceStatus && serviceStatus.running ? 'Ready' : 'Stopped'"></div>
+                                <div class="metric-subtle">Background runtime state during review.</div>
+                            </div>
                         </div>
 
-                        <div class="approval-actions">
-                            <button
-                                class="primary-btn"
-                                @click="approveTaskStep(approval)"
-                                :disabled="approvingStepKey === approval.task_id + ':' + approval.step.id"
-                                x-text="approvingStepKey === approval.task_id + ':' + approval.step.id ? 'Approving...' : 'Approve & Resume'">
-                            </button>
-                            <span class="result-note">Routine commands can use <code>/cmd</code>; raw <code>/shell</code> stays gated here.</span>
+                        <ul class="channel-list">
+                            <li><span>Routine Path</span><code>/cmd</code></li>
+                            <li><span>Install Guardrail</span><span x-text="formatProtectionMode(config.skill_install_protection_mode)"></span></li>
+                            <li><span>Isolation Approval</span><span x-text="config.skill_isolation_require_approval ? 'Required' : 'Optional'"></span></li>
+                            <li><span>Critical Tool Policy</span><span x-text="config.skill_isolation_block_critical ? 'Blocked' : 'Review only'"></span></li>
+                        </ul>
+
+                        <ul class="note-list">
+                            <li>Prefer <code>/cmd</code> for routine shell-safe work so common requests avoid this queue.</li>
+                            <li>Review the step input before approving any raw shell, browser automation, or file-changing action.</li>
+                            <li>If several approvals pile up, switch to Settings and run diagnostics to verify the runtime is healthy.</li>
+                        </ul>
+                    </div>
+
+                    <div class="workspace-card">
+                        <div class="skills-panel-header">
+                            <div>
+                                <h3>Recent Guarded Tasks</h3>
+                                <p>Use this lightweight activity stream like a mini logs panel for tasks that recently paused, failed, or otherwise needed closer review.</p>
+                            </div>
+                            <div class="skill-subtle" x-text="recentGuardedTasks(5).length + ' shown'"></div>
+                        </div>
+
+                        <template x-if="recentGuardedTasks(5).length === 0">
+                            <div class="empty-state">
+                                <span class="empty-state-title">No guarded tasks in recent history.</span>
+                                <p class="empty-state-note">When tasks pause for approval or fail around protected steps, they will appear here for quick context.</p>
+                            </div>
+                        </template>
+
+                        <div class="activity-list" x-show="recentGuardedTasks(5).length > 0">
+                            <template x-for="task in recentGuardedTasks(5)" :key="'approval-task-' + task.id">
+                                <div class="activity-item">
+                                    <div class="activity-item-head">
+                                        <div class="activity-tag-row">
+                                            <span class="pill" :class="taskStatePillClass(task.state)" x-text="taskStateLabel(task.state)"></span>
+                                            <span class="pill mode" x-text="task.channel || 'web'"></span>
+                                        </div>
+                                        <span class="result-note" x-text="formatDateTime(task.completed_at || task.created_at)"></span>
+                                    </div>
+                                    <strong x-text="truncateText(task.message || 'Untitled request', 84)"></strong>
+                                    <p x-text="taskActivitySummary(task)"></p>
+                                </div>
+                            </template>
                         </div>
                     </div>
-                </template>
+                </div>
             </div>
         </div>
         
@@ -369,6 +1309,30 @@
                         <strong>Registry</strong>
                         <div class="metric-value" x-text="config.clawhub_has_token ? 'Private' : 'Public'"></div>
                         <div class="metric-subtle" x-text="config.clawhub_base_url || 'https://clawhub.ai'"></div>
+                    </div>
+                </div>
+
+                <div class="skills-guidance-grid">
+                    <div class="guardrail-card">
+                        <h3>Security Workflow</h3>
+                        <p>openclaw-manager exposes testing and security as first-class panels. LocalClaw now makes the same guardrails visible here before any skill install changes the runtime.</p>
+                        <ul class="channel-list">
+                            <li><span>Install Guardrail</span><span x-text="formatProtectionMode(config.skill_install_protection_mode)"></span></li>
+                            <li><span>Approval After Isolation</span><span x-text="config.skill_isolation_require_approval ? 'Required' : 'Optional'"></span></li>
+                            <li><span>Critical Tool Policy</span><span x-text="config.skill_isolation_block_critical ? 'Blocked' : 'Review only'"></span></li>
+                            <li><span>Pending Approvals</span><span x-text="approvals.length"></span></li>
+                        </ul>
+                    </div>
+
+                    <div class="guardrail-card">
+                        <h3>Skill Storage Layout</h3>
+                        <p>Separate managed installs from configured read-only directories so you can tell what the web UI is allowed to remove and what belongs to your local runtime setup.</p>
+                        <ul class="channel-list">
+                            <li><span>Managed Dir</span><code x-text="config.managed_skills_dir || 'Unknown'"></code></li>
+                            <li><span>Bundled Catalog</span><code x-text="config.bundled_skill_catalog_dir || 'Unknown'"></code></li>
+                            <li><span>Configured Dirs</span><span x-text="(config.configured_skill_dirs || []).length"></span></li>
+                            <li><span>Registry Auth</span><span x-text="config.clawhub_has_token ? 'Token present' : 'Public only'"></span></li>
+                        </ul>
                     </div>
                 </div>
 
@@ -551,7 +1515,7 @@
             <div class="section-header">
                 <div>
                     <h2>Channel Configuration</h2>
-                    <p>Connect Personal WeChat bridges, Weixin webhook bots, and WhatsApp Cloud API with exact webhook paths, readiness checks, and sample requests below.</p>
+                    <p>Use the channel list on the left, then focus on the selected channel's setup, readiness, login flow, and test panel without scanning the whole page.</p>
                 </div>
                 <div class="toolbar">
                     <button class="ghost-btn" @click="loadChannels()">Refresh</button>
@@ -563,174 +1527,292 @@
                 <div class="notice" x-text="channelLoadError"></div>
             </template>
 
-            <div class="channel-grid">
-                <template x-if="channels.length === 0">
-                    <div class="empty-state">No channel metadata loaded.</div>
-                </template>
-                <template x-for="channel in channels" :key="channel.key">
-                    <div class="channel-card">
-                        <div class="channel-header">
-                            <div>
-                                <h3 x-text="channel.name"></h3>
-                                <p class="channel-summary" x-text="channel.summary"></p>
-                            </div>
-                            <div class="toolbar">
+            <div class="channels-layout">
+                <aside class="channel-index-panel">
+                    <div class="channel-index-header">
+                        <strong>Channel Directory</strong>
+                        <p>Inspired by the clearer master-detail flow in openclaw-manager, this view keeps discovery on the left and deep configuration on the right.</p>
+                    </div>
+                    <template x-if="channels.length === 0">
+                        <div class="empty-state">No channel metadata loaded.</div>
+                    </template>
+                    <template x-for="channel in channels" :key="'index-' + channel.key">
+                        <button class="channel-selector-card" :class="{active: selectedChannelKey === channel.key}" @click="selectChannel(channel.key)">
+                            <div class="channel-header">
+                                <div>
+                                    <h3 x-text="channel.name"></h3>
+                                    <p class="channel-summary" x-text="channel.reply_mode_label"></p>
+                                </div>
                                 <span class="pill" :class="channel.enabled ? 'enabled' : 'disabled'" x-text="channel.enabled ? 'Enabled' : 'Disabled'"></span>
-                                <span class="pill mode" x-text="channel.reply_mode_label"></span>
                             </div>
-                        </div>
-
-                        <div class="channel-block">
-                            <h4>Webhook URL</h4>
-                            <div class="code-block" x-text="channel.webhook_url"></div>
-                            <button class="mini-btn" @click="copyText(channel.webhook_url)">Copy URL</button>
-                        </div>
-
-                        <template x-if="channel.verify_url">
-                            <div class="channel-block">
-                                <h4>Verification URL</h4>
-                                <div class="code-block" x-text="channel.verify_url"></div>
-                                <button class="mini-btn" @click="copyText(channel.verify_url)">Copy Verify URL</button>
+                            <div class="channel-selector-caption">
+                                <span x-text="channelStateLabel(channel)"></span>
+                                <span x-text="channelMissingCheckCount(channel) === 0 ? 'All checks present' : channelMissingCheckCount(channel) + ' missing checks'"></span>
                             </div>
-                        </template>
+                            <div class="channel-selector-note" x-text="channel.summary"></div>
+                        </button>
+                    </template>
+                </aside>
 
-                        <div class="channel-block">
-                            <h4>Readiness Checks</h4>
-                            <ul class="channel-list">
-                                <template x-for="entry in channelCheckEntries(channel)" :key="entry.key">
-                                    <li>
-                                        <span x-text="entry.label"></span>
-                                        <span class="pill" :class="entry.value ? 'enabled' : 'disabled'" x-text="entry.value ? 'Present' : 'Missing'"></span>
-                                    </li>
-                                </template>
-                            </ul>
+                <section class="channel-detail-panel">
+                    <template x-if="channels.length === 0">
+                        <div class="empty-state channel-detail-empty">
+                            <span class="empty-state-title">No channel metadata loaded.</span>
+                            <p class="empty-state-note">The runtime did not return any channel descriptors yet, so there is nothing to configure.</p>
                         </div>
+                    </template>
 
-                        <div class="channel-block">
-                            <h4>Required Env</h4>
-                            <ul class="channel-list">
-                                <template x-for="envVar in channel.required_env" :key="envVar">
-                                    <li>
-                                        <code x-text="envVar"></code>
-                                        <button class="mini-btn" @click="copyText(envVar)">Copy</button>
-                                    </li>
-                                </template>
-                            </ul>
+                    <template x-if="channels.length > 0 && !selectedChannel()">
+                        <div class="empty-state channel-detail-empty">
+                            <span class="empty-state-title">Select a channel.</span>
+                            <p class="empty-state-note">Pick one item from the left directory to inspect webhook paths, required env, login state, and live test tools.</p>
                         </div>
+                    </template>
 
-                        <template x-if="channel.optional_env && channel.optional_env.length">
-                            <div class="channel-block">
-                                <h4>Optional Env</h4>
-                                <ul class="channel-list">
-                                    <template x-for="envVar in channel.optional_env" :key="envVar">
-                                        <li>
-                                            <code x-text="envVar"></code>
-                                            <button class="mini-btn" @click="copyText(envVar)">Copy</button>
-                                        </li>
-                                    </template>
-                                </ul>
-                            </div>
-                        </template>
-
-                        <div class="channel-block">
-                            <h4>Sample Request</h4>
-                            <div class="code-block" x-text="buildChannelRequestExample(channel)"></div>
-                            <button class="mini-btn" @click="copyText(buildChannelRequestExample(channel))">Copy Example</button>
-                        </div>
-
-                        <template x-if="channel.key === 'whatsapp'">
-                            <div class="channel-block">
-                                <h4>Verify Example</h4>
-                                <div class="code-block" x-text="buildChannelVerifyExample(channel)"></div>
-                                <button class="mini-btn" @click="copyText(buildChannelVerifyExample(channel))">Copy Verify Call</button>
-                            </div>
-                        </template>
-
-                        <div class="channel-block">
-                            <h4>Connectivity Test</h4>
-                            <div class="test-form">
-                                <template x-if="channel.key === 'weixin'">
-                                    <div class="test-form">
-                                        <div class="form-grid">
-                                            <label>
-                                                Recipient (to_user_id)
-                                                <input type="text" x-model="channelTests.weixin.recipient" placeholder="alice@im.wechat">
-                                            </label>
-                                            <label>
-                                                Account ID
-                                                <input type="text" x-model="channelTests.weixin.account_id" placeholder="Optional">
-                                            </label>
-                                        </div>
-                                        <label>
-                                            Context Token
-                                            <input type="text" x-model="channelTests.weixin.context_token" placeholder="Optional if cached from inbound">
-                                        </label>
-                                        <label>
-                                            Test Message
-                                            <textarea x-model="channelTests.weixin.text" placeholder="LocalClaw connectivity test"></textarea>
-                                        </label>
+                    <template x-for="channel in (selectedChannel() ? [selectedChannel()] : [])" :key="'detail-' + channel.key">
+                        <div class="channel-card channel-detail-card">
+                            <div class="channel-detail-hero">
+                                <div class="channel-header">
+                                    <div>
+                                        <h3 x-text="channel.name"></h3>
+                                        <p class="channel-summary" x-text="channel.summary"></p>
                                     </div>
-                                </template>
-
-                                <template x-if="channel.key === 'wechat_personal'">
-                                    <div class="test-form">
-                                        <div class="form-grid">
-                                            <label>
-                                                Reply Target
-                                                <input type="text" x-model="channelTests.wechat_personal.reply_target" placeholder="room-1 or wxid_user">
-                                            </label>
-                                            <label>
-                                                Sender ID
-                                                <input type="text" x-model="channelTests.wechat_personal.sender_id" placeholder="Optional override">
-                                            </label>
-                                        </div>
-                                        <label>
-                                            Test Message
-                                            <textarea x-model="channelTests.wechat_personal.text" placeholder="LocalClaw connectivity test"></textarea>
-                                        </label>
+                                    <div class="toolbar">
+                                        <span class="pill" :class="channel.enabled ? 'enabled' : 'disabled'" x-text="channel.enabled ? 'Enabled' : 'Disabled'"></span>
+                                        <span class="pill mode" x-text="channel.reply_mode_label"></span>
                                     </div>
-                                </template>
-
-                                <template x-if="channel.key === 'whatsapp'">
-                                    <div class="test-form">
-                                        <div class="form-grid">
-                                            <label>
-                                                Recipient
-                                                <input type="text" x-model="channelTests.whatsapp.recipient" placeholder="15551234567">
-                                            </label>
-                                            <label>
-                                                Phone Number ID
-                                                <input type="text" x-model="channelTests.whatsapp.phone_number_id" placeholder="Optional override">
-                                            </label>
-                                        </div>
-                                        <label>
-                                            Test Message
-                                            <textarea x-model="channelTests.whatsapp.text" placeholder="LocalClaw connectivity test"></textarea>
-                                        </label>
-                                    </div>
-                                </template>
-
-                                <div class="toolbar">
-                                    <button class="primary-btn" @click="runChannelTest(channel)" :disabled="Boolean(channelTestLoading[channel.key])" x-text="channelTestLoading[channel.key] ? 'Testing...' : 'Run Test'"></button>
-                                    <span class="result-note">Live send runs only when the required outbound config is present. Otherwise the API returns a dry run preview.</span>
                                 </div>
 
-                                <template x-if="channelTestResults[channel.key]">
-                                    <div class="code-block" x-text="formatJson(channelTestResults[channel.key])"></div>
+                                <div class="channel-stat-grid">
+                                    <template x-for="metric in selectedChannelStats(channel)" :key="channel.key + '-' + metric.label">
+                                        <div class="channel-stat-card">
+                                            <strong x-text="metric.label"></strong>
+                                            <div class="channel-stat-value" x-text="metric.value"></div>
+                                            <div class="channel-stat-note" x-text="metric.note"></div>
+                                        </div>
+                                    </template>
+                                </div>
+
+                                <div class="channel-quick-actions">
+                                    <button class="ghost-btn" @click="copyText(channel.webhook_url)">Copy Webhook URL</button>
+                                    <button class="ghost-btn" @click="copyText(buildChannelRequestExample(channel))">Copy Sample Request</button>
+                                    <template x-if="channel.verify_url">
+                                        <button class="ghost-btn" @click="copyText(channel.verify_url)">Copy Verify URL</button>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <div class="channel-block-grid">
+                                <div class="channel-block channel-block-card">
+                                    <h4>Webhook URL</h4>
+                                    <div class="code-block" x-text="channel.webhook_url"></div>
+                                    <button class="mini-btn" @click="copyText(channel.webhook_url)">Copy URL</button>
+                                </div>
+
+                                <template x-if="channel.verify_url">
+                                    <div class="channel-block channel-block-card">
+                                        <h4>Verification URL</h4>
+                                        <div class="code-block" x-text="channel.verify_url"></div>
+                                        <button class="mini-btn" @click="copyText(channel.verify_url)">Copy Verify URL</button>
+                                    </div>
                                 </template>
+
+                                <div class="channel-block channel-block-card">
+                                    <h4>Readiness Checks</h4>
+                                    <ul class="channel-list">
+                                        <template x-for="entry in channelCheckEntries(channel)" :key="entry.key">
+                                            <li>
+                                                <span x-text="entry.label"></span>
+                                                <span class="pill" :class="entry.value ? 'enabled' : 'disabled'" x-text="entry.value ? 'Present' : 'Missing'"></span>
+                                            </li>
+                                        </template>
+                                    </ul>
+                                </div>
+
+                                <div class="channel-block channel-block-card">
+                                    <h4>Required Env</h4>
+                                    <ul class="channel-list">
+                                        <template x-for="envVar in channel.required_env" :key="envVar">
+                                            <li>
+                                                <code x-text="envVar"></code>
+                                                <button class="mini-btn" @click="copyText(envVar)">Copy</button>
+                                            </li>
+                                        </template>
+                                    </ul>
+                                </div>
+
+                                <template x-if="channel.optional_env && channel.optional_env.length">
+                                    <div class="channel-block channel-block-card">
+                                        <h4>Optional Env</h4>
+                                        <ul class="channel-list">
+                                            <template x-for="envVar in channel.optional_env" :key="envVar">
+                                                <li>
+                                                    <code x-text="envVar"></code>
+                                                    <button class="mini-btn" @click="copyText(envVar)">Copy</button>
+                                                </li>
+                                            </template>
+                                        </ul>
+                                    </div>
+                                </template>
+
+                                <div class="channel-block channel-block-card channel-block-wide">
+                                    <h4>Sample Request</h4>
+                                    <div class="code-block" x-text="buildChannelRequestExample(channel)"></div>
+                                    <button class="mini-btn" @click="copyText(buildChannelRequestExample(channel))">Copy Example</button>
+                                </div>
+
+                                <template x-if="channel.key === 'whatsapp'">
+                                    <div class="channel-block channel-block-card channel-block-wide">
+                                        <h4>Verify Example</h4>
+                                        <div class="code-block" x-text="buildChannelVerifyExample(channel)"></div>
+                                        <button class="mini-btn" @click="copyText(buildChannelVerifyExample(channel))">Copy Verify Call</button>
+                                    </div>
+                                </template>
+
+                                <template x-if="channel.key === 'weixin'">
+                                    <div class="channel-block channel-block-card channel-block-wide">
+                                        <h4>Scan to Login</h4>
+                                        <div class="weixin-login-card">
+                                            <div class="form-grid">
+                                                <label>
+                                                    Local Account Key
+                                                    <input type="text" x-model="weixinLogin.account_id" placeholder="default">
+                                                </label>
+                                            </div>
+
+                                            <div class="toolbar">
+                                                <button class="primary-btn" @click="startWeixinLogin(channel)" :disabled="weixinLoginLoading" x-text="weixinLoginLoading ? 'Starting...' : (weixinLogin.session_id ? 'Refresh QR' : 'Scan to Login')"></button>
+                                                <span class="result-note">Confirmed login stores the Weixin bot token under the LocalClaw data directory so later replies can reuse it.</span>
+                                            </div>
+
+                                            <template x-if="channel.connected_account || weixinLogin.connected_account">
+                                                <div class="weixin-login-status">
+                                                    <div class="toolbar">
+                                                        <span class="pill enabled">Connected</span>
+                                                        <span class="result-note">Stored login state</span>
+                                                    </div>
+                                                    <div class="code-block" x-text="weixinConnectedAccountSummary(weixinLogin.connected_account || channel.connected_account)"></div>
+                                                </div>
+                                            </template>
+
+                                            <template x-if="!channel.connected_account && !weixinLogin.connected_account">
+                                                <p class="weixin-connected-note">No stored Weixin login yet. Start a scan below to create one.</p>
+                                            </template>
+
+                                            <template x-if="weixinLogin.session_id">
+                                                <div class="weixin-login-grid">
+                                                    <div class="weixin-qr-box" id="weixin-login-qr">QR code will appear here.</div>
+                                                    <div class="weixin-login-meta">
+                                                        <div class="weixin-login-status">
+                                                            <div class="toolbar">
+                                                                <span class="pill mode" x-text="weixinLoginStatusLabel(weixinLogin.status)"></span>
+                                                                <span class="result-note" x-text="'Updated ' + (weixinLogin.updated_at || weixinLogin.created_at || 'just now')"></span>
+                                                            </div>
+                                                            <p x-text="weixinLogin.message || weixinLogin.error || 'Waiting for Weixin login status.'"></p>
+                                                        </div>
+
+                                                        <div class="code-block" x-text="weixinLogin.qrcode_img_content || weixinLogin.qrcode"></div>
+
+                                                        <div class="toolbar">
+                                                            <button class="mini-btn" @click="copyText(weixinLogin.qrcode_img_content || weixinLogin.qrcode)">Copy QR Payload</button>
+                                                            <button class="mini-btn" x-show="Boolean(weixinQrLink())" @click="openExternalLink(weixinQrLink())">Open Link</button>
+                                                        </div>
+
+                                                        <p class="result-note">If the QR box stays blank, copy the QR payload above and render it on another device, then scan it with Weixin.</p>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <div class="channel-block channel-block-card channel-block-wide">
+                                    <h4>Connectivity Test</h4>
+                                    <div class="test-form">
+                                        <template x-if="channel.key === 'weixin'">
+                                            <div class="test-form">
+                                                <div class="form-grid">
+                                                    <label>
+                                                        Recipient (to_user_id)
+                                                        <input type="text" x-model="channelTests.weixin.recipient" placeholder="alice@im.wechat">
+                                                    </label>
+                                                    <label>
+                                                        Account ID
+                                                        <input type="text" x-model="channelTests.weixin.account_id" placeholder="Optional">
+                                                    </label>
+                                                </div>
+                                                <label>
+                                                    Context Token
+                                                    <input type="text" x-model="channelTests.weixin.context_token" placeholder="Optional if cached from inbound">
+                                                </label>
+                                                <label>
+                                                    Test Message
+                                                    <textarea x-model="channelTests.weixin.text" placeholder="LocalClaw connectivity test"></textarea>
+                                                </label>
+                                            </div>
+                                        </template>
+
+                                        <template x-if="channel.key === 'wechat_personal'">
+                                            <div class="test-form">
+                                                <div class="form-grid">
+                                                    <label>
+                                                        Reply Target
+                                                        <input type="text" x-model="channelTests.wechat_personal.reply_target" placeholder="room-1 or wxid_user">
+                                                    </label>
+                                                    <label>
+                                                        Sender ID
+                                                        <input type="text" x-model="channelTests.wechat_personal.sender_id" placeholder="Optional override">
+                                                    </label>
+                                                </div>
+                                                <label>
+                                                    Test Message
+                                                    <textarea x-model="channelTests.wechat_personal.text" placeholder="LocalClaw connectivity test"></textarea>
+                                                </label>
+                                            </div>
+                                        </template>
+
+                                        <template x-if="channel.key === 'whatsapp'">
+                                            <div class="test-form">
+                                                <div class="form-grid">
+                                                    <label>
+                                                        Recipient
+                                                        <input type="text" x-model="channelTests.whatsapp.recipient" placeholder="15551234567">
+                                                    </label>
+                                                    <label>
+                                                        Phone Number ID
+                                                        <input type="text" x-model="channelTests.whatsapp.phone_number_id" placeholder="Optional override">
+                                                    </label>
+                                                </div>
+                                                <label>
+                                                    Test Message
+                                                    <textarea x-model="channelTests.whatsapp.text" placeholder="LocalClaw connectivity test"></textarea>
+                                                </label>
+                                            </div>
+                                        </template>
+
+                                        <div class="toolbar">
+                                            <button class="primary-btn" @click="runChannelTest(channel)" :disabled="Boolean(channelTestLoading[channel.key])" x-text="channelTestLoading[channel.key] ? 'Testing...' : 'Run Test'"></button>
+                                            <span class="result-note">Live send runs only when the required outbound config is present. Otherwise the API returns a dry run preview.</span>
+                                        </div>
+
+                                        <template x-if="channelTestResults[channel.key]">
+                                            <div class="code-block" x-text="formatJson(channelTestResults[channel.key])"></div>
+                                        </template>
+                                    </div>
+                                </div>
+
+                                <div class="channel-block channel-block-card channel-block-wide">
+                                    <h4>Notes</h4>
+                                    <ul class="note-list">
+                                        <template x-for="note in channel.notes" :key="note">
+                                            <li x-text="note"></li>
+                                        </template>
+                                    </ul>
+                                </div>
                             </div>
                         </div>
-
-                        <div class="channel-block">
-                            <h4>Notes</h4>
-                            <ul class="note-list">
-                                <template x-for="note in channel.notes" :key="note">
-                                    <li x-text="note"></li>
-                                </template>
-                            </ul>
-                        </div>
-                    </div>
-                </template>
+                    </template>
+                </section>
             </div>
         </div>
 
@@ -738,10 +1820,11 @@
             <div class="section-header">
                 <div>
                     <h2>System Settings</h2>
-                    <p>Install LocalClaw as a Windows background service so it keeps running after you close the terminal.</p>
+                    <p>Manage the LocalClaw background service, run diagnostics inspired by openclaw-manager, inspect tool inventory, and review recent runtime activity from one operations console.</p>
                 </div>
                 <div class="toolbar">
-                    <button class="ghost-btn" @click="loadServiceStatus()">Refresh</button>
+                    <button class="ghost-btn" @click="refreshActiveTab()">Refresh</button>
+                    <button class="ghost-btn" @click="runRuntimeDiagnostics()" :disabled="diagnosticsLoading" x-text="diagnosticsLoading ? 'Running Diagnostics...' : 'Run Diagnostics'"></button>
                 </div>
             </div>
 
@@ -749,53 +1832,202 @@
                 <div class="notice" x-text="serviceLoadError"></div>
             </template>
 
-            <div class="channel-card">
-                <div class="channel-header">
-                    <div>
-                        <h3 x-text="(serviceStatus && serviceStatus.display_name) ? serviceStatus.display_name : 'LocalClaw Background Service'"></h3>
-                        <p class="channel-summary">Use this when you want LocalClaw to auto-start and keep serving at <code>127.0.0.1:8016</code>.</p>
+            <div class="ops-grid">
+                <div class="ops-main">
+                    <div class="channel-card">
+                        <div class="channel-header">
+                            <div>
+                                <h3 x-text="(serviceStatus && serviceStatus.display_name) ? serviceStatus.display_name : 'LocalClaw Background Service'"></h3>
+                                <p class="channel-summary">Use this when you want LocalClaw to auto-start and keep serving at <code>127.0.0.1:8016</code>.</p>
+                            </div>
+                            <div class="toolbar">
+                                <span class="pill" :class="serviceStatus && serviceStatus.installed ? 'enabled' : 'disabled'" x-text="serviceStatus && serviceStatus.installed ? 'Installed' : 'Not Installed'"></span>
+                                <span class="pill mode" x-text="serviceStatus ? serviceStatus.state : 'Unknown'"></span>
+                            </div>
+                        </div>
+
+                        <div class="channel-block-grid">
+                            <div class="channel-block channel-block-card">
+                                <h4>Service Status</h4>
+                                <ul class="channel-list">
+                                    <li><span>Service Name</span><code x-text="serviceStatus ? serviceStatus.service_name : 'LocalClaw'"></code></li>
+                                    <li><span>Running</span><span class="pill" :class="serviceStatus && serviceStatus.running ? 'enabled' : 'disabled'" x-text="serviceStatus && serviceStatus.running ? 'Running' : 'Stopped'"></span></li>
+                                    <li><span>Startup Type</span><span x-text="serviceStatus ? serviceStatus.startup_type : 'UNKNOWN'"></span></li>
+                                    <li><span>Admin Permission</span><span class="pill" :class="serviceStatus && serviceStatus.can_manage ? 'enabled' : 'disabled'" x-text="serviceStatus && serviceStatus.can_manage ? 'Granted' : 'Required'"></span></li>
+                                </ul>
+                            </div>
+
+                            <div class="channel-block channel-block-card">
+                                <h4>Security Guardrails</h4>
+                                <ul class="channel-list">
+                                    <li><span>Install Guardrail</span><span x-text="formatProtectionMode(config.skill_install_protection_mode)"></span></li>
+                                    <li><span>Isolation Approval</span><span x-text="config.skill_isolation_require_approval ? 'Required' : 'Optional'"></span></li>
+                                    <li><span>Critical Tool Policy</span><span x-text="config.skill_isolation_block_critical ? 'Blocked' : 'Review only'"></span></li>
+                                    <li><span>Pending Approvals</span><span x-text="approvals.length"></span></li>
+                                </ul>
+                            </div>
+
+                            <div class="channel-block channel-block-card channel-block-wide">
+                                <h4>Runtime Command</h4>
+                                <div class="code-block" x-text="serviceStatus && serviceStatus.command ? serviceStatus.command : 'N/A'"></div>
+                                <button class="mini-btn" @click="copyText(serviceStatus && serviceStatus.command ? serviceStatus.command : '')">Copy Command</button>
+                            </div>
+
+                            <template x-if="serviceStatus && serviceStatus.message">
+                                <div class="channel-block channel-block-card channel-block-wide">
+                                    <h4>System Note</h4>
+                                    <div class="code-block" x-text="serviceStatus.message"></div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <div class="approval-actions">
+                            <button class="primary-btn" @click="runServiceAction('install')" :disabled="serviceActionLoading === 'install' || !serviceStatus || !serviceStatus.supported || !serviceStatus.can_manage" x-text="serviceActionLoading === 'install' ? 'Installing...' : 'Install Service'"></button>
+                            <button class="primary-btn" @click="runServiceAction('start')" :disabled="serviceActionLoading === 'start' || !serviceStatus || !serviceStatus.installed || !serviceStatus.can_manage || serviceStatus.running" x-text="serviceActionLoading === 'start' ? 'Starting...' : 'Start'"></button>
+                            <button class="secondary-btn" @click="runServiceAction('stop')" :disabled="serviceActionLoading === 'stop' || !serviceStatus || !serviceStatus.installed || !serviceStatus.can_manage || !serviceStatus.running" x-text="serviceActionLoading === 'stop' ? 'Stopping...' : 'Stop'"></button>
+                            <button class="danger-btn" @click="runServiceAction('uninstall')" :disabled="serviceActionLoading === 'uninstall' || !serviceStatus || !serviceStatus.installed || !serviceStatus.can_manage" x-text="serviceActionLoading === 'uninstall' ? 'Removing...' : 'Uninstall'"></button>
+                        </div>
+
+                        <template x-if="serviceActionMessage">
+                            <p class="result-note" :class="serviceActionError ? 'result-error' : 'result-ok'" x-text="serviceActionMessage"></p>
+                        </template>
                     </div>
-                    <div class="toolbar">
-                        <span class="pill" :class="serviceStatus && serviceStatus.installed ? 'enabled' : 'disabled'" x-text="serviceStatus && serviceStatus.installed ? 'Installed' : 'Not Installed'"></span>
-                        <span class="pill mode" x-text="serviceStatus ? serviceStatus.state : 'Unknown'"></span>
+
+                    <div class="workspace-card">
+                        <div class="skills-panel-header">
+                            <div>
+                                <h3>Runtime Diagnostics</h3>
+                                <p>Modeled after openclaw-manager testing and dashboard checks, this runs a compact health sweep across service, channels, tools, skills, and approval state.</p>
+                            </div>
+                            <div class="toolbar">
+                                <button class="ghost-btn" @click="runRuntimeDiagnostics()" :disabled="diagnosticsLoading" x-text="diagnosticsLoading ? 'Running...' : 'Run Again'"></button>
+                                <span class="result-note" x-text="diagnosticsLastRunAt ? ('Last run ' + formatDateTime(diagnosticsLastRunAt)) : 'Not run yet'"></span>
+                            </div>
+                        </div>
+
+                        <div class="diagnostic-summary-grid">
+                            <div class="metric-card">
+                                <strong>Healthy</strong>
+                                <div class="metric-value" x-text="diagnosticCount('pass')"></div>
+                                <div class="metric-subtle">Checks that passed without follow-up.</div>
+                            </div>
+                            <div class="metric-card">
+                                <strong>Attention</strong>
+                                <div class="metric-value" x-text="diagnosticCount('warn')"></div>
+                                <div class="metric-subtle">Checks that succeeded but still need action.</div>
+                            </div>
+                            <div class="metric-card">
+                                <strong>Failed</strong>
+                                <div class="metric-value" x-text="diagnosticCount('fail')"></div>
+                                <div class="metric-subtle">Checks that could not complete successfully.</div>
+                            </div>
+                        </div>
+
+                        <template x-if="runtimeDiagnostics.length === 0 && !diagnosticsLoading">
+                            <div class="empty-state">
+                                <span class="empty-state-title">No diagnostic run yet.</span>
+                                <p class="empty-state-note">Run diagnostics to verify API health, service readiness, tool registry, skills, channels, and approval queue from one place.</p>
+                            </div>
+                        </template>
+
+                        <div class="diagnostic-list" x-show="runtimeDiagnostics.length > 0">
+                            <template x-for="item in runtimeDiagnostics" :key="item.key">
+                                <div class="diagnostic-card" :class="item.status">
+                                    <div class="diagnostic-head">
+                                        <div>
+                                            <strong x-text="item.label"></strong>
+                                            <p x-text="item.message"></p>
+                                        </div>
+                                        <span class="pill" :class="diagnosticStatusPillClass(item.status)" x-text="diagnosticStatusLabel(item.status)"></span>
+                                    </div>
+                                    <template x-if="item.detail">
+                                        <div class="diagnostic-detail" x-text="item.detail"></div>
+                                    </template>
+                                    <template x-if="item.suggestion">
+                                        <div class="diagnostic-detail" x-text="'Next step: ' + item.suggestion"></div>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
                     </div>
                 </div>
 
-                <div class="channel-block">
-                    <h4>Service Status</h4>
-                    <ul class="channel-list">
-                        <li><span>Service Name</span><code x-text="serviceStatus ? serviceStatus.service_name : 'LocalClaw'"></code></li>
-                        <li><span>Running</span><span class="pill" :class="serviceStatus && serviceStatus.running ? 'enabled' : 'disabled'" x-text="serviceStatus && serviceStatus.running ? 'Running' : 'Stopped'"></span></li>
-                        <li><span>Startup Type</span><span x-text="serviceStatus ? serviceStatus.startup_type : 'UNKNOWN'"></span></li>
-                        <li><span>Admin Permission</span><span class="pill" :class="serviceStatus && serviceStatus.can_manage ? 'enabled' : 'disabled'" x-text="serviceStatus && serviceStatus.can_manage ? 'Granted' : 'Required'"></span></li>
-                    </ul>
-                </div>
+                <div class="ops-side">
+                    <div class="workspace-card">
+                        <div class="skills-panel-header">
+                            <div>
+                                <h3>Tool Inventory</h3>
+                                <p>Similar to openclaw-manager's dedicated diagnostic surfaces, this makes LocalClaw's registered tools and risk levels visible without leaving the console.</p>
+                            </div>
+                            <div class="skill-badges">
+                                <span class="pill enabled" x-text="tools.filter(tool => String(tool.risk_level || '').toLowerCase() === 'low').length + ' low'"></span>
+                                <span class="pill warning" x-text="tools.filter(tool => String(tool.risk_level || '').toLowerCase() === 'medium').length + ' medium'"></span>
+                                <span class="pill disabled" x-text="tools.filter(tool => ['high', 'critical'].includes(String(tool.risk_level || '').toLowerCase())).length + ' high+'"></span>
+                            </div>
+                        </div>
 
-                <div class="channel-block">
-                    <h4>Runtime Command</h4>
-                    <div class="code-block" x-text="serviceStatus && serviceStatus.command ? serviceStatus.command : 'N/A'"></div>
-                    <button class="mini-btn" @click="copyText(serviceStatus && serviceStatus.command ? serviceStatus.command : '')">Copy Command</button>
-                </div>
+                        <template x-if="toolsLoadError">
+                            <div class="notice" x-text="toolsLoadError"></div>
+                        </template>
 
-                <template x-if="serviceStatus && serviceStatus.message">
-                    <div class="channel-block">
-                        <h4>System Note</h4>
-                        <div class="code-block" x-text="serviceStatus.message"></div>
+                        <template x-if="displayTools(12).length === 0 && !toolsLoadError">
+                            <div class="empty-state">
+                                <span class="empty-state-title">No tools loaded.</span>
+                                <p class="empty-state-note">The tool registry did not return any entries yet.</p>
+                            </div>
+                        </template>
+
+                        <div class="tool-inventory-grid" x-show="displayTools(12).length > 0">
+                            <template x-for="tool in displayTools(12)" :key="tool.name">
+                                <div class="tool-card">
+                                    <h4 x-text="tool.name"></h4>
+                                    <p x-text="tool.description || 'No description provided.'"></p>
+                                    <div class="tool-meta-row">
+                                        <span class="pill" :class="toolRiskPillClass(tool.risk_level)" x-text="String(tool.risk_level || 'low').toUpperCase()"></span>
+                                        <span class="result-note" x-text="Object.keys(tool.inputs || {}).length + ' inputs / ' + Object.keys(tool.outputs || {}).length + ' outputs'"></span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
                     </div>
-                </template>
 
-                <div class="approval-actions">
-                    <button class="primary-btn" @click="runServiceAction('install')" :disabled="serviceActionLoading === 'install' || !serviceStatus || !serviceStatus.supported || !serviceStatus.can_manage" x-text="serviceActionLoading === 'install' ? 'Installing...' : 'Install Service'"></button>
-                    <button class="primary-btn" @click="runServiceAction('start')" :disabled="serviceActionLoading === 'start' || !serviceStatus || !serviceStatus.installed || !serviceStatus.can_manage || serviceStatus.running" x-text="serviceActionLoading === 'start' ? 'Starting...' : 'Start'"></button>
-                    <button class="secondary-btn" @click="runServiceAction('stop')" :disabled="serviceActionLoading === 'stop' || !serviceStatus || !serviceStatus.installed || !serviceStatus.can_manage || !serviceStatus.running" x-text="serviceActionLoading === 'stop' ? 'Stopping...' : 'Stop'"></button>
-                    <button class="danger-btn" @click="runServiceAction('uninstall')" :disabled="serviceActionLoading === 'uninstall' || !serviceStatus || !serviceStatus.installed || !serviceStatus.can_manage" x-text="serviceActionLoading === 'uninstall' ? 'Removing...' : 'Uninstall'"></button>
+                    <div class="workspace-card">
+                        <div class="skills-panel-header">
+                            <div>
+                                <h3>Recent Activity</h3>
+                                <p>This borrows the logs/dashboard mindset from openclaw-manager, but uses LocalClaw task history so you can inspect what actually happened most recently.</p>
+                            </div>
+                            <div class="skill-subtle" x-text="recentTasks(6).length + ' shown'"></div>
+                        </div>
+
+                        <template x-if="recentTasks(6).length === 0">
+                            <div class="empty-state">
+                                <span class="empty-state-title">No recent tasks yet.</span>
+                                <p class="empty-state-note">Task history will appear here after chat requests, approvals, and channel-driven runs.</p>
+                            </div>
+                        </template>
+
+                        <div class="activity-list" x-show="recentTasks(6).length > 0">
+                            <template x-for="task in recentTasks(6)" :key="'settings-task-' + task.id">
+                                <div class="activity-item">
+                                    <div class="activity-item-head">
+                                        <div class="activity-tag-row">
+                                            <span class="pill" :class="taskStatePillClass(task.state)" x-text="taskStateLabel(task.state)"></span>
+                                            <span class="pill mode" x-text="task.channel || 'web'"></span>
+                                        </div>
+                                        <span class="result-note" x-text="formatDateTime(task.completed_at || task.created_at)"></span>
+                                    </div>
+                                    <strong x-text="truncateText(task.message || 'Untitled request', 84)"></strong>
+                                    <p x-text="taskActivitySummary(task)"></p>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
                 </div>
-
-                <template x-if="serviceActionMessage">
-                    <p class="result-note" :class="serviceActionError ? 'result-error' : 'result-ok'" x-text="serviceActionMessage"></p>
-                </template>
             </div>
         </div>
+            </div>
+        </main>
 
         <div class="modal-overlay" x-show="installReviewOpen" x-cloak>
             <div class="modal-card">
@@ -920,11 +2152,16 @@
                 approvals: [],
                 config: {},
                 channels: [],
+                tools: [],
+                toolsLoadError: '',
                 serviceStatus: null,
                 serviceLoadError: '',
                 serviceActionLoading: '',
                 serviceActionMessage: '',
                 serviceActionError: false,
+                runtimeDiagnostics: [],
+                diagnosticsLoading: false,
+                diagnosticsLastRunAt: '',
                 approvalLoadError: '',
                 channelLoadError: '',
                 copyStatus: '',
@@ -955,6 +2192,22 @@
                 },
                 channelTestResults: {},
                 channelTestLoading: {},
+                selectedChannelKey: '',
+                weixinLogin: {
+                    account_id: '',
+                    session_id: '',
+                    status: 'idle',
+                    qrcode: '',
+                    qrcode_img_content: '',
+                    poll_path: '',
+                    created_at: '',
+                    updated_at: '',
+                    message: '',
+                    error: '',
+                    connected_account: null
+                },
+                weixinLoginLoading: false,
+                weixinLoginPollTimer: null,
                 
                 async init() {
                     await this.loadConfig();
@@ -962,6 +2215,7 @@
                     await this.loadTasks({ syncChatHistory: true });
                     await this.loadApprovals();
                     await this.loadChannels();
+                    await this.loadTools();
                     await this.loadServiceStatus();
                     
                     setInterval(() => {
@@ -973,10 +2227,159 @@
                         }
                         this.loadApprovals();
                         this.loadChannels();
+                        this.loadServiceStatus();
                         if (this.activeTab === 'settings') {
-                            this.loadServiceStatus();
+                            this.loadTools();
                         }
                     }, 5000);
+                },
+
+                pageNavItems() {
+                    return [
+                        { id: 'chat', label: 'Chat', short: 'CH' },
+                        { id: 'approvals', label: 'Approvals', short: 'AP' },
+                        { id: 'skills', label: 'Skills', short: 'SK' },
+                        { id: 'channels', label: 'Channels', short: 'CN' },
+                        { id: 'settings', label: 'Settings', short: 'ST' }
+                    ];
+                },
+
+                currentPageMeta() {
+                    const meta = {
+                        chat: {
+                            eyebrow: 'Workspace',
+                            title: 'Chat Workspace',
+                            description: 'Run requests, inspect structured outputs, and keep the active conversation close to runtime status.',
+                            hint: 'Use /cmd for routine shell-safe commands or /shell when you expect approval.'
+                        },
+                        approvals: {
+                            eyebrow: 'Safety',
+                            title: 'Approval Center',
+                            description: 'Review high-risk actions before they continue so raw shell and protected operations stay explicit.',
+                            hint: 'Only high-risk steps pause here. Routine /cmd flows usually continue without manual approval.'
+                        },
+                        skills: {
+                            eyebrow: 'Capability',
+                            title: 'Skill Library',
+                            description: 'Separate installed runtime skills from installable marketplace packages and keep security review in the loop.',
+                            hint: 'Every third-party install is scanned before LocalClaw writes files.'
+                        },
+                        channels: {
+                            eyebrow: 'Integrations',
+                            title: 'Channel Configuration',
+                            description: 'Configure inbound webhooks, outbound reply paths, and visual login flows from one clearer message-channel console.',
+                            hint: 'Select a channel on the left to focus on setup, testing, and connection state.'
+                        },
+                        settings: {
+                            eyebrow: 'Operations',
+                            title: 'System Settings',
+                            description: 'Manage the background service, runtime diagnostics, tool inventory, and activity history without leaving the LocalClaw console.',
+                            hint: 'Run diagnostics here when you want a quick health view similar to openclaw-manager testing and logs.'
+                        }
+                    };
+
+                    return meta[this.activeTab] || meta.chat;
+                },
+
+                refreshActiveTab() {
+                    if (this.activeTab === 'skills') {
+                        return this.refreshSkillCatalog();
+                    }
+                    if (this.activeTab === 'approvals') {
+                        return this.loadApprovals();
+                    }
+                    if (this.activeTab === 'channels') {
+                        return this.loadChannels();
+                    }
+                    if (this.activeTab === 'settings') {
+                        return Promise.all([
+                            this.loadServiceStatus(),
+                            this.loadTools()
+                        ]);
+                    }
+                    return Promise.all([
+                        this.loadTasks({ syncChatHistory: true }),
+                        this.loadApprovals()
+                    ]);
+                },
+
+                activeTabActionLabel() {
+                    const labels = {
+                        chat: 'Refresh Workspace',
+                        approvals: 'Refresh Approvals',
+                        skills: 'Refresh Skills',
+                        channels: 'Refresh Channels',
+                        settings: 'Refresh Ops Console'
+                    };
+                    return labels[this.activeTab] || 'Refresh';
+                },
+
+                summaryCardsForActiveTab() {
+                    if (this.activeTab === 'approvals') {
+                        const criticalCount = this.approvals.filter(item => {
+                            return item && item.step && item.step.risk_level === 'critical';
+                        }).length;
+                        return [
+                            { label: 'Pending', value: String(this.approvals.length), note: 'Steps waiting for explicit approval.' },
+                            { label: 'Critical', value: String(criticalCount), note: 'Raw shell or equally high-risk actions.' },
+                            { label: 'Tasks', value: String(this.tasks.length), note: 'Recent runtime tasks currently visible.' },
+                            { label: 'Fast Path', value: '/cmd', note: 'Use safe-shell routing when possible.' }
+                        ];
+                    }
+
+                    if (this.activeTab === 'skills') {
+                        return [
+                            { label: 'Installed', value: String(this.skills.length), note: 'Runtime skills currently registered.' },
+                            { label: 'Available', value: String(this.availableSkills.length), note: 'Bundled and marketplace results.' },
+                            { label: 'Protection', value: this.formatProtectionMode(this.config.skill_install_protection_mode), note: 'Automatic install guardrail level.' },
+                            { label: 'Registry', value: this.config.clawhub_has_token ? 'Private' : 'Public', note: this.config.clawhub_base_url || 'https://clawhub.ai' }
+                        ];
+                    }
+
+                    if (this.activeTab === 'channels') {
+                        return [
+                            { label: 'Enabled', value: String(this.enabledChannelCount()), note: 'Channels marked enabled in current runtime config.' },
+                            { label: 'Channels', value: String(this.channels.length), note: 'Available channel types in the web console.' },
+                            { label: 'Stored Login', value: String(this.channelsWithStoredLoginCount()), note: 'Channels with persistent login state, including Weixin QR login.' },
+                            { label: 'Tests Run', value: String(Object.keys(this.channelTestResults || {}).length), note: 'Connectivity test results captured in this session.' }
+                        ];
+                    }
+
+                    if (this.activeTab === 'settings') {
+                        const diagnosticSummary = this.runtimeDiagnostics.length
+                            ? this.diagnosticCount('pass') + '/' + this.runtimeDiagnostics.length
+                            : 'Not run';
+                        return [
+                            { label: 'Service', value: this.serviceStatus ? this.serviceStatus.state : 'Unknown', note: 'Current LocalClaw background-service state.' },
+                            { label: 'Installed', value: this.serviceStatus && this.serviceStatus.installed ? 'Yes' : 'No', note: 'Whether the Windows service is installed.' },
+                            { label: 'Tools', value: String(this.tools.length), note: 'Registered runtime tools currently visible to the planner.' },
+                            { label: 'Diagnostics', value: diagnosticSummary, note: this.runtimeDiagnostics.length ? 'Passing checks from the latest runtime diagnostic run.' : 'Run diagnostics to test health, service, tools, skills, and channels.' }
+                        ];
+                    }
+
+                    return [
+                        { label: 'Messages', value: String(this.messages.length), note: 'Conversation items currently visible.' },
+                        { label: 'Tasks', value: String(this.tasks.length), note: 'Recent task history available in the web UI.' },
+                        { label: 'Approvals', value: String(this.approvals.length), note: 'High-risk actions currently paused.' },
+                        { label: 'Enabled Channels', value: String(this.enabledChannelCount()), note: 'Configured message channels available to runtime.' }
+                    ];
+                },
+
+                serviceRunningClass() {
+                    return this.serviceStatus && this.serviceStatus.running ? 'running' : 'stopped';
+                },
+
+                serviceSummaryLabel() {
+                    if (!this.serviceStatus) {
+                        return 'Service status loading';
+                    }
+                    if (this.serviceStatus.running) {
+                        return 'Background service running';
+                    }
+                    if (this.serviceStatus.installed) {
+                        return 'Installed but not running';
+                    }
+                    return 'Background service not installed';
                 },
 
                 nextMessageId() {
@@ -1387,6 +2790,232 @@
                     return this.channels.filter(channel => channel.enabled).length;
                 },
 
+                channelsWithStoredLoginCount() {
+                    return this.channels.filter(channel => {
+                        return Boolean(channel && channel.connected_account);
+                    }).length;
+                },
+
+                selectedChannel() {
+                    return this.channels.find(channel => channel.key === this.selectedChannelKey) || null;
+                },
+
+                selectChannel(key) {
+                    this.selectedChannelKey = key;
+                },
+
+                channelConfigured(channel) {
+                    if (!channel) {
+                        return false;
+                    }
+
+                    const checks = Object.values(channel.checks || {});
+                    return Boolean(channel.enabled || checks.some(value => Boolean(value)));
+                },
+
+                channelMissingCheckCount(channel) {
+                    return Object.values((channel && channel.checks) || {}).filter(value => !value).length;
+                },
+
+                channelStateLabel(channel) {
+                    if (!channel) {
+                        return 'Unknown';
+                    }
+
+                    if (channel.connected_account) {
+                        return 'Connected';
+                    }
+
+                    if (this.channelMissingCheckCount(channel) === 0) {
+                        return 'Ready';
+                    }
+
+                    if (this.channelConfigured(channel)) {
+                        return 'Configured';
+                    }
+
+                    return 'Needs setup';
+                },
+
+                selectedChannelStats(channel) {
+                    if (!channel) {
+                        return [];
+                    }
+
+                    const missingChecks = this.channelMissingCheckCount(channel);
+                    const totalChecks = Object.keys(channel.checks || {}).length;
+                    const requiredEnv = Array.isArray(channel.required_env) ? channel.required_env : [];
+                    const loginValue = channel.supports_qr_login
+                        ? (channel.connected_account ? 'Stored' : 'Scan needed')
+                        : channel.reply_mode_label;
+                    const loginNote = channel.supports_qr_login
+                        ? (
+                            channel.connected_account
+                                ? 'A reusable login is already saved locally.'
+                                : 'Use the QR panel below or a bot token to activate outbound replies.'
+                        )
+                        : 'Current outbound delivery path.';
+
+                    return [
+                        {
+                            label: 'Readiness',
+                            value: this.channelStateLabel(channel),
+                            note: missingChecks === 0
+                                ? 'All declared checks are present.'
+                                : missingChecks + ' of ' + totalChecks + ' checks still need attention.'
+                        },
+                        {
+                            label: 'Runtime',
+                            value: channel.enabled ? 'Live' : 'Off',
+                            note: channel.enabled
+                                ? 'This channel is enabled in the current runtime config.'
+                                : 'This integration is available in the UI but disabled at runtime.'
+                        },
+                        {
+                            label: 'Required Env',
+                            value: String(requiredEnv.length),
+                            note: requiredEnv.length
+                                ? requiredEnv.slice(0, 2).join(', ')
+                                : 'No mandatory environment keys listed.'
+                        },
+                        {
+                            label: channel.supports_qr_login ? 'Login State' : 'Reply Path',
+                            value: loginValue,
+                            note: loginNote
+                        }
+                    ];
+                },
+
+                recentTasks(limit = 6) {
+                    const maxItems = Number(limit) > 0 ? Number(limit) : 6;
+                    return [...this.tasks]
+                        .sort((left, right) => new Date(right.created_at || 0) - new Date(left.created_at || 0))
+                        .slice(0, maxItems);
+                },
+
+                recentGuardedTasks(limit = 5) {
+                    const guardedStates = new Set(['verifying', 'paused', 'failed']);
+                    const maxItems = Number(limit) > 0 ? Number(limit) : 5;
+
+                    return this.recentTasks(this.tasks.length || maxItems)
+                        .filter(task => {
+                            const state = String(task && task.state || '').toLowerCase();
+                            const risk = String(task && task.current_step && task.current_step.risk_level || '').toLowerCase();
+                            return guardedStates.has(state) || ['high', 'critical'].includes(risk);
+                        })
+                        .slice(0, maxItems);
+                },
+
+                taskStateLabel(state) {
+                    const labels = {
+                        init: 'Queued',
+                        parsed: 'Parsed',
+                        planned: 'Planned',
+                        running: 'Running',
+                        verifying: 'Needs Approval',
+                        paused: 'Paused',
+                        completed: 'Completed',
+                        failed: 'Failed'
+                    };
+
+                    return labels[String(state || '').toLowerCase()] || (state || 'Unknown');
+                },
+
+                taskStatePillClass(state) {
+                    const normalized = String(state || '').toLowerCase();
+                    if (normalized === 'completed') {
+                        return 'enabled';
+                    }
+                    if (normalized === 'failed') {
+                        return 'disabled';
+                    }
+                    if (['running', 'verifying', 'paused'].includes(normalized)) {
+                        return 'warning';
+                    }
+                    return 'mode';
+                },
+
+                truncateText(value, limit = 160) {
+                    const text = String(value || '').trim();
+                    if (!text) {
+                        return '';
+                    }
+                    return text.length > limit ? text.slice(0, limit - 1) + '…' : text;
+                },
+
+                taskActivitySummary(task) {
+                    if (!task) {
+                        return 'No task details available.';
+                    }
+
+                    const state = String(task.state || '').toLowerCase();
+                    const currentStep = task.current_step || {};
+                    const currentStepName = currentStep.command_preview || currentStep.tool_name || currentStep.name || '';
+
+                    if (state === 'verifying') {
+                        return 'Waiting for approval on ' + (currentStepName || 'a protected step') + '.';
+                    }
+
+                    if (state === 'failed') {
+                        return this.truncateText(task.error || this.getTaskDisplayText(task), 180) || 'Task failed.';
+                    }
+
+                    const summary = this.truncateText(this.getTaskDisplayText(task), 180);
+                    if (currentStepName && summary) {
+                        return currentStepName + ': ' + summary;
+                    }
+                    return summary || 'Task completed without a display summary.';
+                },
+
+                toolRiskPillClass(riskLevel) {
+                    const normalized = String(riskLevel || '').toLowerCase();
+                    if (normalized === 'low') {
+                        return 'enabled';
+                    }
+                    if (normalized === 'medium') {
+                        return 'warning';
+                    }
+                    return 'disabled';
+                },
+
+                displayTools(limit = 12) {
+                    const order = { critical: 0, high: 1, medium: 2, low: 3 };
+                    return [...this.tools]
+                        .sort((left, right) => {
+                            const leftRisk = order[String(left.risk_level || 'low').toLowerCase()] ?? 99;
+                            const rightRisk = order[String(right.risk_level || 'low').toLowerCase()] ?? 99;
+                            if (leftRisk !== rightRisk) {
+                                return leftRisk - rightRisk;
+                            }
+                            return String(left.name || '').localeCompare(String(right.name || ''));
+                        })
+                        .slice(0, limit);
+                },
+
+                diagnosticCount(status) {
+                    return this.runtimeDiagnostics.filter(item => item.status === status).length;
+                },
+
+                diagnosticStatusLabel(status) {
+                    const labels = {
+                        pass: 'Healthy',
+                        warn: 'Attention',
+                        fail: 'Failed'
+                    };
+                    return labels[String(status || '').toLowerCase()] || 'Unknown';
+                },
+
+                diagnosticStatusPillClass(status) {
+                    const normalized = String(status || '').toLowerCase();
+                    if (normalized === 'pass') {
+                        return 'enabled';
+                    }
+                    if (normalized === 'warn') {
+                        return 'warning';
+                    }
+                    return 'disabled';
+                },
+
                 refreshSkillCatalog(options = {}) {
                     return Promise.all([
                         this.loadSkills(options),
@@ -1656,11 +3285,190 @@
                     return parsed.toLocaleDateString();
                 },
 
+                formatDateTime(value) {
+                    if (!value && value !== 0) {
+                        return 'Unknown';
+                    }
+
+                    const parsed = typeof value === 'number'
+                        ? new Date(value < 1000000000000 ? value * 1000 : value)
+                        : new Date(value);
+
+                    if (Number.isNaN(parsed.getTime())) {
+                        return String(value);
+                    }
+
+                    return parsed.toLocaleString();
+                },
+
                 openExternalLink(url) {
                     if (!url) {
                         return;
                     }
                     window.open(url, '_blank', 'noopener');
+                },
+
+                weixinLoginStatusLabel(status) {
+                    const labels = {
+                        idle: 'Not Started',
+                        wait: 'Waiting for Scan',
+                        scaned: 'Awaiting Confirm',
+                        scanned: 'Awaiting Confirm',
+                        confirmed: 'Connected',
+                        expired: 'Expired',
+                        error: 'Error'
+                    };
+                    return labels[String(status || '').toLowerCase()] || (status || 'Not Started');
+                },
+
+                isWeixinLoginTerminal(status) {
+                    return ['confirmed', 'expired', 'error'].includes(String(status || '').toLowerCase());
+                },
+
+                weixinConnectedAccountSummary(account) {
+                    if (!account) {
+                        return 'No stored Weixin login yet.';
+                    }
+
+                    return [
+                        'Local account: ' + (account.account_id || 'default'),
+                        'Remote account: ' + (account.remote_account_id || 'unknown'),
+                        'User ID: ' + (account.user_id || 'unknown'),
+                        'Base URL: ' + (account.base_url || 'unknown'),
+                        'Saved at: ' + (account.saved_at || 'unknown'),
+                        'Cached context tokens: ' + String(account.context_token_count || 0)
+                    ].join('\n');
+                },
+
+                weixinQrLink() {
+                    const value = String(this.weixinLogin.qrcode_img_content || '').trim();
+                    return /^(https?:\/\/|data:image\/)/i.test(value) ? value : '';
+                },
+
+                stopWeixinLoginPolling() {
+                    if (this.weixinLoginPollTimer) {
+                        clearTimeout(this.weixinLoginPollTimer);
+                        this.weixinLoginPollTimer = null;
+                    }
+                },
+
+                scheduleWeixinLoginPolling() {
+                    this.stopWeixinLoginPolling();
+                    if (!this.weixinLogin.session_id || this.isWeixinLoginTerminal(this.weixinLogin.status)) {
+                        return;
+                    }
+
+                    this.weixinLoginPollTimer = setTimeout(() => {
+                        this.pollWeixinLoginStatus();
+                    }, 2000);
+                },
+
+                renderWeixinQr() {
+                    const target = document.getElementById('weixin-login-qr');
+                    if (!target) {
+                        return;
+                    }
+
+                    target.innerHTML = '';
+                    const value = String(this.weixinLogin.qrcode_img_content || this.weixinLogin.qrcode || '').trim();
+                    if (!value) {
+                        target.textContent = 'QR code will appear here.';
+                        return;
+                    }
+
+                    if (/^data:image\//i.test(value) || /^https?:\/\//i.test(value)) {
+                        const image = document.createElement('img');
+                        image.src = value;
+                        image.alt = 'Weixin login QR code';
+                        target.appendChild(image);
+                        return;
+                    }
+
+                    if (window.QRCode) {
+                        new window.QRCode(target, {
+                            text: value,
+                            width: 220,
+                            height: 220,
+                            correctLevel: window.QRCode.CorrectLevel.M
+                        });
+                        return;
+                    }
+
+                    target.textContent = 'QR renderer failed to load. Copy the QR payload below.';
+                },
+
+                applyWeixinLoginPayload(payload) {
+                    this.weixinLogin = {
+                        ...this.weixinLogin,
+                        ...(payload || {})
+                    };
+                    this.$nextTick(() => this.renderWeixinQr());
+
+                    if (this.isWeixinLoginTerminal(this.weixinLogin.status)) {
+                        this.stopWeixinLoginPolling();
+                        return;
+                    }
+
+                    if (this.weixinLogin.session_id) {
+                        this.scheduleWeixinLoginPolling();
+                    }
+                },
+
+                async startWeixinLogin(channel) {
+                    if (this.weixinLoginLoading) {
+                        return;
+                    }
+
+                    this.stopWeixinLoginPolling();
+                    this.weixinLoginLoading = true;
+
+                    try {
+                        const response = await axios.post(
+                            (channel && channel.login_path) || '/api/channels/weixin/login/start',
+                            {
+                                account_id: this.weixinLogin.account_id || ''
+                            }
+                        );
+                        this.applyWeixinLoginPayload(response.data || {});
+                        await this.loadChannels();
+                    } catch (e) {
+                        const detail = e.response && e.response.data
+                            ? (e.response.data.detail || JSON.stringify(e.response.data))
+                            : e.message;
+                        this.weixinLogin = {
+                            ...this.weixinLogin,
+                            status: 'error',
+                            message: 'Failed to start Weixin QR login.',
+                            error: detail
+                        };
+                    } finally {
+                        this.weixinLoginLoading = false;
+                    }
+                },
+
+                async pollWeixinLoginStatus() {
+                    if (!this.weixinLogin.session_id) {
+                        return;
+                    }
+
+                    try {
+                        const response = await axios.get('/api/channels/weixin/login/' + encodeURIComponent(this.weixinLogin.session_id));
+                        this.applyWeixinLoginPayload(response.data || {});
+                        if (this.isWeixinLoginTerminal(this.weixinLogin.status)) {
+                            await this.loadChannels();
+                        }
+                    } catch (e) {
+                        const detail = e.response && e.response.data
+                            ? (e.response.data.detail || JSON.stringify(e.response.data))
+                            : e.message;
+                        this.stopWeixinLoginPolling();
+                        this.weixinLogin = {
+                            ...this.weixinLogin,
+                            status: 'error',
+                            message: 'Failed to poll Weixin QR login status.',
+                            error: detail
+                        };
+                    }
                 },
 
                 absoluteUrl(path) {
@@ -1816,15 +3624,6 @@
                     } catch (e) {
                         this.copyStatus = 'Copy failed. Clipboard permission may be blocked.';
                         return;
-                        const detail = e.response && e.response.data
-                            ? (e.response.data.detail || JSON.stringify(e.response.data))
-                            : e.message;
-                        const friendlyMessage = String(detail).includes('Failed to fetch skill metadata')
-                            ? '安全体检失败：后端仓库里没有找到这个 Skill 的元数据。它可能是旧的演示项，或者 ClawHub 当前不可用。请刷新 Available Skills 后重试。'
-                            : '安全体检失败：' + detail;
-                        alert(friendlyMessage);
-                        return;
-                        this.copyStatus = 'Copy failed. Clipboard permission may be blocked.';
                     }
 
                     setTimeout(() => {
@@ -1845,10 +3644,190 @@
                     try {
                         const response = await axios.get('/api/channels');
                         this.channels = (response.data.channels || []).map(channel => this.decorateChannel(channel));
+                        if (this.channels.length > 0) {
+                            const hasSelected = this.channels.some(channel => channel.key === this.selectedChannelKey);
+                            if (!hasSelected) {
+                                this.selectedChannelKey = this.channels[0].key;
+                            }
+                        } else {
+                            this.selectedChannelKey = '';
+                        }
                         this.channelLoadError = '';
+                        if (this.weixinLogin.session_id || this.weixinLogin.qrcode_img_content) {
+                            this.$nextTick(() => this.renderWeixinQr());
+                        }
                     } catch (e) {
                         console.error('Failed to load channels:', e);
                         this.channelLoadError = 'Failed to load channels: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message);
+                    }
+                },
+
+                async loadTools() {
+                    try {
+                        const response = await axios.get('/api/tools');
+                        this.tools = Array.isArray(response.data) ? response.data : [];
+                        this.toolsLoadError = '';
+                    } catch (e) {
+                        console.error('Failed to load tools:', e);
+                        this.toolsLoadError = 'Failed to load tools: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message);
+                    }
+                },
+
+                async runRuntimeDiagnostics() {
+                    if (this.diagnosticsLoading) {
+                        return;
+                    }
+
+                    this.diagnosticsLoading = true;
+                    this.runtimeDiagnostics = [];
+
+                    const checks = [
+                        {
+                            key: 'health',
+                            label: 'Web API Health',
+                            run: () => axios.get('/health'),
+                            evaluate: (response) => {
+                                const payload = response.data || {};
+                                return {
+                                    status: payload.status === 'healthy' ? 'pass' : 'fail',
+                                    message: payload.status === 'healthy'
+                                        ? 'Health endpoint responded normally.'
+                                        : 'Health endpoint returned an unexpected payload.',
+                                    detail: payload.timestamp ? 'Timestamp: ' + payload.timestamp : '',
+                                    suggestion: 'If this check fails, reload the LocalClaw web service first.'
+                                };
+                            }
+                        },
+                        {
+                            key: 'service',
+                            label: 'Background Service',
+                            run: () => axios.get('/api/system/service'),
+                            evaluate: (response) => {
+                                const service = response.data || {};
+                                this.serviceStatus = service;
+                                return {
+                                    status: service.running ? 'pass' : 'warn',
+                                    message: service.running
+                                        ? 'Background service is running.'
+                                        : (service.installed ? 'Service is installed but currently stopped.' : 'Background service is not installed yet.'),
+                                    detail: [
+                                        'State: ' + (service.state || 'unknown'),
+                                        'Startup: ' + (service.startup_type || 'UNKNOWN'),
+                                        'Admin manage: ' + (service.can_manage ? 'granted' : 'required')
+                                    ].join('\n'),
+                                    suggestion: service.running
+                                        ? 'No action required.'
+                                        : 'Use the service controls below to install or start the background runtime.'
+                                };
+                            }
+                        },
+                        {
+                            key: 'tools',
+                            label: 'Tool Registry',
+                            run: () => axios.get('/api/tools'),
+                            evaluate: (response) => {
+                                const tools = Array.isArray(response.data) ? response.data : [];
+                                this.tools = tools;
+                                return {
+                                    status: tools.length > 0 ? 'pass' : 'warn',
+                                    message: tools.length > 0
+                                        ? tools.length + ' tools are registered for the planner.'
+                                        : 'No tools were returned by the registry.',
+                                    detail: tools.length
+                                        ? 'High/critical risk tools: ' + tools.filter(tool => ['high', 'critical'].includes(String(tool.risk_level || '').toLowerCase())).length
+                                        : '',
+                                    suggestion: tools.length
+                                        ? 'Review the inventory below when you want to inspect available capabilities.'
+                                        : 'Reload the runtime and verify tool registration if this stays empty.'
+                                };
+                            }
+                        },
+                        {
+                            key: 'skills',
+                            label: 'Skill Registry',
+                            run: () => axios.get('/api/skills'),
+                            evaluate: (response) => {
+                                const skills = Array.isArray(response.data) ? response.data : [];
+                                const unavailable = skills.filter(skill => String(skill.availability || 'available') !== 'available').length;
+                                return {
+                                    status: unavailable > 0 ? 'warn' : 'pass',
+                                    message: unavailable > 0
+                                        ? unavailable + ' skills currently need attention or are blocked.'
+                                        : skills.length + ' skills loaded without availability warnings.',
+                                    detail: 'Installed skills returned: ' + skills.length,
+                                    suggestion: unavailable > 0
+                                        ? 'Open the Skills page to review availability reasons and source paths.'
+                                        : 'Skill registry looks healthy.'
+                                };
+                            }
+                        },
+                        {
+                            key: 'channels',
+                            label: 'Channel Metadata',
+                            run: () => axios.get('/api/channels'),
+                            evaluate: (response) => {
+                                const channels = response.data && Array.isArray(response.data.channels) ? response.data.channels : [];
+                                const enabled = channels.filter(channel => channel.enabled).length;
+                                return {
+                                    status: enabled > 0 ? 'pass' : 'warn',
+                                    message: enabled > 0
+                                        ? enabled + ' of ' + channels.length + ' channels are enabled.'
+                                        : 'Channel metadata loaded, but no channels are currently enabled.',
+                                    detail: 'Channels returned: ' + channels.length,
+                                    suggestion: enabled > 0
+                                        ? 'Open Channels to inspect readiness checks and visual login state.'
+                                        : 'Open Channels and finish setup for at least one inbound path.'
+                                };
+                            }
+                        },
+                        {
+                            key: 'approvals',
+                            label: 'Approval Queue',
+                            run: () => axios.get('/api/approvals'),
+                            evaluate: (response) => {
+                                const approvals = response.data && Array.isArray(response.data.approvals) ? response.data.approvals : [];
+                                return {
+                                    status: approvals.length === 0 ? 'pass' : 'warn',
+                                    message: approvals.length === 0
+                                        ? 'No high-risk steps are waiting for approval.'
+                                        : approvals.length + ' high-risk steps are currently paused.',
+                                    detail: approvals.length > 0
+                                        ? 'Open Approval Center to review paused raw shell or protected actions.'
+                                        : 'Approval queue is clear.',
+                                    suggestion: approvals.length === 0
+                                        ? 'Routine /cmd flows can continue without manual review when risk stays low.'
+                                        : 'Review or approve the blocked steps before those tasks can continue.'
+                                };
+                            }
+                        }
+                    ];
+
+                    try {
+                        const results = [];
+                        for (const check of checks) {
+                            try {
+                                const response = await check.run();
+                                results.push({
+                                    key: check.key,
+                                    label: check.label,
+                                    ...(check.evaluate(response))
+                                });
+                            } catch (e) {
+                                results.push({
+                                    key: check.key,
+                                    label: check.label,
+                                    status: 'fail',
+                                    message: 'Check failed to execute.',
+                                    detail: e.response && e.response.data ? JSON.stringify(e.response.data) : e.message,
+                                    suggestion: 'Retry the diagnostic run after the affected service or API becomes reachable.'
+                                });
+                            }
+                        }
+
+                        this.runtimeDiagnostics = results;
+                        this.diagnosticsLastRunAt = new Date().toISOString();
+                    } finally {
+                        this.diagnosticsLoading = false;
                     }
                 },
 
@@ -2042,7 +4021,6 @@
                             : '安全体检失败：' + detail;
                         alert(friendlyMessage);
                         return;
-                        alert('安全体检失败: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message));
                     } finally {
                         this.reviewLoading = '';
                     }
@@ -2165,6 +4143,7 @@
             };
         }
     </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </body>
 </html>

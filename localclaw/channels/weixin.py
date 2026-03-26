@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import uuid
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -18,6 +23,9 @@ from localclaw.core.models import Message, Task
 logger = logging.getLogger(__name__)
 
 DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com"
+WEIXIN_QR_LOGIN_BOT_TYPE = "3"
+WEIXIN_QR_CLIENT_VERSION = "1"
+WEIXIN_QR_SESSION_TTL = timedelta(minutes=15)
 MSG_TYPE_BOT = 2
 MSG_STATE_FINISH = 2
 MSG_ITEM_TEXT = 1
@@ -37,16 +45,204 @@ class WeixinEnvelope:
     raw_payload: Optional[Dict[str, Any]] = None
 
 
+@dataclass
+class StoredWeixinAccount:
+    """Persisted Weixin account credentials and context tokens."""
+
+    token: str = ""
+    base_url: str = DEFAULT_WEIXIN_BASE_URL
+    remote_account_id: str = ""
+    user_id: str = ""
+    saved_at: str = ""
+    context_tokens: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class WeixinQrLoginSession:
+    """In-memory Weixin QR login session."""
+
+    session_id: str
+    account_id: str
+    base_url: str
+    status: str
+    qrcode: str
+    qrcode_img_content: str
+    created_at: str
+    updated_at: str
+    error: str = ""
+    connected_account: Optional[StoredWeixinAccount] = None
+
+
 _context_token_cache: Dict[str, str] = {}
 _context_token_lock = threading.Lock()
+_weixin_login_sessions: Dict[str, WeixinQrLoginSession] = {}
+_weixin_login_sessions_lock = threading.Lock()
+
+
+def _utcnow() -> datetime:
+    """Return a timezone-aware UTC timestamp."""
+
+    return datetime.now(timezone.utc)
+
+
+def _utcnow_iso() -> str:
+    """Return an ISO-8601 UTC timestamp."""
+
+    return _utcnow().isoformat()
+
+
+def normalize_weixin_account_id(account_id: str) -> str:
+    """Normalize an optional account id into a local storage key."""
+
+    normalized = str(account_id or "").strip()
+    return normalized or "default"
+
+
+def _sanitize_weixin_account_key(value: str) -> str:
+    """Create a filesystem-safe account key."""
+
+    safe = "".join(
+        character if character.isalnum() or character in {"-", "_", "."} else "_"
+        for character in normalize_weixin_account_id(value)
+    )
+    return safe or "default"
+
+
+def _weixin_state_root(settings: Settings) -> Path:
+    """Resolve the LocalClaw data directory used for Weixin state."""
+
+    return settings.data_dir / "weixin"
+
+
+def _weixin_account_file_path(settings: Settings, account_id: str = "") -> Path:
+    """Resolve the persisted account-state path for a local Weixin account."""
+
+    return (
+        _weixin_state_root(settings)
+        / "accounts"
+        / f"{_sanitize_weixin_account_key(account_id)}.json"
+    )
 
 
 def _context_cache_key(account_id: str, sender_id: str) -> str:
     """Build a deterministic key for context-token storage."""
 
-    account = account_id.strip() or "default"
+    account = normalize_weixin_account_id(account_id)
     sender = sender_id.strip()
     return f"{account}:{sender}"
+
+
+def load_stored_weixin_account(
+    settings: Optional[Settings] = None,
+    account_id: str = "",
+) -> Optional[StoredWeixinAccount]:
+    """Load a persisted Weixin account from LocalClaw data storage."""
+
+    resolved_settings = settings or get_settings()
+    normalized_account_id = normalize_weixin_account_id(account_id)
+    path = _weixin_account_file_path(resolved_settings, normalized_account_id)
+    if not path.exists() and normalized_account_id != "default":
+        path = _weixin_account_file_path(resolved_settings, "default")
+    if not path.exists():
+        return None
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Failed to read stored Weixin account state from %s: %s", path, exc)
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    context_tokens = payload.get("context_tokens")
+    if not isinstance(context_tokens, dict):
+        context_tokens = {}
+
+    return StoredWeixinAccount(
+        token=str(payload.get("token") or "").strip(),
+        base_url=str(payload.get("base_url") or DEFAULT_WEIXIN_BASE_URL).strip()
+        or DEFAULT_WEIXIN_BASE_URL,
+        remote_account_id=str(payload.get("remote_account_id") or "").strip(),
+        user_id=str(payload.get("user_id") or "").strip(),
+        saved_at=str(payload.get("saved_at") or "").strip(),
+        context_tokens={
+            str(key).strip(): str(value).strip()
+            for key, value in context_tokens.items()
+            if str(key).strip() and str(value).strip()
+        },
+    )
+
+
+def save_stored_weixin_account(
+    account: StoredWeixinAccount,
+    settings: Optional[Settings] = None,
+    account_id: str = "",
+) -> Path:
+    """Persist a Weixin account into LocalClaw data storage."""
+
+    resolved_settings = settings or get_settings()
+    path = _weixin_account_file_path(resolved_settings, account_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "token": account.token.strip(),
+        "base_url": (account.base_url or DEFAULT_WEIXIN_BASE_URL).strip() or DEFAULT_WEIXIN_BASE_URL,
+        "remote_account_id": account.remote_account_id.strip(),
+        "user_id": account.user_id.strip(),
+        "saved_at": account.saved_at.strip() or _utcnow_iso(),
+        "context_tokens": {
+            str(key).strip(): str(value).strip()
+            for key, value in (account.context_tokens or {}).items()
+            if str(key).strip() and str(value).strip()
+        },
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+    return path
+
+
+def get_weixin_connected_account(
+    settings: Optional[Settings] = None,
+    account_id: str = "",
+) -> Optional[StoredWeixinAccount]:
+    """Return the persisted Weixin account, if LocalClaw has one."""
+
+    return load_stored_weixin_account(settings=settings, account_id=account_id)
+
+
+def resolve_weixin_reply_configuration(
+    settings: Optional[Settings] = None,
+    account_id: str = "",
+) -> Dict[str, Any]:
+    """Resolve outbound Weixin reply configuration from env and stored login state."""
+
+    resolved_settings = settings or get_settings()
+    stored_account = load_stored_weixin_account(settings=resolved_settings, account_id=account_id)
+    stored_token = (stored_account.token if stored_account else "").strip()
+    env_token = (resolved_settings.weixin_bot_token or "").strip()
+    bot_token = env_token or stored_token
+
+    if env_token:
+        base_url = (resolved_settings.weixin_base_url or DEFAULT_WEIXIN_BASE_URL).strip()
+        bot_token_source = "env"
+    elif stored_account and stored_account.base_url.strip():
+        base_url = stored_account.base_url.strip()
+        bot_token_source = "stored_login"
+    else:
+        base_url = (resolved_settings.weixin_base_url or DEFAULT_WEIXIN_BASE_URL).strip()
+        bot_token_source = "missing"
+
+    has_stored_login = bool(stored_token)
+    reply_enabled = bool(resolved_settings.weixin_reply_via_api or has_stored_login)
+
+    return {
+        "reply_enabled": reply_enabled,
+        "bot_token": bot_token,
+        "bot_token_source": bot_token_source,
+        "has_stored_login": has_stored_login,
+        "stored_account": stored_account,
+        "base_url": base_url.rstrip("/") or DEFAULT_WEIXIN_BASE_URL,
+    }
 
 
 def cache_weixin_context_token(account_id: str, sender_id: str, context_token: str) -> None:
@@ -60,14 +256,130 @@ def cache_weixin_context_token(account_id: str, sender_id: str, context_token: s
         _context_token_cache[_context_cache_key(account_id, sender)] = token
 
 
-def get_cached_weixin_context_token(account_id: str, sender_id: str) -> Optional[str]:
-    """Get a cached context token for a sender."""
+def get_cached_weixin_context_token(
+    account_id: str,
+    sender_id: str,
+    settings: Optional[Settings] = None,
+) -> Optional[str]:
+    """Get a cached or persisted context token for a sender."""
 
     sender = sender_id.strip()
     if not sender:
         return None
+
+    cache_key = _context_cache_key(account_id, sender)
     with _context_token_lock:
-        return _context_token_cache.get(_context_cache_key(account_id, sender))
+        cached = _context_token_cache.get(cache_key)
+    if cached:
+        return cached
+
+    stored_account = load_stored_weixin_account(settings=settings, account_id=account_id)
+    if not stored_account:
+        return None
+
+    token = str(stored_account.context_tokens.get(sender) or "").strip()
+    if not token:
+        return None
+
+    cache_weixin_context_token(account_id, sender, token)
+    return token
+
+
+def persist_weixin_context_token(
+    account_id: str,
+    sender_id: str,
+    context_token: str,
+    settings: Optional[Settings] = None,
+) -> None:
+    """Persist the latest Weixin context token for a sender."""
+
+    token = str(context_token or "").strip()
+    sender = str(sender_id or "").strip()
+    if not token or not sender:
+        return
+
+    resolved_settings = settings or get_settings()
+    cache_weixin_context_token(account_id, sender, token)
+
+    stored_account = load_stored_weixin_account(settings=resolved_settings, account_id=account_id)
+    if stored_account is None:
+        reply_config = resolve_weixin_reply_configuration(
+            settings=resolved_settings,
+            account_id=account_id,
+        )
+        stored_account = StoredWeixinAccount(
+            base_url=reply_config["base_url"],
+            token=str(reply_config["bot_token"] or "").strip(),
+        )
+
+    stored_account.context_tokens[sender] = token
+    if not stored_account.base_url.strip():
+        stored_account.base_url = resolve_weixin_reply_configuration(
+            settings=resolved_settings,
+            account_id=account_id,
+        )["base_url"]
+    if not stored_account.saved_at.strip():
+        stored_account.saved_at = _utcnow_iso()
+
+    save_stored_weixin_account(
+        stored_account,
+        settings=resolved_settings,
+        account_id=account_id,
+    )
+
+
+def _prune_weixin_login_sessions() -> None:
+    """Drop expired in-memory QR login sessions."""
+
+    now = _utcnow()
+    with _weixin_login_sessions_lock:
+        expired_session_ids = []
+        for session_id, session in _weixin_login_sessions.items():
+            try:
+                updated_at = datetime.fromisoformat(session.updated_at)
+            except ValueError:
+                expired_session_ids.append(session_id)
+                continue
+            if now - updated_at > WEIXIN_QR_SESSION_TTL:
+                expired_session_ids.append(session_id)
+
+        for session_id in expired_session_ids:
+            _weixin_login_sessions.pop(session_id, None)
+
+
+def _store_weixin_login_session(session: WeixinQrLoginSession) -> WeixinQrLoginSession:
+    """Store a QR login session and return a detached snapshot."""
+
+    _prune_weixin_login_sessions()
+    with _weixin_login_sessions_lock:
+        _weixin_login_sessions[session.session_id] = session
+        return deepcopy(session)
+
+
+def get_weixin_qr_login_session(session_id: str) -> Optional[WeixinQrLoginSession]:
+    """Read a detached QR login session snapshot."""
+
+    _prune_weixin_login_sessions()
+    with _weixin_login_sessions_lock:
+        session = _weixin_login_sessions.get(session_id)
+        return deepcopy(session) if session else None
+
+
+def _save_weixin_qr_login_session_status(
+    session: WeixinQrLoginSession,
+    *,
+    status: str,
+    error: str = "",
+    connected_account: Optional[StoredWeixinAccount] = None,
+) -> WeixinQrLoginSession:
+    """Update and store a QR login session status."""
+
+    session.status = status
+    session.error = error.strip()
+    session.updated_at = _utcnow_iso()
+    if connected_account is not None:
+        session.connected_account = connected_account
+    return _store_weixin_login_session(session)
 
 
 def parse_weixin_allowed_user_ids(raw_csv: Optional[str]) -> set[str]:
@@ -121,8 +433,7 @@ def _coerce_flexible_id(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, (str, int, float)):
-        text = str(value).strip()
-        return text
+        return str(value).strip()
     if isinstance(value, dict):
         for key in ("id", "value", "message_id", "messageId"):
             nested = value.get(key)
@@ -289,6 +600,188 @@ def resolve_weixin_context_token(
     return get_cached_weixin_context_token(envelope.account_id, envelope.sender_id)
 
 
+async def fetch_weixin_login_qrcode(
+    settings: Optional[Settings] = None,
+    client: Optional[httpx.AsyncClient] = None,
+    base_url: Optional[str] = None,
+) -> Dict[str, str]:
+    """Request a fresh Weixin QR login code."""
+
+    resolved_settings = settings or get_settings()
+    resolved_base_url = (base_url or resolved_settings.weixin_base_url or DEFAULT_WEIXIN_BASE_URL).rstrip("/")
+    url = f"{resolved_base_url}/ilink/bot/get_bot_qrcode?bot_type={WEIXIN_QR_LOGIN_BOT_TYPE}"
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=resolved_settings.default_timeout)
+        close_client = True
+
+    try:
+        response = await client.get(url)
+        response.raise_for_status()
+        payload = response.json()
+    finally:
+        if close_client:
+            await client.aclose()
+
+    qrcode = str(payload.get("qrcode") or "").strip()
+    qrcode_img_content = str(payload.get("qrcode_img_content") or "").strip()
+    if not qrcode or not qrcode_img_content:
+        raise ValueError("Weixin QR login response was missing qrcode or qrcode_img_content")
+
+    return {
+        "qrcode": qrcode,
+        "qrcode_img_content": qrcode_img_content,
+        "base_url": resolved_base_url,
+    }
+
+
+async def fetch_weixin_login_status(
+    qrcode: str,
+    settings: Optional[Settings] = None,
+    client: Optional[httpx.AsyncClient] = None,
+    base_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Poll Weixin QR login status."""
+
+    resolved_settings = settings or get_settings()
+    resolved_base_url = (base_url or resolved_settings.weixin_base_url or DEFAULT_WEIXIN_BASE_URL).rstrip("/")
+    url = f"{resolved_base_url}/ilink/bot/get_qrcode_status?qrcode={quote(qrcode, safe='')}"
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=resolved_settings.default_timeout)
+        close_client = True
+
+    try:
+        response = await client.get(
+            url,
+            headers={"iLink-App-ClientVersion": WEIXIN_QR_CLIENT_VERSION},
+        )
+        response.raise_for_status()
+        return response.json()
+    finally:
+        if close_client:
+            await client.aclose()
+
+
+async def start_weixin_qr_login(
+    settings: Optional[Settings] = None,
+    account_id: str = "",
+    client: Optional[httpx.AsyncClient] = None,
+) -> WeixinQrLoginSession:
+    """Create a new Weixin QR login session."""
+
+    resolved_settings = settings or get_settings()
+    normalized_account_id = normalize_weixin_account_id(account_id)
+    qr = await fetch_weixin_login_qrcode(
+        settings=resolved_settings,
+        client=client,
+    )
+
+    session = WeixinQrLoginSession(
+        session_id=uuid.uuid4().hex,
+        account_id=normalized_account_id,
+        base_url=qr["base_url"],
+        status="wait",
+        qrcode=qr["qrcode"],
+        qrcode_img_content=qr["qrcode_img_content"],
+        created_at=_utcnow_iso(),
+        updated_at=_utcnow_iso(),
+        connected_account=load_stored_weixin_account(
+            settings=resolved_settings,
+            account_id=normalized_account_id,
+        ),
+    )
+    return _store_weixin_login_session(session)
+
+
+async def poll_weixin_qr_login(
+    session_id: str,
+    settings: Optional[Settings] = None,
+    client: Optional[httpx.AsyncClient] = None,
+) -> WeixinQrLoginSession:
+    """Poll an existing Weixin QR login session."""
+
+    session = get_weixin_qr_login_session(session_id)
+    if session is None:
+        raise KeyError(session_id)
+
+    if session.status in {"confirmed", "expired", "error"}:
+        return session
+
+    resolved_settings = settings or get_settings()
+
+    try:
+        payload = await fetch_weixin_login_status(
+            qrcode=session.qrcode,
+            settings=resolved_settings,
+            client=client,
+            base_url=session.base_url,
+        )
+    except Exception as exc:
+        logger.warning("Failed to poll Weixin QR login status for %s: %s", session_id, exc)
+        return _save_weixin_qr_login_session_status(
+            session,
+            status="error",
+            error=str(exc),
+        )
+
+    status = str(payload.get("status") or "").strip().lower()
+    if status in {"wait", "scaned"}:
+        return _save_weixin_qr_login_session_status(session, status=status or "wait")
+
+    if status == "expired":
+        return _save_weixin_qr_login_session_status(
+            session,
+            status="expired",
+            error="QR code expired. Start a new scan to continue.",
+        )
+
+    if status == "confirmed":
+        bot_token = str(payload.get("bot_token") or "").strip()
+        remote_account_id = str(payload.get("ilink_bot_id") or "").strip()
+        if not bot_token or not remote_account_id:
+            return _save_weixin_qr_login_session_status(
+                session,
+                status="error",
+                error="Login was confirmed, but the server did not return a complete bot credential set.",
+            )
+
+        existing_account = load_stored_weixin_account(
+            settings=resolved_settings,
+            account_id=session.account_id,
+        )
+        connected_account = StoredWeixinAccount(
+            token=bot_token,
+            base_url=str(payload.get("baseurl") or session.base_url).strip() or session.base_url,
+            remote_account_id=remote_account_id,
+            user_id=str(payload.get("ilink_user_id") or "").strip(),
+            saved_at=_utcnow_iso(),
+            context_tokens=(
+                deepcopy(existing_account.context_tokens)
+                if existing_account is not None
+                else {}
+            ),
+        )
+        save_stored_weixin_account(
+            connected_account,
+            settings=resolved_settings,
+            account_id=session.account_id,
+        )
+        return _save_weixin_qr_login_session_status(
+            session,
+            status="confirmed",
+            connected_account=connected_account,
+        )
+
+    return _save_weixin_qr_login_session_status(
+        session,
+        status="error",
+        error=f"Unexpected Weixin QR login status: {status or 'missing'}",
+    )
+
+
 async def send_weixin_text_reply(
     envelope: WeixinEnvelope,
     reply_text: str,
@@ -299,10 +792,14 @@ async def send_weixin_text_reply(
     """Send a text reply through the Weixin ilink API when configured."""
 
     resolved_settings = settings or get_settings()
+    reply_config = resolve_weixin_reply_configuration(
+        settings=resolved_settings,
+        account_id=envelope.account_id,
+    )
     if not (
         resolved_settings.weixin_enabled
-        and resolved_settings.weixin_reply_via_api
-        and resolved_settings.weixin_bot_token
+        and reply_config["reply_enabled"]
+        and reply_config["bot_token"]
     ):
         return None
 
@@ -313,8 +810,7 @@ async def send_weixin_text_reply(
     if not context_token:
         return {"status_code": 0, "body": {"error": "missing_context_token"}}
 
-    base_url = (resolved_settings.weixin_base_url or DEFAULT_WEIXIN_BASE_URL).rstrip("/")
-    url = f"{base_url}/ilink/bot/sendmessage"
+    url = f"{reply_config['base_url']}/ilink/bot/sendmessage"
     payload: Dict[str, Any] = {
         "msg": {
             "from_user_id": "",
@@ -333,7 +829,7 @@ async def send_weixin_text_reply(
         "base_info": {"channel_version": "localclaw"},
     }
     headers = {
-        "Authorization": f"Bearer {resolved_settings.weixin_bot_token}",
+        "Authorization": f"Bearer {reply_config['bot_token']}",
         "Content-Type": "application/json",
     }
 

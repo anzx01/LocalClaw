@@ -50,6 +50,7 @@ def test_channels_overview_endpoint(monkeypatch):
     assert weixin_channel["enabled"] is True
     assert weixin_channel["reply_mode"] == "weixin_api"
     assert weixin_channel["webhook_path"] == "/weixin/messages"
+    assert weixin_channel["login_path"] == "/api/channels/weixin/login/start"
     assert weixin_channel["checks"]["has_webhook_token"] is True
 
     assert whatsapp_channel["enabled"] is True
@@ -76,6 +77,7 @@ def test_static_ui_contains_channels_tab(monkeypatch):
     assert "Approvals" in response.text
     assert "Settings" in response.text
     assert "Channel Configuration" in response.text
+    assert "Scan to Login" in response.text
     assert "/api/channels" in response.text
     assert "/api/approvals" in response.text
     assert "/api/system/service" in response.text

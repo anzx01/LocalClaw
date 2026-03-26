@@ -51,16 +51,22 @@ from localclaw.channels.whatsapp import (
     send_whatsapp_text_reply,
 )
 from localclaw.channels.weixin import (
+    StoredWeixinAccount,
     WeixinEnvelope,
+    WeixinQrLoginSession,
     build_weixin_message,
     format_task_for_weixin,
     get_cached_weixin_context_token,
     is_allowed_weixin_sender,
     is_valid_weixin_webhook_token,
     normalize_weixin_webhook_payload,
+    persist_weixin_context_token,
+    poll_weixin_qr_login,
     provided_weixin_webhook_token,
     resolve_weixin_context_token,
+    resolve_weixin_reply_configuration,
     send_weixin_text_reply,
+    start_weixin_qr_login,
 )
 from localclaw.channels.result_formatter import format_task_for_chat
 
@@ -220,6 +226,39 @@ class WeixinTestRequest(BaseModel):
     text: str = "LocalClaw connectivity test"
 
 
+class WeixinLoginStartRequest(BaseModel):
+    """Start a Weixin QR login session."""
+
+    account_id: Optional[str] = None
+
+
+class WeixinConnectedAccountResponse(BaseModel):
+    """Public Weixin account details shown in the Web UI."""
+
+    account_id: str
+    remote_account_id: str = ""
+    user_id: str = ""
+    base_url: str
+    saved_at: Optional[str] = None
+    context_token_count: int = 0
+
+
+class WeixinLoginSessionResponse(BaseModel):
+    """Serialized Weixin QR login session."""
+
+    session_id: str
+    account_id: str
+    status: str
+    qrcode: str = ""
+    qrcode_img_content: str = ""
+    poll_path: str
+    created_at: str
+    updated_at: str
+    message: str
+    error: Optional[str] = None
+    connected_account: Optional[WeixinConnectedAccountResponse] = None
+
+
 class ChannelTestResponse(BaseModel):
     """Structured result for manual channel tests."""
 
@@ -309,6 +348,97 @@ def _normalize_path(path: str, fallback: str) -> str:
     if not cleaned.startswith("/"):
         cleaned = f"/{cleaned}"
     return cleaned
+
+
+def _serialize_weixin_connected_account(
+    account: Optional[StoredWeixinAccount],
+    account_id: str = "default",
+) -> Optional[WeixinConnectedAccountResponse]:
+    """Build a public Weixin account payload for the Web UI."""
+
+    if account is None:
+        return None
+
+    return WeixinConnectedAccountResponse(
+        account_id=account_id or "default",
+        remote_account_id=account.remote_account_id,
+        user_id=account.user_id,
+        base_url=account.base_url,
+        saved_at=account.saved_at or None,
+        context_token_count=len(account.context_tokens or {}),
+    )
+
+
+def _weixin_login_message(session: WeixinQrLoginSession) -> str:
+    """Convert a Weixin QR login status into a UI-friendly message."""
+
+    status = (session.status or "").strip().lower()
+    if status == "wait":
+        return "Scan the QR code with Weixin to start login."
+    if status == "scaned":
+        return "QR code scanned. Confirm the login in Weixin."
+    if status == "confirmed":
+        return "Weixin login confirmed. LocalClaw stored the bot token."
+    if status == "expired":
+        return session.error or "QR code expired. Start a new scan to continue."
+    if status == "error":
+        return session.error or "Weixin QR login failed."
+    return "Waiting for Weixin login status."
+
+
+def _serialize_weixin_login_session(
+    session: WeixinQrLoginSession,
+) -> WeixinLoginSessionResponse:
+    """Serialize a Weixin QR login session for the API."""
+
+    return WeixinLoginSessionResponse(
+        session_id=session.session_id,
+        account_id=session.account_id,
+        status=session.status,
+        qrcode=session.qrcode,
+        qrcode_img_content=session.qrcode_img_content,
+        poll_path=f"/api/channels/weixin/login/{session.session_id}",
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        message=_weixin_login_message(session),
+        error=session.error or None,
+        connected_account=_serialize_weixin_connected_account(
+            session.connected_account,
+            account_id=session.account_id,
+        ),
+    )
+
+
+def _weixin_channel_status_payload(settings) -> Dict[str, Any]:
+    """Build the enriched Weixin channel status payload."""
+
+    reply_config = resolve_weixin_reply_configuration(settings=settings)
+    connected_account = _serialize_weixin_connected_account(
+        reply_config["stored_account"],
+        account_id="default",
+    )
+
+    if settings.weixin_reply_via_api:
+        reply_via_api_source = "env"
+    elif reply_config["has_stored_login"]:
+        reply_via_api_source = "stored_login"
+    else:
+        reply_via_api_source = "disabled"
+
+    return {
+        "enabled": settings.weixin_enabled,
+        "reply_via_api": reply_config["reply_enabled"],
+        "reply_via_api_source": reply_via_api_source,
+        "webhook_path": _normalize_path(settings.weixin_webhook_path, "/weixin/messages"),
+        "has_webhook_token": bool(settings.weixin_webhook_token),
+        "has_bot_token": bool(reply_config["bot_token"]),
+        "bot_token_source": reply_config["bot_token_source"],
+        "has_allowed_user_ids": bool((settings.weixin_allowed_user_ids or "").strip()),
+        "base_url": reply_config["base_url"],
+        "has_stored_login": reply_config["has_stored_login"],
+        "connected_account": connected_account.model_dump() if connected_account else None,
+        "login_path": "/api/channels/weixin/login/start",
+    }
 
 
 def _serialize_step(step: Optional[Step]) -> Optional[Dict[str, Any]]:
@@ -750,6 +880,7 @@ def create_app() -> FastAPI:
     async def get_config():
         """Get current configuration."""
         settings = get_settings()
+        weixin_reply_config = resolve_weixin_reply_configuration(settings=settings)
         return {
             "mode": settings.mode.value,
             "llm_enabled": settings.llm_enabled,
@@ -768,9 +899,9 @@ def create_app() -> FastAPI:
             "wechat_personal_has_proxy_url": bool(settings.wechat_personal_proxy_url),
             "weixin_enabled": settings.weixin_enabled,
             "weixin_webhook_path": _normalize_path(settings.weixin_webhook_path, "/weixin/messages"),
-            "weixin_reply_via_api": settings.weixin_reply_via_api,
+            "weixin_reply_via_api": weixin_reply_config["reply_enabled"],
             "weixin_has_webhook_token": bool(settings.weixin_webhook_token),
-            "weixin_has_bot_token": bool(settings.weixin_bot_token),
+            "weixin_has_bot_token": bool(weixin_reply_config["bot_token"]),
             "whatsapp_enabled": settings.whatsapp_enabled,
             "whatsapp_reply_via_cloud_api": settings.whatsapp_reply_via_cloud_api,
             "whatsapp_has_phone_number_id": bool(settings.whatsapp_phone_number_id),
@@ -825,15 +956,37 @@ def create_app() -> FastAPI:
     async def get_weixin_status():
         """Return status information for the Weixin webhook channel."""
         settings = get_settings()
-        return {
-            "enabled": settings.weixin_enabled,
-            "reply_via_api": settings.weixin_reply_via_api,
-            "webhook_path": _normalize_path(settings.weixin_webhook_path, "/weixin/messages"),
-            "has_webhook_token": bool(settings.weixin_webhook_token),
-            "has_bot_token": bool(settings.weixin_bot_token),
-            "has_allowed_user_ids": bool((settings.weixin_allowed_user_ids or "").strip()),
-            "base_url": settings.weixin_base_url,
-        }
+        return _weixin_channel_status_payload(settings)
+
+    @app.post("/api/channels/weixin/login/start", response_model=WeixinLoginSessionResponse)
+    async def start_weixin_login(request: WeixinLoginStartRequest):
+        """Start a visual Weixin QR login session."""
+
+        settings = get_settings()
+        try:
+            session = await start_weixin_qr_login(
+                settings=settings,
+                account_id=(request.account_id or "").strip(),
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to create Weixin QR login: {exc}",
+            ) from exc
+
+        return _serialize_weixin_login_session(session)
+
+    @app.get("/api/channels/weixin/login/{session_id}", response_model=WeixinLoginSessionResponse)
+    async def get_weixin_login_session(session_id: str):
+        """Poll a Weixin QR login session."""
+
+        settings = get_settings()
+        try:
+            session = await poll_weixin_qr_login(session_id, settings=settings)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown Weixin login session") from exc
+
+        return _serialize_weixin_login_session(session)
 
     @app.get("/api/channels/whatsapp/status")
     async def get_whatsapp_status():
@@ -929,8 +1082,11 @@ def create_app() -> FastAPI:
         recipient = (request.recipient or "").strip()
         account_id = (request.account_id or "").strip()
         provided_context_token = (request.context_token or "").strip()
+        reply_config = resolve_weixin_reply_configuration(settings=settings, account_id=account_id)
         cached_context_token = (
-            get_cached_weixin_context_token(account_id, recipient) if recipient else None
+            get_cached_weixin_context_token(account_id, recipient, settings=settings)
+            if recipient
+            else None
         )
         resolved_context_token = provided_context_token or (cached_context_token or "")
         request_preview = {
@@ -947,9 +1103,9 @@ def create_app() -> FastAPI:
         missing: List[str] = []
         if not settings.weixin_enabled:
             missing.append("LOCALCLAW_WEIXIN_ENABLED")
-        if not settings.weixin_reply_via_api:
+        if not reply_config["reply_enabled"]:
             missing.append("LOCALCLAW_WEIXIN_REPLY_VIA_API")
-        if not settings.weixin_bot_token:
+        if not reply_config["bot_token"]:
             missing.append("LOCALCLAW_WEIXIN_BOT_TOKEN")
         if not recipient:
             missing.append("recipient")
@@ -962,8 +1118,9 @@ def create_app() -> FastAPI:
                 mode="dry_run",
                 channel="weixin",
                 summary=(
-                    "Dry run only. Provide outbound API credentials, recipient, and context_token "
-                    "or trigger an inbound message first so LocalClaw can cache it."
+                    "Dry run only. Provide outbound API credentials or use Scan to Login, then "
+                    "set a recipient and context_token or trigger an inbound message first so "
+                    "LocalClaw can cache it."
                 ),
                 request=request_preview,
                 missing=missing,
@@ -1075,6 +1232,7 @@ def create_app() -> FastAPI:
     async def get_channels_overview():
         """Return a UI-friendly overview of supported chat channels."""
         settings = get_settings()
+        weixin_status = _weixin_channel_status_payload(settings)
         return ChannelsOverviewResponse(
             channels=[
                 {
@@ -1118,12 +1276,14 @@ def create_app() -> FastAPI:
                     "enabled": settings.weixin_enabled,
                     "reply_mode": (
                         "weixin_api"
-                        if settings.weixin_reply_via_api
+                        if weixin_status["reply_via_api"]
                         else "inline_response"
                     ),
                     "webhook_path": _normalize_path(settings.weixin_webhook_path, "/weixin/messages"),
                     "status_path": "/api/channels/weixin/status",
                     "test_path": "/api/channels/weixin/test",
+                    "login_path": "/api/channels/weixin/login/start",
+                    "supports_qr_login": True,
                     "required_env": [
                         "LOCALCLAW_WEIXIN_ENABLED",
                     ],
@@ -1136,14 +1296,17 @@ def create_app() -> FastAPI:
                         "LOCALCLAW_WEIXIN_REPLY_VIA_API",
                     ],
                     "checks": {
-                        "has_webhook_token": bool(settings.weixin_webhook_token),
-                        "has_bot_token": bool(settings.weixin_bot_token),
-                        "has_allowed_user_ids": bool((settings.weixin_allowed_user_ids or "").strip()),
+                        "has_webhook_token": weixin_status["has_webhook_token"],
+                        "has_bot_token": weixin_status["has_bot_token"],
+                        "has_allowed_user_ids": weixin_status["has_allowed_user_ids"],
+                        "has_stored_login": weixin_status["has_stored_login"],
                     },
-                    "summary": "Weixin inbound webhook channel with optional outbound ilink API replies.",
+                    "connected_account": weixin_status["connected_account"],
+                    "summary": "Weixin inbound webhook channel with optional outbound ilink API replies and QR login.",
                     "notes": [
                         "Webhook token can be sent via x-weixin-webhook-token or Authorization: Bearer.",
                         "Inbound payload supports both top-level fields and nested message objects.",
+                        "Use Scan to Login in this page to save a bot token without editing env first.",
                         "Outbound API replies require a context_token from the latest inbound message.",
                     ],
                 },
@@ -1279,6 +1442,14 @@ def create_app() -> FastAPI:
                     "to_user_id": envelope.sender_id,
                     "account_id": envelope.account_id,
                 },
+            )
+
+        if envelope.context_token:
+            persist_weixin_context_token(
+                envelope.account_id,
+                envelope.sender_id,
+                envelope.context_token,
+                settings=settings,
             )
 
         engine = get_engine()
