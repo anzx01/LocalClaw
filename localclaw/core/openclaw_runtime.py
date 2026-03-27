@@ -847,6 +847,8 @@ User: {user_request}
             "晴天",
             "阴天",
             "多云",
+            "冷不",
+            "热不",
             "冷不冷",
             "热不热",
             "冷吗",
@@ -859,7 +861,7 @@ User: {user_request}
         weather_patterns = (
             r"(?:外面|窗外).*(?:天|天气|云|雨|雪|晴|阴|蓝)",
             r"(?:天|天气).*(?:蓝|晴|阴|云|雨|雪)",
-            r"(?:今天|明天|后天).*(?:热吗|冷吗|热不热|冷不冷|下雨|下雪|天气|温度|气温)",
+            r"(?:今天|明天|后天).*(?:热不|冷不|热吗|冷吗|热不热|冷不冷|下雨|下雪|天气|温度|气温)",
         )
         if not any(keyword in normalized for keyword in weather_keywords) and not any(
             re.search(pattern, normalized, re.IGNORECASE) for pattern in weather_patterns
@@ -908,7 +910,7 @@ User: {user_request}
         compact = re.sub(r"^(?:今天|明天|后天|现在|此刻)+", "", compact)
         match = re.search(
             r"(?P<location>[\u4e00-\u9fffA-Za-z]{1,20}?)(?:今天|明天|后天|现在|此刻)?(?:的)?"
-            r"(?:天气|气温|温度|会不会下雨|会下雨|下不下雨|下雨|下雪|冷不冷|热不热|冷吗|热吗|风大不大|风大|风力)",
+            r"(?:天气|气温|温度|会不会下雨|会下雨|下不下雨|下雨|下雪|冷不|热不|冷不冷|热不热|冷吗|热吗|风大不大|风大|风力)",
             compact,
         )
         if not match:

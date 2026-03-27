@@ -84,11 +84,9 @@
         .hint { font-size: 12px; color: #667085; }
         .empty-state { padding: 28px 16px; text-align: center; color: #667085; }
         .empty-state-title { display: block; margin-bottom: 8px; font-weight: 700; color: #344054; }
-        .empty-state-note { margin-top: 6px; color: #667085; line-height: 1.5; }
         .channel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
         .channel-card { border: 1px solid #e3ebf5; border-radius: 16px; padding: 18px; background: linear-gradient(180deg, #fff, #f8fbff); box-shadow: 0 8px 24px rgba(15,23,42,0.04); }
         .channel-header { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 12px; }
-        .channel-summary { color: #667085; font-size: 14px; line-height: 1.5; margin-bottom: 14px; }
         .pill { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
         .pill.enabled { background: #e8f7ef; color: #0f8a4f; }
         .pill.disabled { background: #fdecec; color: #c24136; }
@@ -458,7 +456,6 @@
             color: var(--text-primary);
         }
         .section-header p,
-        .channel-summary,
         .hint,
         .result-note,
         .skill-note,
@@ -1009,6 +1006,24 @@
                 grid-template-columns: 1fr;
             }
         }
+        /* Minimal UI overrides */
+        .page-summary-grid,
+        .workspace-side,
+        .skills-guidance-grid,
+        .ops-side,
+        .skill-description,
+        .skill-meta,
+        .skill-note,
+        .channel-selector-caption {
+            display: none !important;
+        }
+        .workspace-layout,
+        .ops-grid {
+            grid-template-columns: 1fr !important;
+        }
+        .diagnostic-summary-grid .metric-subtle {
+            display: none !important;
+        }
     </style>
 </head>
 <body>
@@ -1048,13 +1063,11 @@
         <main class="app-main-shell">
             <header class="app-topbar">
                 <div>
-                    <div class="page-overline" x-text="currentPageMeta().eyebrow"></div>
                     <h1 x-text="currentPageMeta().title"></h1>
-                    <p x-text="currentPageMeta().description"></p>
                 </div>
                 <div class="toolbar">
                     <button class="ghost-btn" @click="refreshActiveTab()" x-text="activeTabActionLabel()"></button>
-                    <span class="hint" x-text="copyStatus || currentPageMeta().hint"></span>
+                    <span class="hint" x-show="copyStatus" x-text="copyStatus"></span>
                 </div>
             </header>
 
@@ -1063,7 +1076,6 @@
                     <div class="summary-card">
                         <strong x-text="card.label"></strong>
                         <div class="summary-value" x-text="card.value"></div>
-                        <div class="summary-note" x-text="card.note"></div>
                     </div>
                 </template>
             </div>
@@ -1131,7 +1143,59 @@
                             </div>
                         </template>
                     </div>
-                    
+
+                    <template x-if="approvals.length > 0 || approvalLoadError">
+                        <div class="approval-inline">
+                            <div class="toolbar" style="justify-content: space-between; margin: 14px 0 8px;">
+                                <strong>Approvals</strong>
+                                <button class="ghost-btn" @click="loadApprovals()">Refresh</button>
+                            </div>
+                            <template x-if="approvalLoadError">
+                                <div class="notice" x-text="approvalLoadError"></div>
+                            </template>
+                            <div class="approval-list" x-show="approvals.length > 0">
+                                <template x-for="approval in approvals" :key="approval.task_id + ':' + approval.step.id">
+                                    <div class="approval-card">
+                                        <div class="approval-head">
+                                            <div>
+                                                <h3 x-text="approval.step.command_preview || approval.step.tool_name || approval.step.name || 'Pending step'"></h3>
+                                                <div class="approval-meta">
+                                                    <span x-text="'Task ' + approval.task_id"></span>
+                                                    <span x-text="'Risk: ' + (approval.step.risk_level || 'unknown')"></span>
+                                                    <span x-text="'Channel: ' + approval.channel"></span>
+                                                    <span x-text="'User: ' + approval.user_id"></span>
+                                                </div>
+                                            </div>
+                                            <span class="pill disabled" x-text="approval.task_state"></span>
+                                        </div>
+
+                                        <p><strong>Prompt:</strong> <span x-text="approval.message || 'N/A'"></span></p>
+
+                                        <div class="channel-block">
+                                            <h4>Step Input</h4>
+                                            <div class="code-block" x-text="formatJson(approval.step.input)"></div>
+                                        </div>
+
+                                        <div class="approval-actions">
+                                            <button
+                                                class="primary-btn"
+                                                @click="approveTaskStep(approval)"
+                                                :disabled="approvingStepKey === approval.task_id + ':' + approval.step.id"
+                                                x-text="approvingStepKey === approval.task_id + ':' + approval.step.id ? 'Approving...' : 'Approve & Resume'">
+                                            </button>
+                                            <button
+                                                class="danger-btn"
+                                                @click="rejectTaskStep(approval)"
+                                                :disabled="rejectingStepKey === approval.task_id + ':' + approval.step.id"
+                                                x-text="rejectingStepKey === approval.task_id + ':' + approval.step.id ? 'Rejecting...' : 'Reject & Fail'">
+                                            </button>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+
                     <div class="input-area">
                         <input type="text" x-model="input" @keyup.enter="sendMessage()" placeholder="Type a message or /cmd git status">
                         <button @click="sendMessage()" :disabled="loading">Send</button>
@@ -1141,7 +1205,6 @@
                 <aside class="workspace-side">
                     <div class="workspace-card">
                         <h3>Runtime Snapshot</h3>
-                        <p>Keep the conversation close to the current system state so you do not need to jump between tabs for basic context.</p>
                         <ul class="channel-list">
                             <li><span>Mode</span><span x-text="config.mode || 'loading...'"></span></li>
                             <li><span>Recent Tasks</span><span x-text="tasks.length"></span></li>
@@ -1152,18 +1215,7 @@
                     </div>
 
                     <div class="workspace-card">
-                        <h3>Quick Routing</h3>
-                        <p>Use the same runtime, but choose the lowest-friction path for the job.</p>
-                        <ul class="note-list">
-                            <li>Use <code>/cmd ...</code> for routine shell-safe operations.</li>
-                            <li>Use raw <code>/shell ...</code> only when you expect an approval gate.</li>
-                            <li>Open Channels when you want to connect or test Weixin, bridge, or WhatsApp delivery.</li>
-                        </ul>
-                    </div>
-
-                    <div class="workspace-card">
                         <h3>Recent Activity</h3>
-                        <p>Borrowing from openclaw-manager's dashboard and logs flow, this keeps the newest task outcomes visible beside chat.</p>
                         <template x-if="recentTasks(4).length === 0">
                             <div class="empty-state">No task history has been captured yet.</div>
                         </template>
@@ -1196,161 +1248,12 @@
             </div>
         </div>
         
-        <div class="tab-content" x-show="activeTab === 'approvals'">
-            <div class="section-header">
-                <div>
-                    <h2>Approval Center</h2>
-                    <p>High-risk steps such as raw shell execution pause here until you explicitly allow them to continue, with guardrails and recent protected activity visible beside the queue.</p>
-                </div>
-                <div class="toolbar">
-                    <button class="ghost-btn" @click="loadApprovals()">Refresh</button>
-                </div>
-            </div>
-
-            <template x-if="approvalLoadError">
-                <div class="notice" x-text="approvalLoadError"></div>
-            </template>
-
-            <div class="ops-grid">
-                <div class="ops-main">
-                    <div class="approval-list">
-                        <template x-if="approvals.length === 0">
-                            <div class="empty-state">
-                                <span class="empty-state-title">No pending approvals.</span>
-                                <p class="empty-state-note">This page is only used when a request contains a high-risk action, such as raw <code>/shell</code> commands, browser automation, or protected operations.</p>
-                                <p class="empty-state-note">For routine commands, use <code>/cmd ...</code> in Chat and they usually run without manual approval.</p>
-                            </div>
-                        </template>
-                        <template x-for="approval in approvals" :key="approval.task_id + ':' + approval.step.id">
-                            <div class="approval-card">
-                                <div class="approval-head">
-                                    <div>
-                                        <h3 x-text="approval.step.command_preview || approval.step.tool_name || approval.step.name || 'Pending step'"></h3>
-                                        <div class="approval-meta">
-                                            <span x-text="'Task ' + approval.task_id"></span>
-                                            <span x-text="'Risk: ' + (approval.step.risk_level || 'unknown')"></span>
-                                            <span x-text="'Channel: ' + approval.channel"></span>
-                                            <span x-text="'User: ' + approval.user_id"></span>
-                                        </div>
-                                    </div>
-                                    <span class="pill disabled" x-text="approval.task_state"></span>
-                                </div>
-
-                                <p><strong>Prompt:</strong> <span x-text="approval.message || 'N/A'"></span></p>
-                                <p><strong>Step:</strong> <span x-text="approval.step.tool_name || approval.step.name || approval.step.id"></span></p>
-                                <p><strong>Created:</strong> <span x-text="new Date(approval.created_at).toLocaleString()"></span></p>
-
-                                <div class="channel-block">
-                                    <h4>Step Input</h4>
-                                    <div class="code-block" x-text="formatJson(approval.step.input)"></div>
-                                </div>
-
-                                <div class="approval-actions">
-                                    <button
-                                        class="primary-btn"
-                                        @click="approveTaskStep(approval)"
-                                        :disabled="approvingStepKey === approval.task_id + ':' + approval.step.id"
-                                        x-text="approvingStepKey === approval.task_id + ':' + approval.step.id ? 'Approving...' : 'Approve & Resume'">
-                                    </button>
-                                    <button
-                                        class="danger-btn"
-                                        @click="rejectTaskStep(approval)"
-                                        :disabled="rejectingStepKey === approval.task_id + ':' + approval.step.id"
-                                        x-text="rejectingStepKey === approval.task_id + ':' + approval.step.id ? 'Rejecting...' : 'Reject & Fail'">
-                                    </button>
-                                    <span class="result-note">Routine commands can use <code>/cmd</code>; raw <code>/shell</code> stays gated here.</span>
-                                </div>
-                            </div>
-                        </template>
-                    </div>
-                </div>
-
-                <div class="ops-side">
-                    <div class="workspace-card">
-                        <div class="skills-panel-header">
-                            <div>
-                                <h3>Safety Workflow</h3>
-                                <p>Inspired by openclaw-manager's security visibility, this keeps approval rules and queue pressure clear before you resume a protected step.</p>
-                            </div>
-                            <span class="pill warning" x-text="approvals.length + ' queued'"></span>
-                        </div>
-
-                        <div class="diagnostic-summary-grid">
-                            <div class="metric-card">
-                                <strong>Pending</strong>
-                                <div class="metric-value" x-text="approvals.length"></div>
-                                <div class="metric-subtle">Steps waiting for review right now.</div>
-                            </div>
-                            <div class="metric-card">
-                                <strong>Critical</strong>
-                                <div class="metric-value" x-text="approvals.filter(item => item && item.step && item.step.risk_level === 'critical').length"></div>
-                                <div class="metric-subtle">Highest-risk steps in the current queue.</div>
-                            </div>
-                            <div class="metric-card">
-                                <strong>Service</strong>
-                                <div class="metric-value" x-text="serviceStatus && serviceStatus.running ? 'Ready' : 'Stopped'"></div>
-                                <div class="metric-subtle">Background runtime state during review.</div>
-                            </div>
-                        </div>
-
-                        <ul class="channel-list">
-                            <li><span>Routine Path</span><code>/cmd</code></li>
-                            <li><span>Install Guardrail</span><span x-text="formatProtectionMode(config.skill_install_protection_mode)"></span></li>
-                            <li><span>Isolation Approval</span><span x-text="config.skill_isolation_require_approval ? 'Required' : 'Optional'"></span></li>
-                            <li><span>Critical Tool Policy</span><span x-text="config.skill_isolation_block_critical ? 'Blocked' : 'Review only'"></span></li>
-                        </ul>
-
-                        <ul class="note-list">
-                            <li>Prefer <code>/cmd</code> for routine shell-safe work so common requests avoid this queue.</li>
-                            <li>Review the step input before approving any raw shell, browser automation, or file-changing action.</li>
-                            <li>If several approvals pile up, switch to Settings and run diagnostics to verify the runtime is healthy.</li>
-                        </ul>
-                    </div>
-
-                    <div class="workspace-card">
-                        <div class="skills-panel-header">
-                            <div>
-                                <h3>Recent Guarded Tasks</h3>
-                                <p>Use this lightweight activity stream like a mini logs panel for tasks that recently paused, failed, or otherwise needed closer review.</p>
-                            </div>
-                            <div class="skill-subtle" x-text="recentGuardedTasks(5).length + ' shown'"></div>
-                        </div>
-
-                        <template x-if="recentGuardedTasks(5).length === 0">
-                            <div class="empty-state">
-                                <span class="empty-state-title">No guarded tasks in recent history.</span>
-                                <p class="empty-state-note">When tasks pause for approval or fail around protected steps, they will appear here for quick context.</p>
-                            </div>
-                        </template>
-
-                        <div class="activity-list" x-show="recentGuardedTasks(5).length > 0">
-                            <template x-for="task in recentGuardedTasks(5)" :key="'approval-task-' + task.id">
-                                <div class="activity-item">
-                                    <div class="activity-item-head">
-                                        <div class="activity-tag-row">
-                                            <span class="pill" :class="taskStatePillClass(task.state)" x-text="taskStateLabel(task.state)"></span>
-                                            <span class="pill mode" x-text="task.channel || 'web'"></span>
-                                        </div>
-                                        <span class="result-note" x-text="formatDateTime(task.completed_at || task.created_at)"></span>
-                                    </div>
-                                    <strong x-text="truncateText(task.message || 'Untitled request', 84)"></strong>
-                                    <p x-text="taskActivitySummary(task)"></p>
-                                </div>
-                            </template>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
         <div class="tab-content" x-show="activeTab === 'skills'">
             <div class="section-header">
                 <div>
                     <h2>Skill Management</h2>
-                    <p>Browse built-in recommendations and ClawHub listings, review install risk before changes, and manage user-installed skills without mixing them up with runtime defaults.</p>
                 </div>
                 <div class="toolbar">
-                    <span class="hint" x-text="'Registry: ' + (config.clawhub_base_url || 'https://clawhub.ai')"></span>
                     <button class="ghost-btn" @click="refreshSkillCatalog()" :disabled="skillsLoading || availableSkillsLoading" x-text="skillsLoading || availableSkillsLoading ? 'Refreshing...' : 'Refresh'"></button>
                 </div>
             </div>
@@ -1359,29 +1262,24 @@
                     <div class="metric-card">
                         <strong>Installed</strong>
                         <div class="metric-value" x-text="skills.length"></div>
-                        <div class="metric-subtle">Active runtime skills currently registered.</div>
                     </div>
                     <div class="metric-card">
                         <strong>Available</strong>
                         <div class="metric-value" x-text="availableSkills.length"></div>
-                        <div class="metric-subtle">Bundled recommendations plus remote marketplace results.</div>
                     </div>
                     <div class="metric-card">
                         <strong>Protection</strong>
                         <div class="metric-value" x-text="formatProtectionMode(config.skill_install_protection_mode)"></div>
-                        <div class="metric-subtle">Every install is scanned before any files are written.</div>
                     </div>
                     <div class="metric-card">
                         <strong>Registry</strong>
                         <div class="metric-value" x-text="config.clawhub_has_token ? 'Private' : 'Public'"></div>
-                        <div class="metric-subtle" x-text="config.clawhub_base_url || 'https://clawhub.ai'"></div>
                     </div>
                 </div>
 
                 <div class="skills-guidance-grid">
                     <div class="guardrail-card">
                         <h3>Security Workflow</h3>
-                        <p>openclaw-manager exposes testing and security as first-class panels. LocalClaw now makes the same guardrails visible here before any skill install changes the runtime.</p>
                         <ul class="channel-list">
                             <li><span>Install Guardrail</span><span x-text="formatProtectionMode(config.skill_install_protection_mode)"></span></li>
                             <li><span>Approval After Isolation</span><span x-text="config.skill_isolation_require_approval ? 'Required' : 'Optional'"></span></li>
@@ -1392,7 +1290,6 @@
 
                     <div class="guardrail-card">
                         <h3>Skill Storage Layout</h3>
-                        <p>Separate managed installs from configured read-only directories so you can tell what the web UI is allowed to remove and what belongs to your local runtime setup.</p>
                         <ul class="channel-list">
                             <li><span>Managed Dir</span><code x-text="config.managed_skills_dir || 'Unknown'"></code></li>
                             <li><span>Bundled Catalog</span><code x-text="config.bundled_skill_catalog_dir || 'Unknown'"></code></li>
@@ -1407,7 +1304,6 @@
                         <div class="skills-panel-header">
                             <div>
                                 <h3>Installed Skills</h3>
-                                <p>User-installed skills can be removed here. Skills loaded from configured directories stay read-only.</p>
                             </div>
                             <div class="skill-subtle" x-text="filteredInstalledSkills().length + ' shown / ' + skills.length + ' total'"></div>
                         </div>
@@ -1500,7 +1396,6 @@
                         <div class="skills-panel-header">
                             <div>
                                 <h3>Available Skills</h3>
-                                <p>Search bundled recommendations and ClawHub results, then run a security review before installation.</p>
                             </div>
                             <div class="skill-badges">
                                 <span class="pill source-bundled">Bundled</span>
@@ -1509,26 +1404,33 @@
                         </div>
 
                         <div class="skill-filter-row">
-                            <input type="text" x-model="skillSearchQuery" @keyup.enter="loadAvailableSkills()" placeholder="Search skills, for example weather, summarize, browser">
+                            <input type="text" x-model="skillSearchQuery" @keyup.enter="loadAvailableSkills({ manual: true })" placeholder="Search skills, for example weather, summarize, browser">
                             <select x-model="skillSourceFilter">
                                 <option value="all">All sources</option>
                                 <option value="bundled">Bundled only</option>
                                 <option value="remote">ClawHub only</option>
                             </select>
-                            <button class="ghost-btn" @click="loadAvailableSkills()" :disabled="availableSkillsLoading" x-text="availableSkillsLoading ? 'Searching...' : 'Search'"></button>
+                            <button class="ghost-btn" @click="loadAvailableSkills({ manual: true })" :disabled="availableSkillsLoading" x-text="availableSkillsLoading ? 'Searching...' : 'Search'"></button>
                         </div>
+
+                        <div class="skill-note">ClawHub 远端只在点 Search 时请求。</div>
 
                         <template x-if="availableSkillsLoadError">
                             <div class="notice">
                                 <div x-text="availableSkillsLoadError"></div>
-                                <div class="skill-note" x-text="'Current registry: ' + (config.clawhub_base_url || 'https://clawhub.ai')"></div>
                             </div>
                         </template>
 
                         <template x-if="availableSkillsRemoteError && !availableSkillsLoadError">
                             <div class="notice">
                                 <div x-text="availableSkillsRemoteNoticeMessage()"></div>
-                                <div class="skill-note" x-text="availableSkillsRemoteError"></div>
+                                <div class="skill-note" x-text="formatAvailableSkillsRemoteError()"></div>
+                            </div>
+                        </template>
+
+                        <template x-if="skillSourceFilter === 'remote' && !availableSkillsLoading && !availableSkillsRemoteError && !availableSkillsLastRemoteAttempted">
+                            <div class="notice">
+                                <div>当前为 ClawHub only，点 Search 触发远端搜索。</div>
                             </div>
                         </template>
 
@@ -1574,8 +1476,6 @@
                                         </div>
                                     </template>
 
-                                    <p class="skill-note">Install review covers secret prompts, command execution, browser control, file access, network access, schedules, and common malicious plugin traits.</p>
-
                                     <div class="skill-actions">
                                         <button class="secondary-btn" x-show="skill.homepage" @click="openExternalLink(skill.homepage)">Open Page</button>
                                         <button
@@ -1597,11 +1497,9 @@
             <div class="section-header">
                 <div>
                     <h2>Channel Configuration</h2>
-                    <p>Use the channel list on the left, then focus on the selected channel's setup, readiness, login flow, and test panel without scanning the whole page.</p>
                 </div>
                 <div class="toolbar">
                     <button class="ghost-btn" @click="loadChannels()">Refresh</button>
-                    <span class="hint" x-text="copyStatus || ('Enabled channels: ' + enabledChannelCount() + ' / ' + channels.length)"></span>
                 </div>
             </div>
 
@@ -1611,27 +1509,17 @@
 
             <div class="channels-layout">
                 <aside class="channel-index-panel">
-                    <div class="channel-index-header">
-                        <strong>Channel Directory</strong>
-                        <p>Inspired by the clearer master-detail flow in openclaw-manager, this view keeps discovery on the left and deep configuration on the right.</p>
-                    </div>
                     <template x-if="channels.length === 0">
-                        <div class="empty-state">No channel metadata loaded.</div>
+                        <div class="empty-state">No channels.</div>
                     </template>
                     <template x-for="channel in channels" :key="'index-' + channel.key">
                         <button class="channel-selector-card" :class="{active: selectedChannelKey === channel.key}" @click="selectChannel(channel.key)">
                             <div class="channel-header">
                                 <div>
                                     <h3 x-text="channel.name"></h3>
-                                    <p class="channel-summary" x-text="channel.reply_mode_label"></p>
                                 </div>
                                 <span class="pill" :class="channel.enabled ? 'enabled' : 'disabled'" x-text="channel.enabled ? 'Enabled' : 'Disabled'"></span>
                             </div>
-                            <div class="channel-selector-caption">
-                                <span x-text="channelStateLabel(channel)"></span>
-                                <span x-text="channelMissingCheckCount(channel) === 0 ? 'All checks present' : channelMissingCheckCount(channel) + ' missing checks'"></span>
-                            </div>
-                            <div class="channel-selector-note" x-text="channel.summary"></div>
                         </button>
                     </template>
                 </aside>
@@ -1640,14 +1528,12 @@
                     <template x-if="channels.length === 0">
                         <div class="empty-state channel-detail-empty">
                             <span class="empty-state-title">No channel metadata loaded.</span>
-                            <p class="empty-state-note">The runtime did not return any channel descriptors yet, so there is nothing to configure.</p>
                         </div>
                     </template>
 
                     <template x-if="channels.length > 0 && !selectedChannel()">
                         <div class="empty-state channel-detail-empty">
                             <span class="empty-state-title">Select a channel.</span>
-                            <p class="empty-state-note">Pick one item from the left directory to inspect webhook paths, required env, login state, and live test tools.</p>
                         </div>
                     </template>
 
@@ -1657,30 +1543,10 @@
                                 <div class="channel-header">
                                     <div>
                                         <h3 x-text="channel.name"></h3>
-                                        <p class="channel-summary" x-text="channel.summary"></p>
                                     </div>
                                     <div class="toolbar">
                                         <span class="pill" :class="channel.enabled ? 'enabled' : 'disabled'" x-text="channel.enabled ? 'Enabled' : 'Disabled'"></span>
-                                        <span class="pill mode" x-text="channel.reply_mode_label"></span>
                                     </div>
-                                </div>
-
-                                <div class="channel-stat-grid">
-                                    <template x-for="metric in selectedChannelStats(channel)" :key="channel.key + '-' + metric.label">
-                                        <div class="channel-stat-card">
-                                            <strong x-text="metric.label"></strong>
-                                            <div class="channel-stat-value" x-text="metric.value"></div>
-                                            <div class="channel-stat-note" x-text="metric.note"></div>
-                                        </div>
-                                    </template>
-                                </div>
-
-                                <div class="channel-quick-actions">
-                                    <button class="ghost-btn" @click="copyText(channel.webhook_url)">Copy Webhook URL</button>
-                                    <button class="ghost-btn" @click="copyText(buildChannelRequestExample(channel))">Copy Sample Request</button>
-                                    <template x-if="channel.verify_url">
-                                        <button class="ghost-btn" @click="copyText(channel.verify_url)">Copy Verify URL</button>
-                                    </template>
                                 </div>
                             </div>
 
@@ -1699,122 +1565,24 @@
                                     </div>
                                 </template>
 
-                                <div class="channel-block channel-block-card">
-                                    <h4>Readiness Checks</h4>
-                                    <ul class="channel-list">
-                                        <template x-for="entry in channelCheckEntries(channel)" :key="entry.key">
-                                            <li>
-                                                <span>
-                                                    <span x-text="entry.label"></span>
-                                                    <template x-if="!entry.value && entry.fix">
-                                                        <div class="diagnostic-detail" x-text="entry.fix"></div>
-                                                    </template>
-                                                </span>
-                                                <span class="pill" :class="entry.value ? 'enabled' : 'disabled'" x-text="entry.value ? 'Present' : 'Missing'"></span>
-                                            </li>
-                                        </template>
-                                    </ul>
-                                </div>
-
-                                <div class="channel-block channel-block-card">
-                                    <h4>Setup Guide</h4>
-                                    <ul class="note-list">
-                                        <template x-for="step in (channel.setup_steps || [])" :key="channel.key + '-setup-' + step">
-                                            <li x-text="step"></li>
-                                        </template>
-                                    </ul>
-                                </div>
-
-                                <div class="channel-block channel-block-card">
-                                    <h4>Required Env</h4>
-                                    <ul class="channel-list">
-                                        <template x-for="envVar in channel.required_env" :key="envVar">
-                                            <li>
-                                                <code x-text="envVar"></code>
-                                                <button class="mini-btn" @click="copyText(envVar)">Copy</button>
-                                            </li>
-                                        </template>
-                                    </ul>
-                                </div>
-
-                                <template x-if="channel.optional_env && channel.optional_env.length">
-                                    <div class="channel-block channel-block-card">
-                                        <h4>Optional Env</h4>
-                                        <ul class="channel-list">
-                                            <template x-for="envVar in channel.optional_env" :key="envVar">
-                                                <li>
-                                                    <code x-text="envVar"></code>
-                                                    <button class="mini-btn" @click="copyText(envVar)">Copy</button>
-                                                </li>
-                                            </template>
-                                        </ul>
-                                    </div>
-                                </template>
-
-                                <div class="channel-block channel-block-card channel-block-wide">
-                                    <h4>Sample Request</h4>
-                                    <div class="code-block" x-text="buildChannelRequestExample(channel)"></div>
-                                    <button class="mini-btn" @click="copyText(buildChannelRequestExample(channel))">Copy Example</button>
-                                </div>
-
-                                <template x-if="channel.key === 'whatsapp'">
-                                    <div class="channel-block channel-block-card channel-block-wide">
-                                        <h4>Verify Example</h4>
-                                        <div class="code-block" x-text="buildChannelVerifyExample(channel)"></div>
-                                        <button class="mini-btn" @click="copyText(buildChannelVerifyExample(channel))">Copy Verify Call</button>
-                                    </div>
-                                </template>
-
                                 <template x-if="channel.key === 'weixin'">
                                     <div class="channel-block channel-block-card channel-block-wide">
                                         <h4>Scan to Login</h4>
                                         <div class="weixin-login-card">
-                                            <div class="form-grid">
-                                                <label>
-                                                    Local Account Key
-                                                    <input type="text" x-model="weixinLogin.account_id" placeholder="default">
-                                                </label>
-                                            </div>
+                                            <input type="text" x-model="weixinLogin.account_id" placeholder="Local account key (default)">
 
-                                            <div class="toolbar">
-                                                <button class="primary-btn" @click="startWeixinLogin(channel)" :disabled="weixinLoginLoading" x-text="weixinLoginLoading ? 'Starting...' : (weixinLogin.session_id ? 'Refresh QR' : 'Scan to Login')"></button>
-                                                <span class="result-note">Confirmed login stores the Weixin bot token under the LocalClaw data directory so later replies can reuse it.</span>
-                                            </div>
-
-                                            <template x-if="channel.connected_account || weixinLogin.connected_account">
-                                                <div class="weixin-login-status">
-                                                    <div class="toolbar">
-                                                        <span class="pill enabled">Connected</span>
-                                                        <span class="result-note">Stored login state</span>
-                                                    </div>
-                                                    <div class="code-block" x-text="weixinConnectedAccountSummary(weixinLogin.connected_account || channel.connected_account)"></div>
-                                                </div>
-                                            </template>
-
-                                            <template x-if="!channel.connected_account && !weixinLogin.connected_account">
-                                                <p class="weixin-connected-note">No stored Weixin login yet. Start a scan below to create one.</p>
-                                            </template>
+                                        <div class="toolbar">
+                                            <button class="primary-btn" @click="startWeixinLogin(channel)" :disabled="weixinLoginLoading" x-text="weixinLoginLoading ? 'Starting...' : (weixinLogin.session_id ? 'Refresh QR' : 'Scan to Login')"></button>
+                                        </div>
 
                                             <template x-if="weixinLogin.session_id">
                                                 <div class="weixin-login-grid">
-                                                    <div class="weixin-qr-box" id="weixin-login-qr">QR code will appear here.</div>
+                                                    <div class="weixin-qr-box" id="weixin-login-qr">QR</div>
                                                     <div class="weixin-login-meta">
-                                                        <div class="weixin-login-status">
-                                                            <div class="toolbar">
-                                                                <span class="pill mode" x-text="weixinLoginStatusLabel(weixinLogin.status)"></span>
-                                                                <span class="result-note" x-text="'Updated ' + (weixinLogin.updated_at || weixinLogin.created_at || 'just now')"></span>
-                                                            </div>
-                                                            <p x-text="weixinLogin.message || weixinLogin.error || 'Waiting for Weixin login status.'"></p>
-                                                        </div>
-
-                                                        <div class="code-block" x-text="weixinLogin.qrcode_img_content || weixinLogin.qrcode"></div>
-
                                                         <div class="toolbar">
                                                             <button class="mini-btn" @click="copyText(weixinLogin.qrcode_img_content || weixinLogin.qrcode)">Copy QR Payload</button>
                                                             <button class="mini-btn" x-show="Boolean(weixinQrLink())" @click="openExternalLink(weixinQrLink())">Open Link</button>
                                                         </div>
-
-                                                        <p class="result-note">If the QR box stays blank, copy the QR payload above and render it on another device, then scan it with Weixin.</p>
                                                     </div>
                                                 </div>
                                             </template>
@@ -1828,99 +1596,47 @@
                                         <template x-if="channel.key === 'weixin'">
                                             <div class="test-form">
                                                 <div class="form-grid">
-                                                    <label>
-                                                        Recipient (to_user_id)
-                                                        <input type="text" x-model="channelTests.weixin.recipient" placeholder="alice@im.wechat">
-                                                    </label>
-                                                    <label>
-                                                        Account ID
-                                                        <input type="text" x-model="channelTests.weixin.account_id" placeholder="Optional">
-                                                    </label>
+                                                    <input type="text" x-model="channelTests.weixin.recipient" placeholder="Recipient (to_user_id)">
+                                                    <input type="text" x-model="channelTests.weixin.account_id" placeholder="Account ID (optional)">
                                                 </div>
-                                                <label>
-                                                    Context Token
-                                                    <input type="text" x-model="channelTests.weixin.context_token" placeholder="Optional if cached from inbound">
-                                                </label>
-                                                <label>
-                                                    Test Message
-                                                    <textarea x-model="channelTests.weixin.text" placeholder="LocalClaw connectivity test"></textarea>
-                                                </label>
+                                                <input type="text" x-model="channelTests.weixin.context_token" placeholder="Context token (optional)">
+                                                <textarea x-model="channelTests.weixin.text" placeholder="Message"></textarea>
                                             </div>
                                         </template>
 
                                         <template x-if="channel.key === 'wechat_personal'">
                                             <div class="test-form">
                                                 <div class="form-grid">
-                                                    <label>
-                                                        Reply Target
-                                                        <input type="text" x-model="channelTests.wechat_personal.reply_target" placeholder="room-1 or wxid_user">
-                                                    </label>
-                                                    <label>
-                                                        Sender ID
-                                                        <input type="text" x-model="channelTests.wechat_personal.sender_id" placeholder="Optional override">
-                                                    </label>
+                                                    <input type="text" x-model="channelTests.wechat_personal.reply_target" placeholder="Reply target">
+                                                    <input type="text" x-model="channelTests.wechat_personal.sender_id" placeholder="Sender ID (optional)">
                                                 </div>
-                                                <label>
-                                                    Test Message
-                                                    <textarea x-model="channelTests.wechat_personal.text" placeholder="LocalClaw connectivity test"></textarea>
-                                                </label>
+                                                <textarea x-model="channelTests.wechat_personal.text" placeholder="Message"></textarea>
                                             </div>
                                         </template>
 
                                         <template x-if="channel.key === 'whatsapp'">
                                             <div class="test-form">
                                                 <div class="form-grid">
-                                                    <label>
-                                                        Recipient
-                                                        <input type="text" x-model="channelTests.whatsapp.recipient" placeholder="15551234567">
-                                                    </label>
-                                                    <label>
-                                                        Phone Number ID
-                                                        <input type="text" x-model="channelTests.whatsapp.phone_number_id" placeholder="Optional override">
-                                                    </label>
+                                                    <input type="text" x-model="channelTests.whatsapp.recipient" placeholder="Recipient">
+                                                    <input type="text" x-model="channelTests.whatsapp.phone_number_id" placeholder="Phone Number ID (optional)">
                                                 </div>
-                                                <label>
-                                                    Test Message
-                                                    <textarea x-model="channelTests.whatsapp.text" placeholder="LocalClaw connectivity test"></textarea>
-                                                </label>
+                                                <textarea x-model="channelTests.whatsapp.text" placeholder="Message"></textarea>
                                             </div>
                                         </template>
 
                                         <div class="toolbar">
                                             <button class="primary-btn" @click="runChannelTest(channel)" :disabled="Boolean(channelTestLoading[channel.key])" x-text="channelTestLoading[channel.key] ? 'Testing...' : 'Run Test'"></button>
-                                            <span class="result-note">Live send runs only when the required outbound config is present. Otherwise the API returns a dry run preview.</span>
                                         </div>
 
                                         <template x-if="channelTestResults[channel.key]">
                                             <div class="weixin-login-status">
                                                 <div class="toolbar">
                                                     <span class="pill" :class="channelTestResults[channel.key].mode === 'live' ? 'enabled' : 'warning'" x-text="channelTestResults[channel.key].mode === 'live' ? 'Live Test' : 'Dry Run'"></span>
-                                                    <span class="result-note" x-text="channelTestResults[channel.key].ok ? 'Request completed.' : 'Request needs attention.'"></span>
                                                 </div>
                                                 <p x-text="channelTestResults[channel.key].summary || 'No summary returned.'"></p>
-                                                <template x-if="(channelTestResults[channel.key].missing || []).length > 0">
-                                                    <div class="diagnostic-detail" x-text="'Missing: ' + (channelTestResults[channel.key].missing || []).join(', ')"></div>
-                                                </template>
-                                                <template x-if="(channelTestResults[channel.key].guidance || []).length > 0">
-                                                    <ul class="note-list">
-                                                        <template x-for="tip in channelTestResults[channel.key].guidance" :key="channel.key + '-tip-' + tip">
-                                                            <li x-text="tip"></li>
-                                                        </template>
-                                                    </ul>
-                                                </template>
-                                                <div class="code-block" x-text="formatJson(channelTestResults[channel.key])"></div>
                                             </div>
                                         </template>
                                     </div>
-                                </div>
-
-                                <div class="channel-block channel-block-card channel-block-wide">
-                                    <h4>Notes</h4>
-                                    <ul class="note-list">
-                                        <template x-for="note in channel.notes" :key="note">
-                                            <li x-text="note"></li>
-                                        </template>
-                                    </ul>
                                 </div>
                             </div>
                         </div>
@@ -1933,11 +1649,9 @@
             <div class="section-header">
                 <div>
                     <h2>Runtime Logs</h2>
-                    <p>Inspect recent task history with searchable filters for state, channel, and request text without leaving the main console.</p>
                 </div>
                 <div class="toolbar">
                     <button class="ghost-btn" @click="loadLogs()">Refresh</button>
-                    <span class="hint" x-text="'Showing ' + logsEntries.length + ' entries'"></span>
                 </div>
             </div>
 
@@ -1975,7 +1689,6 @@
                 <div class="toolbar">
                     <button class="primary-btn" @click="loadLogs()" :disabled="logsLoading" x-text="logsLoading ? 'Loading...' : 'Apply Filters'"></button>
                     <button class="secondary-btn" @click="clearLogFilters()" :disabled="logsLoading">Clear</button>
-                    <span class="result-note" x-text="logsLastLoadedAt ? ('Last refreshed ' + formatDateTime(logsLastLoadedAt)) : 'Not loaded yet'"></span>
                 </div>
             </div>
 
@@ -1986,7 +1699,6 @@
             <template x-if="!logsLoading && logsEntries.length === 0">
                 <div class="empty-state">
                     <span class="empty-state-title">No logs matched current filters.</span>
-                    <p class="empty-state-note">Try clearing filters or increasing the row limit.</p>
                 </div>
             </template>
 
@@ -2015,7 +1727,6 @@
             <div class="section-header">
                 <div>
                     <h2>System Settings</h2>
-                    <p>Manage the LocalClaw background service, run diagnostics inspired by openclaw-manager, inspect tool inventory, and review recent runtime activity from one operations console.</p>
                 </div>
                 <div class="toolbar">
                     <button class="ghost-btn" @click="refreshActiveTab()">Refresh</button>
@@ -2033,7 +1744,6 @@
                         <div class="channel-header">
                             <div>
                                 <h3 x-text="(serviceStatus && serviceStatus.display_name) ? serviceStatus.display_name : 'LocalClaw Background Service'"></h3>
-                                <p class="channel-summary">Use this when you want LocalClaw to auto-start and keep serving at <code>127.0.0.1:8016</code>.</p>
                             </div>
                             <div class="toolbar">
                                 <span class="pill" :class="serviceStatus && serviceStatus.installed ? 'enabled' : 'disabled'" x-text="serviceStatus && serviceStatus.installed ? 'Installed' : 'Not Installed'"></span>
@@ -2092,11 +1802,9 @@
                         <div class="skills-panel-header">
                             <div>
                                 <h3>Runtime Diagnostics</h3>
-                                <p>Modeled after openclaw-manager testing and dashboard checks, this runs a compact health sweep across service, channels, tools, skills, and approval state.</p>
                             </div>
                             <div class="toolbar">
                                 <button class="ghost-btn" @click="runRuntimeDiagnostics()" :disabled="diagnosticsLoading" x-text="diagnosticsLoading ? 'Running...' : 'Run Again'"></button>
-                                <span class="result-note" x-text="diagnosticsLastRunAt ? ('Last run ' + formatDateTime(diagnosticsLastRunAt)) : 'Not run yet'"></span>
                             </div>
                         </div>
 
@@ -2121,7 +1829,6 @@
                         <template x-if="runtimeDiagnostics.length === 0 && !diagnosticsLoading">
                             <div class="empty-state">
                                 <span class="empty-state-title">No diagnostic run yet.</span>
-                                <p class="empty-state-note">Run diagnostics to verify API health, service readiness, tool registry, skills, channels, and approval queue from one place.</p>
                             </div>
                         </template>
 
@@ -2152,7 +1859,6 @@
                         <div class="skills-panel-header">
                             <div>
                                 <h3>Tool Inventory</h3>
-                                <p>Similar to openclaw-manager's dedicated diagnostic surfaces, this makes LocalClaw's registered tools and risk levels visible without leaving the console.</p>
                             </div>
                             <div class="skill-badges">
                                 <span class="pill enabled" x-text="tools.filter(tool => String(tool.risk_level || '').toLowerCase() === 'low').length + ' low'"></span>
@@ -2162,7 +1868,6 @@
                         </div>
                         <div class="toolbar" style="margin-bottom: 10px;">
                             <button class="ghost-btn" @click="toggleToolInventoryScope()" x-text="showAllTools ? 'Show Top 12' : 'Show All Tools'"></button>
-                            <span class="result-note" x-text="showAllTools ? (tools.length + ' tools shown') : ('Top ' + Math.min(12, tools.length) + ' tools shown')"></span>
                         </div>
 
                         <template x-if="toolsLoadError">
@@ -2172,7 +1877,6 @@
                         <template x-if="displayTools(toolDisplayLimit()).length === 0 && !toolsLoadError">
                             <div class="empty-state">
                                 <span class="empty-state-title">No tools loaded.</span>
-                                <p class="empty-state-note">The tool registry did not return any entries yet.</p>
                             </div>
                         </template>
 
@@ -2194,14 +1898,12 @@
                         <div class="skills-panel-header">
                             <div>
                                 <h3>Diagnostic History</h3>
-                                <p>Keep a short timeline of recent diagnostics so you can compare health changes across runs.</p>
                             </div>
                             <div class="skill-subtle" x-text="runtimeDiagnosticsHistory.length + ' runs'"></div>
                         </div>
                         <template x-if="runtimeDiagnosticsHistory.length === 0">
                             <div class="empty-state">
                                 <span class="empty-state-title">No diagnostic history yet.</span>
-                                <p class="empty-state-note">Run diagnostics from this page and each run will be recorded here.</p>
                             </div>
                         </template>
                         <div class="diagnostic-history-list" x-show="runtimeDiagnosticsHistory.length > 0">
@@ -2223,7 +1925,6 @@
                         <div class="skills-panel-header">
                             <div>
                                 <h3>Recent Activity</h3>
-                                <p>This borrows the logs/dashboard mindset from openclaw-manager, but uses LocalClaw task history so you can inspect what actually happened most recently.</p>
                             </div>
                             <div class="skill-subtle" x-text="recentTasks(6).length + ' shown'"></div>
                         </div>
@@ -2231,7 +1932,6 @@
                         <template x-if="recentTasks(6).length === 0">
                             <div class="empty-state">
                                 <span class="empty-state-title">No recent tasks yet.</span>
-                                <p class="empty-state-note">Task history will appear here after chat requests, approvals, and channel-driven runs.</p>
                             </div>
                         </template>
 
@@ -2262,7 +1962,6 @@
                 <div class="modal-header">
                     <div>
                         <h2>Skill 安装前安全体检</h2>
-                        <p class="channel-summary">重点识别密钥收割、挖矿注入、动态拉取、越权访问、仿冒官方、无作者溯源、第三方内容抓取、无评分无维护等恶意特征，同时检查输入密钥、执行命令、控制浏览器、读取文件、发起网络请求、设置定时任务这类高危能力。</p>
                     </div>
                     <button class="ghost-btn" @click="closeInstallReview()">关闭</button>
                 </div>
@@ -2273,8 +1972,6 @@
                             <span class="risk-chip" :class="'risk-' + (installReview.report.risk_level || 'low')" x-text="'风险等级：' + (installReview.report.risk_label || '低')"></span>
                             <span class="pill mode" x-text="'建议：' + installActionLabel(installReview.report.recommended_action)"></span>
                         </div>
-
-                        <p class="channel-summary" x-text="installReview.report.summary"></p>
 
                         <div class="meta-grid">
                             <div class="meta-item">
@@ -2309,7 +2006,6 @@
                                         </div>
                                         <p x-text="finding.summary"></p>
                                         <div class="code-block" x-text="finding.evidence.join('\n')"></div>
-                                        <p><strong>建议：</strong><span x-text="finding.advice"></span></p>
                                     </div>
                                 </template>
                             </div>
@@ -2328,15 +2024,6 @@
                                     </div>
                                 </template>
                             </div>
-                        </div>
-
-                        <div class="channel-block">
-                            <h4>额外建议</h4>
-                            <ul class="note-list">
-                                <template x-for="item in installReview.report.recommendations" :key="item">
-                                    <li x-text="item"></li>
-                                </template>
-                            </ul>
                         </div>
 
                         <template x-if="installReviewError">
@@ -2373,6 +2060,8 @@
                 availableSkillsLoading: false,
                 availableSkillsLoadError: '',
                 availableSkillsRemoteError: '',
+                availableSkillsLastRemoteAttempted: false,
+                availableSkillsRemoteBackoffUntil: 0,
                 availableSkillsEmptyMessage: '',
                 skillSearchQuery: '',
                 skillSourceFilter: 'all',
@@ -2473,9 +2162,6 @@
                     });
                     
                     setInterval(() => {
-                        if (this.activeTab === 'skills') {
-                            this.refreshSkillCatalog({ showLoading: false });
-                        }
                         if (!this.loading && !this.wsConnected) {
                             this.loadTasks({ syncChatHistory: true });
                         }
@@ -2496,7 +2182,6 @@
                 pageNavItems() {
                     return [
                         { id: 'chat', label: 'Chat', short: 'CH' },
-                        { id: 'approvals', label: 'Approvals', short: 'AP' },
                         { id: 'skills', label: 'Skills', short: 'SK' },
                         { id: 'channels', label: 'Channels', short: 'CN' },
                         { id: 'logs', label: 'Logs', short: 'LG' },
@@ -2507,40 +2192,19 @@
                 currentPageMeta() {
                     const meta = {
                         chat: {
-                            eyebrow: 'Workspace',
-                            title: 'Chat Workspace',
-                            description: 'Run requests, inspect structured outputs, and keep the active conversation close to runtime status.',
-                            hint: 'Use /cmd for routine shell-safe commands or /shell when you expect approval.'
-                        },
-                        approvals: {
-                            eyebrow: 'Safety',
-                            title: 'Approval Center',
-                            description: 'Review high-risk actions before they continue so raw shell and protected operations stay explicit.',
-                            hint: 'Only high-risk steps pause here. Routine /cmd flows usually continue without manual approval.'
+                            title: 'Chat Workspace'
                         },
                         skills: {
-                            eyebrow: 'Capability',
-                            title: 'Skill Library',
-                            description: 'Separate installed runtime skills from installable marketplace packages and keep security review in the loop.',
-                            hint: 'Every third-party install is scanned before LocalClaw writes files.'
+                            title: 'Skill Library'
                         },
                         channels: {
-                            eyebrow: 'Integrations',
-                            title: 'Channel Configuration',
-                            description: 'Configure inbound webhooks, outbound reply paths, and visual login flows from one clearer message-channel console.',
-                            hint: 'Select a channel on the left to focus on setup, testing, and connection state.'
+                            title: 'Channel Configuration'
                         },
                         logs: {
-                            eyebrow: 'Operations',
-                            title: 'Runtime Logs',
-                            description: 'Search and inspect recent task activity by state, channel, and prompt text from one dedicated log surface.',
-                            hint: 'Use filters and row limits to quickly isolate failed or verifying tasks.'
+                            title: 'Runtime Logs'
                         },
                         settings: {
-                            eyebrow: 'Operations',
-                            title: 'System Settings',
-                            description: 'Manage the background service, runtime diagnostics, tool inventory, and activity history without leaving the LocalClaw console.',
-                            hint: 'Run diagnostics here when you want a quick health view similar to openclaw-manager testing and logs.'
+                            title: 'System Settings'
                         }
                     };
 
@@ -2550,9 +2214,6 @@
                 refreshActiveTab() {
                     if (this.activeTab === 'skills') {
                         return this.refreshSkillCatalog();
-                    }
-                    if (this.activeTab === 'approvals') {
-                        return this.loadApprovals();
                     }
                     if (this.activeTab === 'channels') {
                         return this.loadChannels();
@@ -2575,7 +2236,6 @@
                 activeTabActionLabel() {
                     const labels = {
                         chat: 'Refresh Workspace',
-                        approvals: 'Refresh Approvals',
                         skills: 'Refresh Skills',
                         channels: 'Refresh Channels',
                         logs: 'Refresh Logs',
@@ -2585,18 +2245,6 @@
                 },
 
                 summaryCardsForActiveTab() {
-                    if (this.activeTab === 'approvals') {
-                        const criticalCount = this.approvals.filter(item => {
-                            return item && item.step && item.step.risk_level === 'critical';
-                        }).length;
-                        return [
-                            { label: 'Pending', value: String(this.approvals.length), note: 'Steps waiting for explicit approval.' },
-                            { label: 'Critical', value: String(criticalCount), note: 'Raw shell or equally high-risk actions.' },
-                            { label: 'Tasks', value: String(this.tasks.length), note: 'Recent runtime tasks currently visible.' },
-                            { label: 'Fast Path', value: '/cmd', note: 'Use safe-shell routing when possible.' }
-                        ];
-                    }
-
                     if (this.activeTab === 'skills') {
                         return [
                             { label: 'Installed', value: String(this.skills.length), note: 'Runtime skills currently registered.' },
@@ -3588,45 +3236,84 @@
                     const bundledMatches = queryMatches.filter(skill => String(skill.source || 'remote') === 'bundled');
                     const remoteMatches = queryMatches.filter(skill => String(skill.source || 'remote') === 'remote');
 
+                    if (sourceFilter === 'remote' && this.availableSkillsRemoteBackoffActive()) {
+                        return '当前仅显示 ClawHub 远端结果。ClawHub 刚刚触发限流，已进入冷却，请约 ' + this.availableSkillsRemoteBackoffSecondsRemaining() + ' 秒后再点 Search，或切换到 All sources / Bundled only。';
+                    }
+
+                    if (sourceFilter === 'remote' && !this.availableSkillsLastRemoteAttempted) {
+                        return query
+                            ? '当前筛选为“ClawHub only”。为了避免频繁请求，页面不会自动访问远端；请点击 Search 手动搜索 ClawHub。'
+                            : '当前筛选为“ClawHub only”。页面刷新只读取 Bundled 目录；请点击 Search 手动搜索 ClawHub。';
+                    }
+
                     if (sourceFilter === 'remote' && this.availableSkillsRemoteError) {
                         if (bundledMatches.length > 0) {
                             return query
-                                ? 'ClawHub is currently unavailable. This search matched bundled skills, so switch to All sources or Bundled only to see them.'
-                                : 'ClawHub is currently unavailable. Switch to All sources or Bundled only to browse the bundled catalog.';
+                                ? 'ClawHub 远端当前不可用。这次关键词只在 Bundled 目录里命中了结果；如果你想看到它们，请切换到 All sources 或 Bundled only。'
+                                : 'ClawHub 远端当前不可用。当前筛选为“ClawHub only”，所以不会显示 Bundled 目录结果。';
                         }
-                        return 'ClawHub is currently unavailable. Check network or DNS for the registry, or switch to Bundled only.';
+                        return 'ClawHub 远端当前不可用。当前筛选为“ClawHub only”，所以列表会保持为空。请稍后重试，或切换到 All sources / Bundled only。';
                     }
 
                     if (sourceFilter === 'remote' && bundledMatches.length > 0) {
                         return query
-                            ? 'This search matched bundled skills, but the current filter is ClawHub only. Switch sources to see them.'
-                            : 'Bundled skills are available, but the current filter is ClawHub only.';
+                            ? '这次关键词只命中了 Bundled 目录，但你当前筛选的是“ClawHub only”。切换到 All sources 或 Bundled only 就能看到。'
+                            : 'Bundled 目录里有可用技能，但你当前筛选的是“ClawHub only”。';
                     }
 
                     if (sourceFilter === 'bundled' && remoteMatches.length > 0) {
                         return query
-                            ? 'This search matched ClawHub skills, but the current filter is Bundled only. Switch sources to see them.'
-                            : 'ClawHub skills are available, but the current filter is Bundled only.';
+                            ? '这次关键词命中了 ClawHub 远端结果，但你当前筛选的是“Bundled only”。切换来源后才能看到。'
+                            : 'ClawHub 远端里有结果，但你当前筛选的是“Bundled only”。';
                     }
 
                     if (this.availableSkills.length === 0) {
                         return query
-                            ? 'No skills matched this search. Try a broader keyword or switch sources.'
-                            : 'No installable skills are currently available.';
+                            ? '没有技能匹配这次搜索。试试更宽一点的关键词，或者切换来源。'
+                            : '当前没有可安装的技能结果。';
                     }
 
-                    return this.availableSkillsEmptyMessage || 'No skills match the current search or source filter.';
+                    return this.availableSkillsEmptyMessage || '当前搜索词或来源筛选下没有可显示的技能。';
                 },
 
                 availableSkillsRemoteNoticeMessage() {
                     const sourceFilter = this.skillSourceFilter;
+                    if (this.availableSkillsRemoteBackoffActive()) {
+                        return 'ClawHub 刚刚返回 429，已暂停远端搜索，避免继续触发限流。';
+                    }
                     if (sourceFilter === 'all') {
-                        return 'ClawHub search is currently unavailable. Bundled catalog results are still shown below when available.';
+                        return 'ClawHub 远端当前不可用，但下面仍会显示 Bundled 目录结果。';
                     }
                     if (sourceFilter === 'bundled') {
-                        return 'ClawHub search is currently unavailable. You can still browse bundled catalog results below.';
+                        return 'ClawHub 远端当前不可用，但你仍然可以继续浏览 Bundled 目录。';
                     }
-                    return 'ClawHub search is currently unavailable. Bundled catalog results can still appear if you switch sources.';
+                    return '当前筛选为“ClawHub only”，而 ClawHub 远端暂时不可用，所以列表可能为空。';
+                },
+
+                availableSkillsRemoteBackoffActive() {
+                    return Number(this.availableSkillsRemoteBackoffUntil || 0) > Date.now();
+                },
+
+                availableSkillsRemoteBackoffSecondsRemaining() {
+                    const remainingMs = Math.max(0, Number(this.availableSkillsRemoteBackoffUntil || 0) - Date.now());
+                    return Math.max(1, Math.ceil(remainingMs / 1000));
+                },
+
+                availableSkillsRemoteBackoffMessage() {
+                    return 'ClawHub 返回 429（请求过于频繁），已进入短暂冷却。请约 ' + this.availableSkillsRemoteBackoffSecondsRemaining() + ' 秒后再点 Search。';
+                },
+
+                formatAvailableSkillsRemoteError() {
+                    const detail = String(this.availableSkillsRemoteError || '').trim();
+                    if (!detail) {
+                        return '';
+                    }
+                    if (detail.includes('429')) {
+                        return this.availableSkillsRemoteBackoffActive()
+                            ? this.availableSkillsRemoteBackoffMessage()
+                            : 'ClawHub 返回 429（请求过于频繁）。通常是公共远端接口限流，请稍后再试。';
+                    }
+                    return detail;
                 },
 
                 skillSourcePillClass(source) {
@@ -4266,7 +3953,7 @@
                                         ? 'No high-risk steps are waiting for approval.'
                                         : approvals.length + ' high-risk steps are currently paused.',
                                     detail: approvals.length > 0
-                                        ? 'Open Approval Center to review paused raw shell or protected actions.'
+                                        ? 'Open Chat and review paused raw shell or protected actions in the inline approval section.'
                                         : 'Approval queue is clear.',
                                     suggestion: approvals.length === 0
                                         ? 'Routine /cmd flows can continue without manual review when risk stays low.'
@@ -4504,13 +4191,24 @@
                 
                 async loadAvailableSkills(options = {}) {
                     const showLoading = options.showLoading !== false;
+                    const manual = options.manual === true;
                     if (showLoading) {
                         this.availableSkillsLoading = true;
                     }
                     try {
                         const query = this.skillSearchQuery.trim();
+                        const wantsRemote = this.skillSourceFilter !== 'bundled';
+                        const backoffActive = wantsRemote && this.availableSkillsRemoteBackoffActive();
+                        const includeRemote = manual && wantsRemote && !backoffActive;
+                        const params = query ? { query: query } : {};
+
+                        if (!includeRemote) {
+                            params.include_remote = false;
+                        }
+
+                        this.availableSkillsLastRemoteAttempted = includeRemote;
                         const response = await axios.get('/api/clawhub/search', {
-                            params: query ? { query: query } : {}
+                            params: params
                         });
                         const payload = response.data || {};
                         const skills = Array.isArray(payload.skills) ? payload.skills : [];
@@ -4518,17 +4216,28 @@
                         this.availableSkillsCatalog = this.sortAvailableSkills(skills);
                         this.availableSkills = this.sortAvailableSkills(skills.filter(skill => !this.isSkillInstalled(skill)));
                         this.availableSkillsLoadError = payload.error || '';
-                        this.availableSkillsRemoteError = payload.remote_error || '';
+                        this.availableSkillsRemoteError = '';
                         this.availableSkillsEmptyMessage = '';
+
+                        if (includeRemote) {
+                            this.availableSkillsRemoteError = payload.remote_error || '';
+                            if (this.availableSkillsRemoteError && this.availableSkillsRemoteError.includes('429')) {
+                                this.availableSkillsRemoteBackoffUntil = Date.now() + 60 * 1000;
+                            } else if (!this.availableSkillsRemoteError) {
+                                this.availableSkillsRemoteBackoffUntil = 0;
+                            }
+                        } else if (backoffActive) {
+                            this.availableSkillsRemoteError = this.availableSkillsRemoteBackoffMessage();
+                        }
 
                         if (this.availableSkills.length === 0 && !this.availableSkillsLoadError) {
                             this.availableSkillsEmptyMessage = query
-                                ? 'No skills matched this search. Try a broader keyword or switch sources.'
-                                : 'No installable skills are currently available.';
+                                ? '没有技能匹配这次搜索。试试更宽一点的关键词，或者切换来源。'
+                                : '当前没有可安装的技能结果。';
                         }
                     } catch (e) {
                         console.error('Failed to load available skills:', e);
-                        this.availableSkillsLoadError = 'Unable to load installable skills. Check the bundled catalog and ClawHub registry configuration, then try again.';
+                        this.availableSkillsLoadError = '加载可安装技能失败。请检查 Bundled 目录和 ClawHub 配置后重试。';
                         this.availableSkillsRemoteError = '';
                     } finally {
                         if (showLoading) {
@@ -4658,7 +4367,7 @@
 
                         if (data.status === 'verifying') {
                             await this.loadApprovals();
-                            this.activeTab = 'approvals';
+                            this.activeTab = 'chat';
                         }
 
                         this.messages.push(this.buildChatMessageFromApi(data));

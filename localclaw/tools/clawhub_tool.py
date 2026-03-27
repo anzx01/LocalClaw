@@ -76,18 +76,27 @@ class ClawHubSearchTool(Tool):
     inputs = {"query": "string"}
     outputs = {"skills": "list"}
 
-    async def execute(self, query: str = "", category: Optional[str] = None, **kwargs) -> ExecutionResult:
+    async def execute(
+        self,
+        query: str = "",
+        category: Optional[str] = None,
+        include_remote: bool = True,
+        **kwargs,
+    ) -> ExecutionResult:
         """Execute ClawHub search."""
         try:
             bundled_catalog = get_bundled_skill_catalog()
             bundled_skills = bundled_catalog.search_skills(query=query, category=category)
 
-            client = get_clawhub_client()
-            try:
-                remote_skills = await client.search_skills(query, category)
-                remote_error = getattr(client, "last_search_error", None)
-            finally:
-                await client.close()
+            remote_skills = []
+            remote_error = None
+            if include_remote:
+                client = get_clawhub_client()
+                try:
+                    remote_skills = await client.search_skills(query, category)
+                    remote_error = getattr(client, "last_search_error", None)
+                finally:
+                    await client.close()
 
             skills = _merge_marketplace_skills(bundled_skills, remote_skills)
 

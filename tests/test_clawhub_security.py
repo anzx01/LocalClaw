@@ -368,6 +368,33 @@ async def test_clawhub_search_surfaces_remote_registry_errors(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_clawhub_search_can_skip_remote_registry(monkeypatch, tmp_path):
+    """When include_remote is false, search should rely on bundled catalog only."""
+
+    from localclaw.tools import clawhub_tool as clawhub_module
+
+    catalog_dir = tmp_path / "catalog"
+    catalog_dir.mkdir()
+    _write_bundled_catalog_skill(catalog_dir)
+
+    settings = Settings(_env_file=None, bundled_skill_catalog_dir=catalog_dir)
+
+    monkeypatch.setattr(clawhub_registry, "get_settings", lambda: settings)
+
+    def _unexpected_remote_client():
+        raise AssertionError("Remote client should not be constructed when include_remote is false")
+
+    monkeypatch.setattr(clawhub_module, "get_clawhub_client", _unexpected_remote_client)
+
+    result = await clawhub_module.ClawHubSearchTool().run(query="repo", include_remote=False)
+
+    assert result.status == "success"
+    assert result.data["remote_error"] is None
+    assert any(skill["id"] == "repo.fs" for skill in result.data["skills"])
+    assert all(skill["source"] == "bundled" for skill in result.data["skills"])
+
+
+@pytest.mark.asyncio
 async def test_clawhub_install_can_install_bundled_catalog_skill(monkeypatch, tmp_path):
     """Bundled catalog entries should install through the same reviewed install flow as remote skills."""
 

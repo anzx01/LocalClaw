@@ -1486,9 +1486,13 @@ def create_app() -> FastAPI:
         return registry.get_all_info()
     
     @app.get("/api/clawhub/search")
-    async def clawhub_search(query: str = ""):
+    async def clawhub_search(query: str = "", include_remote: bool = True):
         registry = get_tool_registry()
-        result = await registry.execute("clawhub_search", query=query)
+        result = await registry.execute(
+            "clawhub_search",
+            query=query,
+            include_remote=include_remote,
+        )
         if result.status == "success":
             return {
                 "skills": result.data.get("skills", []),

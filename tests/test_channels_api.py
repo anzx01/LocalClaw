@@ -5,7 +5,16 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 
 from localclaw.config.settings import Settings
-from localclaw.core.models import Message, Plan, Step, StepStatus, StepType, Task, TaskState
+from localclaw.core.models import (
+    ExecutionResult,
+    Message,
+    Plan,
+    Step,
+    StepStatus,
+    StepType,
+    Task,
+    TaskState,
+)
 from localclaw.skills.base import create_skill_from_dict
 from localclaw.skills.registry import SkillRegistry
 
@@ -420,3 +429,37 @@ def test_background_service_endpoints(monkeypatch):
 
     assert uninstall_response.status_code == 200
     assert uninstall_response.json()["action"] == "uninstall"
+
+
+def test_clawhub_search_endpoint_forwards_include_remote_flag(monkeypatch):
+    """The ClawHub search API should forward include_remote and query to the tool call."""
+
+    from localclaw.channels import web as web_channel
+
+    captured: dict = {}
+
+    class FakeRegistry:
+        async def execute(self, tool_name, **kwargs):
+            captured["tool_name"] = tool_name
+            captured["kwargs"] = kwargs
+            return ExecutionResult.success(
+                message="ok",
+                data={"skills": [{"id": "repo.fs", "source": "bundled"}], "remote_error": None},
+            )
+
+    monkeypatch.setattr(web_channel, "get_settings", lambda: Settings())
+    monkeypatch.setattr(web_channel, "get_tool_registry", lambda: FakeRegistry())
+    monkeypatch.setattr(web_channel, "initialize_system", lambda: None)
+
+    app = web_channel.create_app()
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/clawhub/search",
+            params={"query": "repo", "include_remote": "false"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["skills"][0]["id"] == "repo.fs"
+    assert captured["tool_name"] == "clawhub_search"
+    assert captured["kwargs"]["query"] == "repo"
+    assert captured["kwargs"]["include_remote"] is False

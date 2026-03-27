@@ -430,6 +430,35 @@ async def test_openclaw_runtime_guardrails_weather_hot_question(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_openclaw_runtime_guardrails_weather_hot_bu_question(monkeypatch):
+    """Short colloquial prompts like '西安热不' should still map to weather intent."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"unknown","params":{}}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    tool_registry.register(DummyHttpGetTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+    decision = await runtime.decide(Message(content="西安热不？"))
+
+    assert decision.mode == AgentDecisionMode.INTENT
+    assert decision.intent_name == "check_weather"
+    assert decision.params["location"] == "西安"
+    assert decision.params["day_offset"] == 0
+    assert decision.params["day_label"] == "今天"
+
+
+@pytest.mark.asyncio
 async def test_openclaw_runtime_can_disable_request_guardrails(monkeypatch):
     """When guardrails are disabled, runtime should keep the model decision."""
 

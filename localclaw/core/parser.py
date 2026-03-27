@@ -479,7 +479,7 @@ def create_default_parser(llm_enabled: bool = False, llm_parse_only: bool = Fals
             priority=15,
         ),
         ParseRule(
-            pattern=r"^.*?(?:冷不冷|热不热|冷吗|热吗|温度|气温)",
+            pattern=r"^.*?(?:冷不|热不|冷不冷|热不热|冷吗|热吗|温度|气温)",
             intent="check_weather",
             priority=15,
         ),
