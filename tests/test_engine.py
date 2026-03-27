@@ -303,6 +303,62 @@ async def test_engine_local_model_unknown_falls_back_to_free_chat(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_engine_local_model_pseudo_chat_intent_falls_back_to_free_chat(monkeypatch):
+    """Pseudo conversational intents should still route to chat fallback answers."""
+
+    class PseudoIntentRuntime(OpenClawRuntime):
+        def __init__(self):
+            pass
+
+        async def decide(self, message, context=None):
+            return AgentDecision(
+                mode=AgentDecisionMode.INTENT,
+                intent_name="chat/help/general knowledge",
+                params={},
+                confidence=0.7,
+                source="openclaw_runtime",
+                raw_message=message.content,
+            )
+
+    class ChatFallbackProvider:
+        async def is_available(self):
+            return True
+
+        async def chat(self, messages, max_tokens=None, temperature=None):
+            class Response:
+                content = "Common side effects include muscle pain, nausea, and headache."
+
+            return Response()
+
+        async def generate(self, prompt, system_prompt=None, max_tokens=None, temperature=None):
+            class Response:
+                content = "Common side effects include muscle pain, nausea, and headache."
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: ChatFallbackProvider())
+
+    engine = ExecutionEngine(
+        settings=Settings(_env_file=None, llm_enabled=True, llm_parse_only=True),
+        planner=create_default_planner(),
+        verifier=create_default_verifier(),
+        tool_registry=ToolRegistry(),
+        skill_registry=SkillRegistry(),
+        openclaw_runtime=PseudoIntentRuntime(),
+    )
+
+    task = await engine.process_message(
+        Message(content="What are the side effects of rosuvastatin?", user_id="u1", channel="test")
+    )
+
+    assert task.state == TaskState.COMPLETED
+    assert task.intent is not None
+    assert task.intent.intent == "answer"
+    assert task.intent.source == "openclaw_runtime_chat_fallback"
+    assert "muscle pain" in task.result.data["result"]
+
+
+@pytest.mark.asyncio
 async def test_engine_local_model_can_plan_drive_directory_listing(monkeypatch):
     """Drive-root folder questions should be handled by the local-model planner path."""
 
