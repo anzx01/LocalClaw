@@ -95,6 +95,7 @@ class ExecutionEngine:
         self._on_approval_required: Optional[Callable[[Step, Task], None]] = None
         
         self._state_file = self._settings.data_dir / "task_state.json"
+        self._progress_file = self._settings.progress_log
 
     def _build_local_model_required_message(self) -> str:
         """Return the user-facing message shown when the local model is disabled."""
@@ -126,9 +127,10 @@ class ExecutionEngine:
         )
         
         self._tasks[task.id] = task
+        self._record_progress(task, event="task_created")
         
         try:
-            task.advance_state(TaskState.PARSED)
+            self._advance_task_state(task, TaskState.PARSED, event="task_parsed")
             if not self._settings.llm_enabled and not self._parser_override:
                 raise EngineError(
                     self._build_local_model_required_message(),
@@ -186,8 +188,8 @@ class ExecutionEngine:
                         plan = await self._planner.plan(intent, task.context)
                         if plan.intent is None:
                             plan.intent = intent
-                    resolved_intent = plan.intent.intent if plan.intent else "unknown"
-                    if resolved_intent == "unknown":
+                    resolved_intent = plan.intent.intent if plan and plan.intent else "unknown"
+                    if self._is_unknown_plan(plan):
                         self._logger.info(
                             "Task %s: Planner still returned unknown; trying local-model chat fallback",
                             task.id,
@@ -221,11 +223,16 @@ class ExecutionEngine:
                 if task.intent is not None:
                     task.context.inputs.update(task.intent.params)
 
-                task.advance_state(TaskState.PLANNED)
+                self._advance_task_state(task, TaskState.PLANNED, event="task_planned")
                 if task.plan is not None:
                     self._logger.info(f"Task {task.id}: Created plan with {len(task.plan.steps)} steps")
+                    self._record_progress(
+                        task,
+                        event="plan_ready",
+                        details={"step_count": len(task.plan.steps)},
+                    )
 
-                task.advance_state(TaskState.RUNNING)
+                self._advance_task_state(task, TaskState.RUNNING, event="task_running")
                 await self._execute_plan(task)
             
         except Exception as e:
@@ -236,12 +243,18 @@ class ExecutionEngine:
                 task.error_type = ErrorType.SYSTEM_ERROR
             task.error = str(e)
             task.result = ExecutionResult.from_error(task.error, task.error_type)
-            task.advance_state(TaskState.FAILED)
+            self._advance_task_state(
+                task,
+                TaskState.FAILED,
+                event="task_failed",
+                details={"exception": str(e)},
+            )
 
         if task.state not in (TaskState.VERIFYING, TaskState.PAUSED):
             self._task_history.append(task)
             if task.id in self._tasks:
                 del self._tasks[task.id]
+            self._record_progress(task, event="task_archived")
 
         if self._on_task_complete and task.state not in (TaskState.VERIFYING, TaskState.PAUSED):
             self._on_task_complete(task)
@@ -264,18 +277,171 @@ class ExecutionEngine:
         )
         task.plan = Plan(intent=task.intent, steps=[])
         task.context.inputs.update(task.intent.params)
-        task.advance_state(TaskState.PLANNED)
-        task.advance_state(TaskState.RUNNING)
+        self._advance_task_state(task, TaskState.PLANNED, event="task_planned")
+        self._advance_task_state(task, TaskState.RUNNING, event="task_running")
         task.result = ExecutionResult.success(
             data={"result": answer, "message": answer},
         )
-        task.advance_state(TaskState.COMPLETED)
+        self._advance_task_state(task, TaskState.COMPLETED, event="task_completed")
+
+    @staticmethod
+    def _is_unknown_plan(plan: Optional[Plan]) -> bool:
+        """Return True when planner output is effectively an unknown-intent fallback."""
+
+        if plan is None:
+            return True
+
+        intent_name = str(plan.intent.intent if plan.intent else "unknown").strip().lower()
+        if intent_name == "unknown":
+            return True
+
+        if len(plan.steps) != 1:
+            return False
+
+        step = plan.steps[0]
+        if step.type != StepType.TRANSFORM:
+            return False
+        if str(step.name or "").strip().lower() != "unknown":
+            return False
+
+        template = str(step.template or "").strip().lower()
+        return template.startswith("unknown intent:")
+
+    def _advance_task_state(
+        self,
+        task: Task,
+        new_state: TaskState,
+        *,
+        event: str,
+        step: Optional[Step] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Advance task state and persist a progress snapshot."""
+
+        task.advance_state(new_state)
+        self._record_progress(task, event=event, step=step, details=details)
+
+    def _record_progress(
+        self,
+        task: Task,
+        *,
+        event: str,
+        step: Optional[Step] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Append a persistent progress entry and refresh state snapshot."""
+
+        active_step = step or task.get_current_step()
+        step_counts = self._summarize_step_counts(task)
+
+        result_status: Optional[str] = None
+        result_message: Optional[str] = None
+        if isinstance(task.result, ExecutionResult):
+            result_status = task.result.status
+            result_message = task.result.message
+        elif isinstance(task.result, dict):
+            raw_status = task.result.get("status")
+            raw_message = task.result.get("message")
+            result_status = str(raw_status) if raw_status else None
+            result_message = str(raw_message) if raw_message else None
+        elif task.result:
+            result_message = str(task.result)
+
+        payload: Dict[str, Any] = {
+            "timestamp": datetime.now().isoformat(),
+            "event": event,
+            "task_id": task.id,
+            "state": task.state.value,
+            "channel": task.channel,
+            "user_id": task.user_id,
+            "message": str(task.message.content if task.message else ""),
+            "intent": task.intent.intent if task.intent else None,
+            "error": task.error,
+            "error_type": task.error_type.value if isinstance(task.error_type, ErrorType) else task.error_type,
+            "result_status": result_status,
+            "result_message": result_message,
+            "current_step_index": task.current_step_index,
+            "total_steps": len(task.plan.steps) if task.plan else 0,
+            "step_counts": step_counts,
+            "created_at": task.created_at.isoformat() if task.created_at else None,
+            "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        }
+        if active_step is not None:
+            payload["step"] = self._serialize_step_progress(active_step)
+        if details:
+            payload["details"] = details
+
+        try:
+            self._progress_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._progress_file, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+        except Exception as exc:
+            self._logger.error("Failed to write progress log entry: %s", exc)
+
+        self._persist_runtime_state()
+
+    @staticmethod
+    def _serialize_step_progress(step: Step) -> Dict[str, Any]:
+        """Build a compact serialized step snapshot for progress logging."""
+
+        return {
+            "id": step.id,
+            "name": step.name,
+            "type": step.type.value if hasattr(step.type, "value") else str(step.type),
+            "status": step.status.value if hasattr(step.status, "value") else str(step.status),
+            "retry_count": step.retry_count,
+            "tool_name": step.tool_name,
+            "skill_name": step.skill_name,
+            "agent_name": step.agent_name,
+            "error": step.error,
+            "started_at": step.started_at.isoformat() if step.started_at else None,
+            "completed_at": step.completed_at.isoformat() if step.completed_at else None,
+        }
+
+    def _summarize_step_counts(self, task: Task) -> Dict[str, int]:
+        """Return summary counts by step status for a task."""
+
+        counts = {
+            "pending": 0,
+            "running": 0,
+            "completed": 0,
+            "failed": 0,
+            "skipped": 0,
+        }
+        if task.plan is None:
+            return counts
+
+        for step in task.plan.steps:
+            key = step.status.value if hasattr(step.status, "value") else str(step.status)
+            if key in counts:
+                counts[key] += 1
+        return counts
+
+    def _build_state_snapshot(self) -> Dict[str, Any]:
+        """Build serializable runtime state payload."""
+
+        return {
+            "tasks": {task_id: task.model_dump() for task_id, task in self._tasks.items()},
+            "history": [task.model_dump() for task in list(self._task_history)[-100:]],
+        }
+
+    def _persist_runtime_state(self) -> None:
+        """Persist runtime state snapshot to disk."""
+
+        state = self._build_state_snapshot()
+        try:
+            self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._state_file, "w", encoding="utf-8") as handle:
+                json.dump(state, handle, default=str, indent=2)
+        except Exception as exc:
+            self._logger.error("Failed to save state: %s", exc)
     
     async def _execute_plan(self, task: Task, start_index: int = 0) -> None:
         """Execute all steps in a plan."""
         if not task.plan:
             task.result = ExecutionResult.from_error("No plan to execute")
-            task.advance_state(TaskState.FAILED)
+            self._advance_task_state(task, TaskState.FAILED, event="task_failed")
             return
         
         for step_index in range(start_index, len(task.plan.steps)):
@@ -289,7 +455,12 @@ class ExecutionEngine:
                     task.result = result
                     task.error = None
                     task.error_type = None
-                    task.advance_state(TaskState.VERIFYING)
+                    self._advance_task_state(
+                        task,
+                        TaskState.VERIFYING,
+                        event="task_waiting_approval",
+                        step=step,
+                    )
                     return
                 
                 if result.status == "error":
@@ -297,10 +468,17 @@ class ExecutionEngine:
                         task.result = result
                         task.error = result.message
                         task.error_type = result.error_type
-                        task.advance_state(TaskState.FAILED)
+                        self._advance_task_state(
+                            task,
+                            TaskState.FAILED,
+                            event="task_failed",
+                            step=step,
+                            details={"error_policy": "abort"},
+                        )
                         return
                     elif step.error_policy.on_failure == "skip":
                         step.status = StepStatus.SKIPPED
+                        self._record_progress(task, event="step_skipped", step=step)
                         continue
                 
                 task.context.set_step_output(step.id, result.data)
@@ -309,23 +487,31 @@ class ExecutionEngine:
                 self._logger.error(f"Step {step.id} failed: {e}")
                 step.status = StepStatus.FAILED
                 step.error = str(e)
+                self._record_progress(task, event="step_failed", step=step)
                 
                 if step.error_policy.on_failure == "abort":
                     task.result = ExecutionResult.from_error(str(e), ErrorType.SYSTEM_ERROR)
                     task.error = str(e)
-                    task.advance_state(TaskState.FAILED)
+                    self._advance_task_state(
+                        task,
+                        TaskState.FAILED,
+                        event="task_failed",
+                        step=step,
+                        details={"error_policy": "abort"},
+                    )
                     return
         
         task.result = ExecutionResult.success(
             message="Task completed successfully",
             data=self._collect_results(task),
         )
-        task.advance_state(TaskState.COMPLETED)
+        self._advance_task_state(task, TaskState.COMPLETED, event="task_completed")
     
     async def _execute_step(self, step: Step, task: Task) -> ExecutionResult:
         """Execute a single step with retry logic."""
         step.status = StepStatus.RUNNING
         step.started_at = datetime.now()
+        self._record_progress(task, event="step_running", step=step)
         
         if self._on_step_start:
             self._on_step_start(step, task)
@@ -335,12 +521,14 @@ class ExecutionEngine:
         if verification.decision == VerificationDecision.REJECT:
             step.status = StepStatus.FAILED
             step.error = verification.message
+            self._record_progress(task, event="step_failed", step=step)
             return ExecutionResult.from_error(verification.message, ErrorType.PERMISSION_ERROR)
         
         if verification.decision == VerificationDecision.ASK_HUMAN:
             if self._on_approval_required:
                 self._on_approval_required(step, task)
             step.status = StepStatus.PENDING
+            self._record_progress(task, event="step_waiting_approval", step=step)
             return ExecutionResult.from_error("Waiting for approval", ErrorType.PERMISSION_ERROR)
         
         result = await self._execute_step_with_retry(step, task)
@@ -352,6 +540,7 @@ class ExecutionEngine:
             if post_verification.decision == VerificationDecision.REJECT:
                 step.status = StepStatus.FAILED
                 step.error = post_verification.message
+                self._record_progress(task, event="step_failed", step=step)
                 return ExecutionResult.from_error(post_verification.message, ErrorType.VALIDATION_ERROR)
         
         if self._on_step_complete:
@@ -370,27 +559,48 @@ class ExecutionEngine:
                 
                 if result.status == "success":
                     step.status = StepStatus.COMPLETED
+                    self._record_progress(task, event="step_completed", step=step)
                     return result
                 
                 if result.error_type not in step.retry_policy.retry_on:
+                    step.status = StepStatus.FAILED
+                    step.error = result.message
+                    self._record_progress(task, event="step_failed", step=step)
                     return result
                 
                 if attempt < max_retries:
                     self._logger.info(f"Step {step.id} retry {attempt + 1}/{max_retries}")
                     step.retry_count = attempt + 1
+                    self._record_progress(
+                        task,
+                        event="step_retrying",
+                        step=step,
+                        details={"attempt": attempt + 1, "max_retries": max_retries},
+                    )
                     await asyncio.sleep(delay)
                     delay *= step.retry_policy.backoff
                 else:
+                    step.status = StepStatus.FAILED
+                    step.error = result.message
+                    self._record_progress(task, event="step_failed", step=step)
                     return result
                     
             except Exception as e:
                 self._logger.error(f"Step {step.id} exception on attempt {attempt}: {e}")
                 if attempt < max_retries:
+                    step.retry_count = attempt + 1
+                    self._record_progress(
+                        task,
+                        event="step_retrying",
+                        step=step,
+                        details={"attempt": attempt + 1, "max_retries": max_retries, "exception": str(e)},
+                    )
                     await asyncio.sleep(delay)
                     delay *= step.retry_policy.backoff
                 else:
                     step.status = StepStatus.FAILED
                     step.error = str(e)
+                    self._record_progress(task, event="step_failed", step=step)
                     return ExecutionResult.from_error(str(e), ErrorType.SYSTEM_ERROR)
         
         return ExecutionResult.from_error("Max retries exceeded", ErrorType.TOOL_ERROR)
@@ -596,6 +806,58 @@ class ExecutionEngine:
             return None
         return await self.resume_task(task_id)
 
+    def reject_and_fail_step(
+        self,
+        task_id: str,
+        step_id: str,
+        reason: str = "Step rejected in approval workflow",
+    ) -> Optional[Task]:
+        """Reject a pending step and fail the task immediately."""
+        task = self._tasks.get(task_id)
+        if task is None:
+            return None
+
+        step = task.get_current_step()
+        if step is None or step.id != step_id:
+            return None
+
+        if task.state not in (TaskState.VERIFYING, TaskState.PAUSED):
+            return task
+
+        step.status = StepStatus.FAILED
+        step.error = reason
+        step.error_type = ErrorType.PERMISSION_ERROR
+        step.completed_at = datetime.now()
+
+        task.result = ExecutionResult.from_error(
+            reason,
+            ErrorType.PERMISSION_ERROR,
+            data={
+                "rejected_step": step_id,
+                "task_id": task_id,
+                "reason": reason,
+            },
+        )
+        task.error = reason
+        task.error_type = ErrorType.PERMISSION_ERROR
+        self._record_progress(task, event="step_rejected", step=step, details={"reason": reason})
+        self._advance_task_state(
+            task,
+            TaskState.FAILED,
+            event="task_failed",
+            step=step,
+            details={"reason": reason},
+        )
+
+        self._task_history.append(task)
+        if task.id in self._tasks:
+            del self._tasks[task.id]
+        self._record_progress(task, event="task_archived")
+        if self._on_task_complete:
+            self._on_task_complete(task)
+
+        return task
+
     async def resume_task(self, task_id: str) -> Optional[Task]:
         """Resume a task that is waiting for approval."""
         task = self._tasks.get(task_id)
@@ -605,13 +867,14 @@ class ExecutionEngine:
         if task.state not in (TaskState.VERIFYING, TaskState.PAUSED):
             return task
 
-        task.advance_state(TaskState.RUNNING)
+        self._advance_task_state(task, TaskState.RUNNING, event="task_running")
         await self._execute_plan(task, start_index=task.current_step_index)
 
         if task.state not in (TaskState.VERIFYING, TaskState.PAUSED):
             self._task_history.append(task)
             if task.id in self._tasks:
                 del self._tasks[task.id]
+            self._record_progress(task, event="task_archived")
             if self._on_task_complete:
                 self._on_task_complete(task)
 
@@ -635,15 +898,7 @@ class ExecutionEngine:
     
     async def save_state(self) -> None:
         """Save current state to file."""
-        state = {
-            "tasks": {tid: t.model_dump() for tid, t in self._tasks.items()},
-            "history": [t.model_dump() for t in list(self._task_history)[-100:]],
-        }
-        
-        self._state_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(self._state_file, "w", encoding="utf-8") as f:
-            json.dump(state, f, default=str, indent=2)
+        self._persist_runtime_state()
     
     async def load_state(self) -> None:
         """Load state from file."""

@@ -85,6 +85,10 @@ class Settings(BaseSettings):
 
     memory_db: Path = Field(default=Path("./data/memory.db"), description="Path to memory database")
     audit_log: Path = Field(default=Path("./data/audit.jsonl"), description="Path to audit log file")
+    progress_log: Path = Field(
+        default=Path("./data/development_progress.jsonl"),
+        description="Path to persistent development progress/status log file",
+    )
 
     log_level: str = Field(default="INFO", description="Logging level")
 
@@ -227,6 +231,7 @@ class Settings(BaseSettings):
         self.managed_skills_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.audit_log.parent.mkdir(parents=True, exist_ok=True)
+        self.progress_log.parent.mkdir(parents=True, exist_ok=True)
         self.memory_db.parent.mkdir(parents=True, exist_ok=True)
 
     def get_skill_search_paths(self) -> list[Path]:

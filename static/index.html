@@ -909,6 +909,62 @@
             gap: 10px;
             margin-top: 10px;
         }
+        .log-controls {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        .log-controls input,
+        .log-controls select {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: var(--bg-input);
+            color: var(--text-primary);
+            font: inherit;
+        }
+        .log-list {
+            display: grid;
+            gap: 12px;
+        }
+        .log-item {
+            padding: 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.03);
+        }
+        .log-item-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+        .log-item-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .log-item p {
+            color: var(--text-secondary);
+            font-size: 13px;
+            line-height: 1.55;
+            margin-top: 6px;
+        }
+        .diagnostic-history-list {
+            display: grid;
+            gap: 10px;
+            margin-top: 12px;
+        }
+        .diagnostic-history-item {
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 14px;
+            padding: 12px;
+            background: rgba(255,255,255,0.03);
+        }
         @media (max-width: 900px) {
             .app-shell { grid-template-columns: 1fr; }
             .app-sidebar-shell {
@@ -925,6 +981,9 @@
             .page-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .workspace-layout,
             .channels-layout {
+                grid-template-columns: 1fr;
+            }
+            .log-controls {
                 grid-template-columns: 1fr;
             }
             .skills-guidance-grid,
@@ -1088,6 +1147,7 @@
                             <li><span>Recent Tasks</span><span x-text="tasks.length"></span></li>
                             <li><span>Pending Approvals</span><span x-text="approvals.length"></span></li>
                             <li><span>Enabled Channels</span><span x-text="enabledChannelCount()"></span></li>
+                            <li><span>Realtime Link</span><span x-text="wsConnected ? 'Connected' : 'Polling fallback'"></span></li>
                         </ul>
                     </div>
 
@@ -1191,6 +1251,12 @@
                                         @click="approveTaskStep(approval)"
                                         :disabled="approvingStepKey === approval.task_id + ':' + approval.step.id"
                                         x-text="approvingStepKey === approval.task_id + ':' + approval.step.id ? 'Approving...' : 'Approve & Resume'">
+                                    </button>
+                                    <button
+                                        class="danger-btn"
+                                        @click="rejectTaskStep(approval)"
+                                        :disabled="rejectingStepKey === approval.task_id + ':' + approval.step.id"
+                                        x-text="rejectingStepKey === approval.task_id + ':' + approval.step.id ? 'Rejecting...' : 'Reject & Fail'">
                                     </button>
                                     <span class="result-note">Routine commands can use <code>/cmd</code>; raw <code>/shell</code> stays gated here.</span>
                                 </div>
@@ -1398,6 +1464,19 @@
                                     <div class="skill-actions">
                                         <button class="secondary-btn" @click="copyText('/' + (skill.skill_key || skill.name))">Copy Invoke</button>
                                         <button
+                                            class="secondary-btn"
+                                            @click="setSkillState(skill, skillToggleTarget(skill))"
+                                            :disabled="skillStateLoadingKey === normalizeSkillId(skill)"
+                                            x-text="skillStateLoadingKey === normalizeSkillId(skill) ? 'Updating...' : skillToggleLabel(skill)">
+                                        </button>
+                                        <button
+                                            class="ghost-btn"
+                                            x-show="skill.removable"
+                                            @click="upgradeSkill(skill)"
+                                            :disabled="skillUpgradeLoadingKey === normalizeSkillId(skill)"
+                                            x-text="skillUpgradeLoadingKey === normalizeSkillId(skill) ? 'Upgrading...' : 'Reinstall Latest'">
+                                        </button>
+                                        <button
                                             class="danger-btn"
                                             x-show="skill.removable"
                                             @click="uninstallSkill(skill)"
@@ -1408,6 +1487,9 @@
 
                                     <template x-if="!skill.removable">
                                         <p class="skill-note">This skill comes from a configured directory or runtime registration and is not removable from the marketplace UI.</p>
+                                    </template>
+                                    <template x-if="marketplaceVersionHint(skill)">
+                                        <p class="skill-note" x-text="marketplaceVersionHint(skill)"></p>
                                     </template>
                                 </div>
                             </template>
@@ -1622,9 +1704,23 @@
                                     <ul class="channel-list">
                                         <template x-for="entry in channelCheckEntries(channel)" :key="entry.key">
                                             <li>
-                                                <span x-text="entry.label"></span>
+                                                <span>
+                                                    <span x-text="entry.label"></span>
+                                                    <template x-if="!entry.value && entry.fix">
+                                                        <div class="diagnostic-detail" x-text="entry.fix"></div>
+                                                    </template>
+                                                </span>
                                                 <span class="pill" :class="entry.value ? 'enabled' : 'disabled'" x-text="entry.value ? 'Present' : 'Missing'"></span>
                                             </li>
+                                        </template>
+                                    </ul>
+                                </div>
+
+                                <div class="channel-block channel-block-card">
+                                    <h4>Setup Guide</h4>
+                                    <ul class="note-list">
+                                        <template x-for="step in (channel.setup_steps || [])" :key="channel.key + '-setup-' + step">
+                                            <li x-text="step"></li>
                                         </template>
                                     </ul>
                                 </div>
@@ -1796,7 +1892,24 @@
                                         </div>
 
                                         <template x-if="channelTestResults[channel.key]">
-                                            <div class="code-block" x-text="formatJson(channelTestResults[channel.key])"></div>
+                                            <div class="weixin-login-status">
+                                                <div class="toolbar">
+                                                    <span class="pill" :class="channelTestResults[channel.key].mode === 'live' ? 'enabled' : 'warning'" x-text="channelTestResults[channel.key].mode === 'live' ? 'Live Test' : 'Dry Run'"></span>
+                                                    <span class="result-note" x-text="channelTestResults[channel.key].ok ? 'Request completed.' : 'Request needs attention.'"></span>
+                                                </div>
+                                                <p x-text="channelTestResults[channel.key].summary || 'No summary returned.'"></p>
+                                                <template x-if="(channelTestResults[channel.key].missing || []).length > 0">
+                                                    <div class="diagnostic-detail" x-text="'Missing: ' + (channelTestResults[channel.key].missing || []).join(', ')"></div>
+                                                </template>
+                                                <template x-if="(channelTestResults[channel.key].guidance || []).length > 0">
+                                                    <ul class="note-list">
+                                                        <template x-for="tip in channelTestResults[channel.key].guidance" :key="channel.key + '-tip-' + tip">
+                                                            <li x-text="tip"></li>
+                                                        </template>
+                                                    </ul>
+                                                </template>
+                                                <div class="code-block" x-text="formatJson(channelTestResults[channel.key])"></div>
+                                            </div>
                                         </template>
                                     </div>
                                 </div>
@@ -1813,6 +1926,88 @@
                         </div>
                     </template>
                 </section>
+            </div>
+        </div>
+
+        <div class="tab-content" x-show="activeTab === 'logs'">
+            <div class="section-header">
+                <div>
+                    <h2>Runtime Logs</h2>
+                    <p>Inspect recent task history with searchable filters for state, channel, and request text without leaving the main console.</p>
+                </div>
+                <div class="toolbar">
+                    <button class="ghost-btn" @click="loadLogs()">Refresh</button>
+                    <span class="hint" x-text="'Showing ' + logsEntries.length + ' entries'"></span>
+                </div>
+            </div>
+
+            <template x-if="logsLoadError">
+                <div class="notice" x-text="logsLoadError"></div>
+            </template>
+
+            <div class="workspace-card">
+                <div class="log-controls">
+                    <input type="text" x-model="logsQuery" placeholder="Search by task id, prompt, error, or channel">
+                    <select x-model="logsStateFilter">
+                        <option value="">All states</option>
+                        <option value="running">Running</option>
+                        <option value="verifying">Verifying</option>
+                        <option value="paused">Paused</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                    <select x-model="logsChannelFilter">
+                        <option value="">All channels</option>
+                        <option value="web">web</option>
+                        <option value="websocket">websocket</option>
+                        <option value="weixin">weixin</option>
+                        <option value="wechat_personal">wechat_personal</option>
+                        <option value="whatsapp">whatsapp</option>
+                    </select>
+                    <select x-model.number="logsLimit">
+                        <option :value="20">20 rows</option>
+                        <option :value="50">50 rows</option>
+                        <option :value="100">100 rows</option>
+                        <option :value="200">200 rows</option>
+                    </select>
+                </div>
+
+                <div class="toolbar">
+                    <button class="primary-btn" @click="loadLogs()" :disabled="logsLoading" x-text="logsLoading ? 'Loading...' : 'Apply Filters'"></button>
+                    <button class="secondary-btn" @click="clearLogFilters()" :disabled="logsLoading">Clear</button>
+                    <span class="result-note" x-text="logsLastLoadedAt ? ('Last refreshed ' + formatDateTime(logsLastLoadedAt)) : 'Not loaded yet'"></span>
+                </div>
+            </div>
+
+            <template x-if="logsLoading && logsEntries.length === 0">
+                <div class="empty-state">Loading logs...</div>
+            </template>
+
+            <template x-if="!logsLoading && logsEntries.length === 0">
+                <div class="empty-state">
+                    <span class="empty-state-title">No logs matched current filters.</span>
+                    <p class="empty-state-note">Try clearing filters or increasing the row limit.</p>
+                </div>
+            </template>
+
+            <div class="log-list" x-show="logsEntries.length > 0">
+                <template x-for="task in logsEntries" :key="'log-task-' + task.id">
+                    <div class="log-item">
+                        <div class="log-item-head">
+                            <div class="log-item-meta">
+                                <span class="pill" :class="taskStatePillClass(task.state)" x-text="taskStateLabel(task.state)"></span>
+                                <span class="pill mode" x-text="task.channel || 'unknown'"></span>
+                                <span class="pill" x-text="'Task ' + task.id"></span>
+                            </div>
+                            <span class="result-note" x-text="formatDateTime(task.completed_at || task.created_at)"></span>
+                        </div>
+                        <strong x-text="truncateText(task.message || 'Untitled request', 180)"></strong>
+                        <p x-text="taskActivitySummary(task)"></p>
+                        <template x-if="task.error">
+                            <div class="diagnostic-detail" x-text="'Error: ' + task.error"></div>
+                        </template>
+                    </div>
+                </template>
             </div>
         </div>
 
@@ -1965,20 +2160,24 @@
                                 <span class="pill disabled" x-text="tools.filter(tool => ['high', 'critical'].includes(String(tool.risk_level || '').toLowerCase())).length + ' high+'"></span>
                             </div>
                         </div>
+                        <div class="toolbar" style="margin-bottom: 10px;">
+                            <button class="ghost-btn" @click="toggleToolInventoryScope()" x-text="showAllTools ? 'Show Top 12' : 'Show All Tools'"></button>
+                            <span class="result-note" x-text="showAllTools ? (tools.length + ' tools shown') : ('Top ' + Math.min(12, tools.length) + ' tools shown')"></span>
+                        </div>
 
                         <template x-if="toolsLoadError">
                             <div class="notice" x-text="toolsLoadError"></div>
                         </template>
 
-                        <template x-if="displayTools(12).length === 0 && !toolsLoadError">
+                        <template x-if="displayTools(toolDisplayLimit()).length === 0 && !toolsLoadError">
                             <div class="empty-state">
                                 <span class="empty-state-title">No tools loaded.</span>
                                 <p class="empty-state-note">The tool registry did not return any entries yet.</p>
                             </div>
                         </template>
 
-                        <div class="tool-inventory-grid" x-show="displayTools(12).length > 0">
-                            <template x-for="tool in displayTools(12)" :key="tool.name">
+                        <div class="tool-inventory-grid" x-show="displayTools(toolDisplayLimit()).length > 0">
+                            <template x-for="tool in displayTools(toolDisplayLimit())" :key="tool.name">
                                 <div class="tool-card">
                                     <h4 x-text="tool.name"></h4>
                                     <p x-text="tool.description || 'No description provided.'"></p>
@@ -1986,6 +2185,35 @@
                                         <span class="pill" :class="toolRiskPillClass(tool.risk_level)" x-text="String(tool.risk_level || 'low').toUpperCase()"></span>
                                         <span class="result-note" x-text="Object.keys(tool.inputs || {}).length + ' inputs / ' + Object.keys(tool.outputs || {}).length + ' outputs'"></span>
                                     </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+
+                    <div class="workspace-card">
+                        <div class="skills-panel-header">
+                            <div>
+                                <h3>Diagnostic History</h3>
+                                <p>Keep a short timeline of recent diagnostics so you can compare health changes across runs.</p>
+                            </div>
+                            <div class="skill-subtle" x-text="runtimeDiagnosticsHistory.length + ' runs'"></div>
+                        </div>
+                        <template x-if="runtimeDiagnosticsHistory.length === 0">
+                            <div class="empty-state">
+                                <span class="empty-state-title">No diagnostic history yet.</span>
+                                <p class="empty-state-note">Run diagnostics from this page and each run will be recorded here.</p>
+                            </div>
+                        </template>
+                        <div class="diagnostic-history-list" x-show="runtimeDiagnosticsHistory.length > 0">
+                            <template x-for="run in runtimeDiagnosticsHistory" :key="'diag-run-' + run.id">
+                                <div class="diagnostic-history-item">
+                                    <div class="toolbar">
+                                        <span class="pill enabled" x-text="'Pass ' + run.pass"></span>
+                                        <span class="pill warning" x-text="'Warn ' + run.warn"></span>
+                                        <span class="pill disabled" x-text="'Fail ' + run.fail"></span>
+                                    </div>
+                                    <div class="diagnostic-detail" x-text="'Total checks: ' + run.total"></div>
+                                    <div class="diagnostic-detail" x-text="'Recorded: ' + formatDateTime(run.at)"></div>
                                 </div>
                             </template>
                         </div>
@@ -2141,18 +2369,28 @@
                 skillsLoading: false,
                 installedSkillQuery: '',
                 availableSkills: [],
+                availableSkillsCatalog: [],
                 availableSkillsLoading: false,
                 availableSkillsLoadError: '',
                 availableSkillsRemoteError: '',
                 availableSkillsEmptyMessage: '',
                 skillSearchQuery: '',
                 skillSourceFilter: 'all',
+                logsEntries: [],
+                logsLoading: false,
+                logsLoadError: '',
+                logsQuery: '',
+                logsStateFilter: '',
+                logsChannelFilter: '',
+                logsLimit: 50,
+                logsLastLoadedAt: '',
                 tasks: [],
                 chatTaskIds: {},
                 approvals: [],
                 config: {},
                 channels: [],
                 tools: [],
+                showAllTools: false,
                 toolsLoadError: '',
                 serviceStatus: null,
                 serviceLoadError: '',
@@ -2160,18 +2398,28 @@
                 serviceActionMessage: '',
                 serviceActionError: false,
                 runtimeDiagnostics: [],
+                runtimeDiagnosticsHistory: [],
                 diagnosticsLoading: false,
                 diagnosticsLastRunAt: '',
                 approvalLoadError: '',
                 channelLoadError: '',
                 copyStatus: '',
                 approvingStepKey: '',
+                rejectingStepKey: '',
                 installing: '',
+                skillStateLoadingKey: '',
+                skillUpgradeLoadingKey: '',
                 uninstallingSkill: '',
                 reviewLoading: '',
                 installReviewOpen: false,
                 installReview: null,
                 installReviewError: '',
+                wsConnected: false,
+                wsStatusText: '',
+                wsClient: null,
+                wsReconnectTimer: null,
+                wsReconnectAttempts: 0,
+                wsLastEventAt: '',
                 channelTests: {
                     weixin: {
                         recipient: '',
@@ -2213,21 +2461,32 @@
                     await this.loadConfig();
                     await this.refreshSkillCatalog();
                     await this.loadTasks({ syncChatHistory: true });
+                    await this.loadLogs();
                     await this.loadApprovals();
                     await this.loadChannels();
                     await this.loadTools();
                     await this.loadServiceStatus();
+                    this.connectWebSocket();
+
+                    window.addEventListener('beforeunload', () => {
+                        this.disconnectWebSocket();
+                    });
                     
                     setInterval(() => {
                         if (this.activeTab === 'skills') {
                             this.refreshSkillCatalog({ showLoading: false });
                         }
-                        if (!this.loading) {
+                        if (!this.loading && !this.wsConnected) {
                             this.loadTasks({ syncChatHistory: true });
                         }
-                        this.loadApprovals();
+                        if (!this.wsConnected) {
+                            this.loadApprovals();
+                        }
                         this.loadChannels();
                         this.loadServiceStatus();
+                        if (this.activeTab === 'logs') {
+                            this.loadLogs({ showLoading: false });
+                        }
                         if (this.activeTab === 'settings') {
                             this.loadTools();
                         }
@@ -2240,6 +2499,7 @@
                         { id: 'approvals', label: 'Approvals', short: 'AP' },
                         { id: 'skills', label: 'Skills', short: 'SK' },
                         { id: 'channels', label: 'Channels', short: 'CN' },
+                        { id: 'logs', label: 'Logs', short: 'LG' },
                         { id: 'settings', label: 'Settings', short: 'ST' }
                     ];
                 },
@@ -2270,6 +2530,12 @@
                             description: 'Configure inbound webhooks, outbound reply paths, and visual login flows from one clearer message-channel console.',
                             hint: 'Select a channel on the left to focus on setup, testing, and connection state.'
                         },
+                        logs: {
+                            eyebrow: 'Operations',
+                            title: 'Runtime Logs',
+                            description: 'Search and inspect recent task activity by state, channel, and prompt text from one dedicated log surface.',
+                            hint: 'Use filters and row limits to quickly isolate failed or verifying tasks.'
+                        },
                         settings: {
                             eyebrow: 'Operations',
                             title: 'System Settings',
@@ -2291,6 +2557,9 @@
                     if (this.activeTab === 'channels') {
                         return this.loadChannels();
                     }
+                    if (this.activeTab === 'logs') {
+                        return this.loadLogs();
+                    }
                     if (this.activeTab === 'settings') {
                         return Promise.all([
                             this.loadServiceStatus(),
@@ -2309,6 +2578,7 @@
                         approvals: 'Refresh Approvals',
                         skills: 'Refresh Skills',
                         channels: 'Refresh Channels',
+                        logs: 'Refresh Logs',
                         settings: 'Refresh Ops Console'
                     };
                     return labels[this.activeTab] || 'Refresh';
@@ -2342,6 +2612,17 @@
                             { label: 'Channels', value: String(this.channels.length), note: 'Available channel types in the web console.' },
                             { label: 'Stored Login', value: String(this.channelsWithStoredLoginCount()), note: 'Channels with persistent login state, including Weixin QR login.' },
                             { label: 'Tests Run', value: String(Object.keys(this.channelTestResults || {}).length), note: 'Connectivity test results captured in this session.' }
+                        ];
+                    }
+
+                    if (this.activeTab === 'logs') {
+                        const failed = this.logsEntries.filter(task => String(task.state || '').toLowerCase() === 'failed').length;
+                        const verifying = this.logsEntries.filter(task => String(task.state || '').toLowerCase() === 'verifying').length;
+                        return [
+                            { label: 'Rows', value: String(this.logsEntries.length), note: 'Log rows currently loaded with the active filter set.' },
+                            { label: 'Failed', value: String(failed), note: 'Failed tasks in the current result set.' },
+                            { label: 'Verifying', value: String(verifying), note: 'Tasks waiting for approval in the current result set.' },
+                            { label: 'Realtime', value: this.wsConnected ? 'Connected' : 'Polling', note: this.wsConnected ? 'WebSocket push is active.' : 'Fallback polling is active.' }
                         ];
                     }
 
@@ -2380,6 +2661,133 @@
                         return 'Installed but not running';
                     }
                     return 'Background service not installed';
+                },
+
+                toolDisplayLimit() {
+                    return this.showAllTools ? Math.max(this.tools.length, 1) : 12;
+                },
+
+                toggleToolInventoryScope() {
+                    this.showAllTools = !this.showAllTools;
+                },
+
+                clearLogFilters() {
+                    this.logsQuery = '';
+                    this.logsStateFilter = '';
+                    this.logsChannelFilter = '';
+                    this.logsLimit = 50;
+                    this.loadLogs();
+                },
+
+                websocketUrl() {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    return protocol + '//' + window.location.host + '/ws';
+                },
+
+                connectWebSocket() {
+                    if (this.wsClient) {
+                        return;
+                    }
+
+                    try {
+                        const socket = new WebSocket(this.websocketUrl());
+                        this.wsClient = socket;
+                        this.wsStatusText = 'Connecting...';
+
+                        socket.onopen = () => {
+                            this.wsConnected = true;
+                            this.wsReconnectAttempts = 0;
+                            this.wsStatusText = 'Realtime connected';
+                        };
+
+                        socket.onmessage = (event) => {
+                            this.wsLastEventAt = new Date().toISOString();
+                            let payload = null;
+                            try {
+                                payload = JSON.parse(event.data);
+                            } catch (e) {
+                                return;
+                            }
+                            this.handleRealtimeEvent(payload);
+                        };
+
+                        socket.onerror = () => {
+                            this.wsStatusText = 'Realtime unavailable, fallback polling enabled';
+                        };
+
+                        socket.onclose = () => {
+                            this.wsConnected = false;
+                            this.wsClient = null;
+                            this.scheduleWebSocketReconnect();
+                        };
+                    } catch (e) {
+                        this.wsConnected = false;
+                        this.wsClient = null;
+                        this.wsStatusText = 'Realtime unavailable, fallback polling enabled';
+                        this.scheduleWebSocketReconnect();
+                    }
+                },
+
+                disconnectWebSocket() {
+                    if (this.wsReconnectTimer) {
+                        clearTimeout(this.wsReconnectTimer);
+                        this.wsReconnectTimer = null;
+                    }
+                    if (this.wsClient) {
+                        try {
+                            this.wsClient.close();
+                        } catch (e) {
+                            // Ignore close errors on unload.
+                        }
+                    }
+                    this.wsClient = null;
+                    this.wsConnected = false;
+                },
+
+                scheduleWebSocketReconnect() {
+                    if (this.wsReconnectTimer) {
+                        return;
+                    }
+                    const delay = Math.min(10000, 1200 + (this.wsReconnectAttempts * 900));
+                    this.wsReconnectAttempts += 1;
+                    this.wsReconnectTimer = setTimeout(() => {
+                        this.wsReconnectTimer = null;
+                        this.connectWebSocket();
+                    }, delay);
+                },
+
+                async handleRealtimeEvent(payload) {
+                    if (!payload || typeof payload !== 'object') {
+                        return;
+                    }
+
+                    const eventType = String(payload.type || '').toLowerCase();
+                    if (!eventType) {
+                        return;
+                    }
+
+                    if (eventType === 'approval_required') {
+                        await this.loadApprovals();
+                        await this.loadTasks({ syncChatHistory: true });
+                        if (this.activeTab === 'logs') {
+                            await this.loadLogs({ showLoading: false });
+                        }
+                        return;
+                    }
+
+                    if (eventType === 'task_complete') {
+                        await this.loadTasks({ syncChatHistory: true });
+                        if (this.activeTab === 'logs') {
+                            await this.loadLogs({ showLoading: false });
+                        }
+                        return;
+                    }
+
+                    if (eventType === 'step_start' || eventType === 'step_complete') {
+                        if (this.activeTab === 'logs') {
+                            await this.loadLogs({ showLoading: false });
+                        }
+                    }
                 },
 
                 nextMessageId() {
@@ -2814,6 +3222,9 @@
                 },
 
                 channelMissingCheckCount(channel) {
+                    if (channel && Array.isArray(channel.missing_checks)) {
+                        return channel.missing_checks.length;
+                    }
                     return Object.values((channel && channel.checks) || {}).filter(value => !value).length;
                 },
 
@@ -3039,6 +3450,39 @@
                         }
                     }
                     return '';
+                },
+
+                skillToggleTarget(skill) {
+                    const state = String(skill && skill.state || '').toLowerCase();
+                    return (state === 'enabled' || state === 'running') ? 'disabled' : 'enabled';
+                },
+
+                skillToggleLabel(skill) {
+                    const target = this.skillToggleTarget(skill);
+                    return target === 'enabled' ? 'Enable' : 'Disable';
+                },
+
+                findMarketplaceSkill(skill) {
+                    const skillId = this.normalizeSkillId(skill);
+                    if (!skillId) {
+                        return null;
+                    }
+                    return this.availableSkillsCatalog.find(item => {
+                        return this.normalizeSkillId(item) === skillId;
+                    }) || null;
+                },
+
+                marketplaceVersionHint(skill) {
+                    const candidate = this.findMarketplaceSkill(skill);
+                    if (!candidate || !candidate.version) {
+                        return '';
+                    }
+                    const current = String(skill.version || '').trim();
+                    const latest = String(candidate.version || '').trim();
+                    if (!latest || !current || latest === current) {
+                        return '';
+                    }
+                    return 'Marketplace version detected: v' + latest + ' (current v' + current + ').';
                 },
 
                 sortInstalledSkills(skills) {
@@ -3518,11 +3962,16 @@
                 },
 
                 channelCheckEntries(channel) {
-                    return Object.entries(channel.checks || {}).map(([key, value]) => ({
-                        key,
-                        value,
-                        label: key.replace(/^has_/, '').split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ')
-                    }));
+                    const catalog = channel && channel.check_catalog ? channel.check_catalog : {};
+                    return Object.entries(channel.checks || {}).map(([key, value]) => {
+                        const meta = catalog[key] || {};
+                        return {
+                            key,
+                            value,
+                            label: meta.label || key.replace(/^has_/, '').split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' '),
+                            fix: meta.fix || ''
+                        };
+                    });
                 },
 
                 buildChannelRequestExample(channel) {
@@ -3851,6 +4300,17 @@
 
                         this.runtimeDiagnostics = results;
                         this.diagnosticsLastRunAt = new Date().toISOString();
+                        this.runtimeDiagnosticsHistory = [
+                            {
+                                id: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7),
+                                at: this.diagnosticsLastRunAt,
+                                total: results.length,
+                                pass: results.filter(item => item.status === 'pass').length,
+                                warn: results.filter(item => item.status === 'warn').length,
+                                fail: results.filter(item => item.status === 'fail').length
+                            },
+                            ...this.runtimeDiagnosticsHistory
+                        ].slice(0, 12);
                     } finally {
                         this.diagnosticsLoading = false;
                     }
@@ -3917,10 +4377,47 @@
                         }
                     }
                 },
-                
+
+                async loadLogs(options = {}) {
+                    const showLoading = options.showLoading !== false;
+                    if (showLoading) {
+                        this.logsLoading = true;
+                    }
+
+                    try {
+                        const params = {
+                            limit: Number(this.logsLimit) > 0 ? Number(this.logsLimit) : 50
+                        };
+                        if (this.logsStateFilter) {
+                            params.state = this.logsStateFilter;
+                        }
+                        if (this.logsChannelFilter) {
+                            params.channel = this.logsChannelFilter;
+                        }
+                        if (this.logsQuery && this.logsQuery.trim()) {
+                            params.query = this.logsQuery.trim();
+                        }
+
+                        const response = await axios.get('/api/tasks', { params });
+                        this.logsEntries = Array.isArray(response.data) ? response.data : [];
+                        this.logsLastLoadedAt = new Date().toISOString();
+                        this.logsLoadError = '';
+                    } catch (e) {
+                        this.logsLoadError = 'Failed to load logs: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message);
+                    } finally {
+                        if (showLoading) {
+                            this.logsLoading = false;
+                        }
+                    }
+                },
+
                 async loadTasks(options = {}) {
                     try {
-                        const response = await axios.get('/api/tasks');
+                        const params = {};
+                        if (options.limit) {
+                            params.limit = options.limit;
+                        }
+                        const response = await axios.get('/api/tasks', { params });
                         this.tasks = Array.isArray(response.data) ? response.data : [];
                         if (options.syncChatHistory) {
                             this.syncChatHistoryFromTasks(this.tasks);
@@ -3939,6 +4436,7 @@
                         const task = response.data;
                         await this.loadApprovals();
                         await this.loadTasks({ syncChatHistory: true });
+                        await this.loadLogs({ showLoading: false });
 
                         this.messages.push(
                             this.createChatMessage(
@@ -3951,6 +4449,37 @@
                         alert('Approval failed: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message));
                     } finally {
                         this.approvingStepKey = '';
+                    }
+                },
+
+                async rejectTaskStep(approval) {
+                    const stepKey = approval.task_id + ':' + approval.step.id;
+                    if (!window.confirm('Reject this step and fail task ' + approval.task_id + '?')) {
+                        return;
+                    }
+
+                    this.rejectingStepKey = stepKey;
+                    try {
+                        const response = await axios.post(
+                            '/api/tasks/' + approval.task_id + '/reject/' + approval.step.id,
+                            { reason: 'Rejected by operator in Approval Center.' }
+                        );
+                        const task = response.data;
+                        await this.loadApprovals();
+                        await this.loadTasks({ syncChatHistory: true });
+                        await this.loadLogs({ showLoading: false });
+
+                        this.messages.push(
+                            this.createChatMessage(
+                                'error',
+                                'Rejected ' + (approval.step.command_preview || approval.step.tool_name || approval.step.id) + '. Task ' + task.id + ' is now ' + task.state + '.',
+                                { title: 'Approval Rejected' }
+                            )
+                        );
+                    } catch (e) {
+                        alert('Reject failed: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message));
+                    } finally {
+                        this.rejectingStepKey = '';
                     }
                 },
 
@@ -3986,6 +4515,7 @@
                         const payload = response.data || {};
                         const skills = Array.isArray(payload.skills) ? payload.skills : [];
 
+                        this.availableSkillsCatalog = this.sortAvailableSkills(skills);
                         this.availableSkills = this.sortAvailableSkills(skills.filter(skill => !this.isSkillInstalled(skill)));
                         this.availableSkillsLoadError = payload.error || '';
                         this.availableSkillsRemoteError = payload.remote_error || '';
@@ -4018,6 +4548,55 @@
                             .filter(Boolean)
                             .some(candidate => this.normalizeSkillId(candidate) === normalizedId);
                     });
+                },
+
+                async setSkillState(skill, targetState) {
+                    const normalizedId = this.normalizeSkillId(skill);
+                    if (!normalizedId || !targetState) {
+                        return;
+                    }
+
+                    this.skillStateLoadingKey = normalizedId;
+                    try {
+                        await axios.post('/api/skills/' + encodeURIComponent(skill.skill_key || skill.name) + '/state', {
+                            state: targetState
+                        });
+                        await this.loadSkills({ showLoading: false });
+                    } catch (e) {
+                        alert('Failed to update skill state: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message));
+                    } finally {
+                        this.skillStateLoadingKey = '';
+                    }
+                },
+
+                async upgradeSkill(skill) {
+                    const normalizedId = this.normalizeSkillId(skill);
+                    if (!normalizedId) {
+                        return;
+                    }
+                    if (!skill.removable) {
+                        alert('This skill is not managed by marketplace and cannot be upgraded here.');
+                        return;
+                    }
+                    if (!window.confirm('Reinstall latest marketplace package for "' + (skill.name || skill.skill_key) + '"?')) {
+                        return;
+                    }
+
+                    this.skillUpgradeLoadingKey = normalizedId;
+                    try {
+                        const response = await axios.post('/api/skills/' + encodeURIComponent(skill.skill_key || skill.name) + '/upgrade');
+                        const payload = response.data || {};
+                        if (payload.upgraded) {
+                            await this.refreshSkillCatalog({ showLoading: false });
+                            alert(payload.message || 'Skill upgraded.');
+                        } else {
+                            alert('Skill upgrade failed: ' + (payload.error || payload.message || 'Unknown error'));
+                        }
+                    } catch (e) {
+                        alert('Skill upgrade failed: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message));
+                    } finally {
+                        this.skillUpgradeLoadingKey = '';
+                    }
                 },
 
                 async openInstallReview(skill) {
@@ -4089,6 +4668,7 @@
                         this.scrollChatToBottom();
 
                         await this.loadTasks({ syncChatHistory: true });
+                        await this.loadLogs({ showLoading: false });
                     } catch (e) {
                         this.messages.push(
                             this.createChatMessage(
