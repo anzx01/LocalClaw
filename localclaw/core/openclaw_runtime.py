@@ -183,6 +183,10 @@ First decide whether you can answer the user directly.
 - For "/cmd <command>", choose tool "safe_shell" with params.command.
 - For "/shell <command>", choose tool "shell" with params.command.
 - For "/<skill> ...", choose that skill directly.
+- For weather questions like "今天热吗？", "明天北京天气怎么样", "上海气温", do not answer from memory.
+  Prefer a weather-related installed skill (for example skill.weather / skill.weather.forecast).
+  If no weather skill is available, choose intent "check_weather" with best-effort params:
+  day_offset: 0 for 今天, 1 for 明天, 2 for 后天; day_label matches that day.
 - For requests like "看看我桌面有哪些文件夹", choose intent "list_folders" with params.path="~/Desktop" and params.folders_only=true.
 - For requests like "列出桌面文件" or "查看 Desktop", choose tool "file_list" or intent "file_list" with params.path="~/Desktop".
 - For requests like "我D盘有哪些目录" or "查看 D 盘文件夹", choose intent "list_folders" with params.path="D:/" and params.folders_only=true.
@@ -219,6 +223,8 @@ Choose one mode for the LocalClaw user request:
 
 Never answer weather, news, latest/current web information, filesystem, network, or shell requests from memory.
 Use listed skill names and tool names exactly.
+Weather requests like "今天热吗" or "明天北京天气" should resolve to a weather skill when available,
+otherwise intent "check_weather" (with day_offset/day_label).
 Desktop folder requests like "看看我桌面有哪些文件夹" should resolve to intent "list_folders" with path "~/Desktop".
 Desktop file listing requests like "列出桌面文件" should resolve to tool or intent "file_list" with path "~/Desktop".
 Drive folder requests like "我D盘有哪些目录" should resolve to intent "list_folders" with path "D:/".

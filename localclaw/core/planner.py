@@ -89,7 +89,8 @@ Rules:
 - "/shell <command>" -> {{"intent":"run_shell_command","params":{{"command":"<command>"}}}}
 - Chinese help/capability questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" -> {{"intent":"help","params":{{}}}}
 - Greetings like "hello", "hi", "你好" -> greeting
-- Weather questions -> check_weather
+- Weather questions like "今天热吗", "明天北京天气", "上海气温" should prefer a weather-related installed skill.
+  If no weather skill is available, use check_weather with day_offset/day_label when possible.
 - Requests like "我C盘空间还剩多少" or "D盘还有多少可用空间" -> {{"intent":"check_disk_space","params":{{"path":"C:/"}}}}
 - Requests like "看看我桌面有哪些文件夹" -> {{"intent":"list_folders","params":{{"path":"~/Desktop","folders_only":true}}}}
 - Requests like "列出桌面文件" or "查看 Desktop" -> {{"intent":"file_list","params":{{"path":"~/Desktop"}}}}
@@ -111,7 +112,7 @@ User: {user_request}
         return f"""Return JSON only.
 Chinese help/capability questions like "你会干啥？", "你能做什么", "有什么功能", "你可以帮我做什么" -> {{"intent":"help","params":{{}}}}.
 Greetings like "hello" or "你好" -> greeting.
-Weather questions -> check_weather.
+Weather questions like "今天热吗", "明天北京天气" should resolve to a weather-related installed skill if available, otherwise check_weather.
 Disk-space questions like "我C盘空间还剩多少" -> {{"intent":"check_disk_space","params":{{"path":"C:/"}}}}.
 Desktop folder requests like "看看我桌面有哪些文件夹" -> {{"intent":"list_folders","params":{{"path":"~/Desktop","folders_only":true}}}}.
 Desktop file listing requests like "列出桌面文件" -> {{"intent":"file_list","params":{{"path":"~/Desktop"}}}}.
