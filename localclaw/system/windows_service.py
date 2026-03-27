@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import locale
 import os
 import re
 import subprocess
@@ -32,16 +33,40 @@ def _is_admin() -> bool:
 def _run_sc(arguments: list[str], timeout: float = 8.0) -> Tuple[int, str]:
     """Execute sc.exe and return (returncode, merged output)."""
 
+    def _decode_stream(payload: bytes) -> str:
+        if not payload:
+            return ""
+
+        candidates = []
+        preferred = locale.getpreferredencoding(False)
+        if preferred:
+            candidates.append(preferred)
+        # `mbcs` follows the active Windows ANSI code page.
+        candidates.extend(["mbcs", "utf-8", "cp936", "gbk"])
+
+        used = set()
+        for encoding_name in candidates:
+            lowered = encoding_name.lower()
+            if lowered in used:
+                continue
+            used.add(lowered)
+            try:
+                return payload.decode(encoding_name)
+            except Exception:
+                continue
+
+        return payload.decode("utf-8", errors="replace")
+
     completed = subprocess.run(
         ["sc.exe", *arguments],
         capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+        text=False,
         timeout=timeout,
         check=False,
     )
-    merged_output = "\n".join(part.strip() for part in [completed.stdout, completed.stderr] if part).strip()
+    stdout = _decode_stream(completed.stdout).strip()
+    stderr = _decode_stream(completed.stderr).strip()
+    merged_output = "\n".join(part for part in [stdout, stderr] if part).strip()
     return completed.returncode, merged_output
 
 
@@ -171,7 +196,7 @@ def install_background_service(service_name: str = DEFAULT_SERVICE_NAME) -> Dict
         )
 
     if status["installed"]:
-        config_rc, config_output = _run_sc(["config", service_name, "start= auto"])
+        config_rc, config_output = _run_sc(["config", service_name, "start=", "auto"])
         if config_rc != 0:
             return _build_action_result(
                 "install",
@@ -193,9 +218,12 @@ def install_background_service(service_name: str = DEFAULT_SERVICE_NAME) -> Dict
         [
             "create",
             service_name,
-            f"binPath= {command}",
-            "start= auto",
-            f'DisplayName= "{DEFAULT_DISPLAY_NAME}"',
+            "binPath=",
+            command,
+            "start=",
+            "auto",
+            "DisplayName=",
+            DEFAULT_DISPLAY_NAME,
         ]
     )
     if create_rc != 0:

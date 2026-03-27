@@ -124,5 +124,11 @@ def test_install_creates_service_when_missing(monkeypatch):
 
     assert result["ok"] is True
     assert result["changed"] is True
-    assert any(call and call[0] == "create" for call in calls)
+    create_call = next(call for call in calls if call and call[0] == "create")
+    assert create_call[1] == "LocalClaw"
+    assert create_call[2] == "binPath="
+    assert create_call[4] == "start="
+    assert create_call[5] == "auto"
+    assert create_call[6] == "DisplayName="
+    assert create_call[7] == windows_service.DEFAULT_DISPLAY_NAME
 
