@@ -347,7 +347,6 @@ def config() -> None:
     click.echo(f"  Data Directory: {settings.data_dir}")
     click.echo(f"  Memory Database: {settings.memory_db}")
     click.echo(f"  Audit Log: {settings.audit_log}")
-    click.echo(f"  Progress Log: {settings.progress_log}")
     click.echo(f"  Log Level: {settings.log_level}")
     click.echo(f"  Server: {settings.server_host}:{settings.server_port}")
 

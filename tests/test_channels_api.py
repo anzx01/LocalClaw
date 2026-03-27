@@ -46,16 +46,12 @@ def test_channels_overview_endpoint(monkeypatch):
     assert wechat_channel["enabled"] is True
     assert wechat_channel["webhook_path"] == "/api/channels/wechat-personal/webhook"
     assert wechat_channel["checks"]["has_inbound_token"] is True
-    assert wechat_channel["readiness"]["total"] >= 1
-    assert isinstance(wechat_channel["diagnostics"], list)
-    assert isinstance(wechat_channel["setup_steps"], list)
 
     assert weixin_channel["enabled"] is True
     assert weixin_channel["reply_mode"] == "weixin_api"
     assert weixin_channel["webhook_path"] == "/weixin/messages"
     assert weixin_channel["login_path"] == "/api/channels/weixin/login/start"
     assert weixin_channel["checks"]["has_webhook_token"] is True
-    assert "has_webhook_token" in weixin_channel["check_catalog"]
 
     assert whatsapp_channel["enabled"] is True
     assert whatsapp_channel["reply_mode"] == "cloud_api"
@@ -80,7 +76,6 @@ def test_static_ui_contains_channels_tab(monkeypatch):
     assert "Channels" in response.text
     assert "Approvals" in response.text
     assert "Settings" in response.text
-    assert "Runtime Logs" in response.text
     assert "Channel Configuration" in response.text
     assert "Scan to Login" in response.text
     assert "/api/channels" in response.text
@@ -187,94 +182,6 @@ def test_approve_endpoint_returns_enriched_task_payload(monkeypatch):
     assert data["message"] == "/shell dir"
     assert data["channel"] == "web"
     assert data["result"]["step-shell"]["stdout"] == "ok"
-
-
-def test_reject_endpoint_returns_failed_task_payload(monkeypatch):
-    """Rejecting from the UI should fail the task with a structured payload."""
-
-    from localclaw.channels import web as web_channel
-
-    failed_step = Step(
-        id="step-shell",
-        type=StepType.TOOL_CALL,
-        status=StepStatus.FAILED,
-        name="Run raw shell",
-        tool_name="shell",
-        input={"command": "dir"},
-        error="Rejected in Approval Center",
-    )
-    task = Task(
-        id="task-reject",
-        state=TaskState.FAILED,
-        message=Message(content="/shell dir", user_id="web-user", channel="web"),
-        plan=Plan(steps=[failed_step]),
-        current_step_index=0,
-        user_id="web-user",
-        channel="web",
-    )
-    task.error = "Rejected in Approval Center"
-    task.result = {"rejected_step": "step-shell"}
-
-    class FakeEngine:
-        def reject_and_fail_step(self, task_id, step_id, reason):
-            assert task_id == "task-reject"
-            assert step_id == "step-shell"
-            assert "Rejected" in reason
-            return task
-
-    settings = Settings()
-    monkeypatch.setattr(web_channel, "get_settings", lambda: settings)
-    monkeypatch.setattr(web_channel, "get_engine", lambda: FakeEngine())
-    monkeypatch.setattr(web_channel, "initialize_system", lambda: None)
-
-    app = web_channel.create_app()
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/tasks/task-reject/reject/step-shell",
-            json={"reason": "Rejected in Approval Center"},
-        )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["id"] == "task-reject"
-    assert data["state"] == "failed"
-    assert data["error"] == "Rejected in Approval Center"
-
-
-def test_skill_state_endpoint(monkeypatch):
-    """The UI should be able to enable/disable a skill at runtime."""
-
-    from localclaw.channels import web as web_channel
-    from localclaw.skills import registry as skill_registry_module
-
-    registry = SkillRegistry()
-    sample_skill = create_skill_from_dict(
-        {
-            "name": "toggle-demo",
-            "version": "1.0.0",
-            "description": "Toggle state demo",
-            "type": "workflow",
-            "metadata": {"skill_key": "toggle-demo"},
-        }
-    )
-    registry.register(sample_skill, enable=True)
-
-    monkeypatch.setattr(web_channel, "get_settings", lambda: Settings())
-    monkeypatch.setattr(skill_registry_module, "get_skill_registry", lambda: registry)
-    monkeypatch.setattr(web_channel, "initialize_system", lambda: None)
-
-    app = web_channel.create_app()
-    with TestClient(app) as client:
-        disable_response = client.post("/api/skills/toggle-demo/state", json={"state": "disabled"})
-        enable_response = client.post("/api/skills/toggle-demo/state", json={"state": "enabled"})
-
-    assert disable_response.status_code == 200
-    assert disable_response.json()["updated"] is True
-    assert disable_response.json()["state"] in {"stopped", "disabled"}
-
-    assert enable_response.status_code == 200
-    assert enable_response.json()["updated"] is True
-    assert enable_response.json()["state"] == "enabled"
 
 
 def test_skills_endpoint_marks_managed_skills_as_removable(monkeypatch, tmp_path):

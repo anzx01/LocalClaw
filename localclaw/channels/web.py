@@ -130,12 +130,6 @@ class ApprovalsResponse(BaseModel):
     approvals: List[ApprovalItemResponse]
 
 
-class RejectStepRequest(BaseModel):
-    """Request model for rejecting a pending approval step."""
-
-    reason: Optional[str] = None
-
-
 class SkillResponse(BaseModel):
     """Response model for skill info."""
     name: str
@@ -283,8 +277,6 @@ class ChannelTestResponse(BaseModel):
     summary: str
     request: Dict[str, Any] = {}
     missing: List[str] = []
-    missing_details: Dict[str, str] = {}
-    guidance: List[str] = []
     delivery: Optional[Dict[str, Any]] = None
 
 
@@ -326,33 +318,6 @@ class BackgroundServiceActionResponse(BaseModel):
     changed: bool
     message: str
     status: BackgroundServiceStatusResponse
-
-
-class SkillStateRequest(BaseModel):
-    """State transition request for installed skills."""
-
-    state: str
-
-
-class SkillStateActionResponse(BaseModel):
-    """Response for skill state actions."""
-
-    updated: bool
-    name: str
-    state: str
-    message: str
-
-
-class SkillUpgradeResponse(BaseModel):
-    """Response for reinstall/upgrade skill actions."""
-
-    upgraded: bool
-    removed: bool = False
-    installed: bool = False
-    message: str
-    error: Optional[str] = None
-    scan: Optional[Dict[str, Any]] = None
-    guard: Optional[Dict[str, Any]] = None
 
 
 class ConnectionManager:
@@ -762,234 +727,6 @@ async def _stop_weixin_poll_tasks() -> None:
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
 
-def _channel_check_catalog(channel_key: str) -> Dict[str, Dict[str, str]]:
-    """Return UI metadata for per-channel readiness checks."""
-
-    catalogs: Dict[str, Dict[str, Dict[str, str]]] = {
-        "wechat_personal": {
-            "has_inbound_token": {
-                "label": "Inbound Token",
-                "fix": "Set LOCALCLAW_WECHAT_PERSONAL_INBOUND_TOKEN to protect webhook ingress.",
-                "env": "LOCALCLAW_WECHAT_PERSONAL_INBOUND_TOKEN",
-            },
-            "has_proxy_url": {
-                "label": "Bridge Proxy URL",
-                "fix": "Set LOCALCLAW_WECHAT_PERSONAL_PROXY_URL to enable outbound bridge delivery.",
-                "env": "LOCALCLAW_WECHAT_PERSONAL_PROXY_URL",
-            },
-            "has_api_key": {
-                "label": "Bridge API Key",
-                "fix": "Set LOCALCLAW_WECHAT_PERSONAL_API_KEY when your bridge requires auth.",
-                "env": "LOCALCLAW_WECHAT_PERSONAL_API_KEY",
-            },
-        },
-        "weixin": {
-            "has_webhook_token": {
-                "label": "Webhook Token",
-                "fix": "Set LOCALCLAW_WEIXIN_WEBHOOK_TOKEN and send it in x-weixin-webhook-token.",
-                "env": "LOCALCLAW_WEIXIN_WEBHOOK_TOKEN",
-            },
-            "has_bot_token": {
-                "label": "Bot Token",
-                "fix": "Use Scan to Login or set LOCALCLAW_WEIXIN_BOT_TOKEN for outbound API replies.",
-                "env": "LOCALCLAW_WEIXIN_BOT_TOKEN",
-            },
-            "has_allowed_user_ids": {
-                "label": "Allowed User IDs",
-                "fix": "Set LOCALCLAW_WEIXIN_ALLOWED_USER_IDS if you want sender allow-list protection.",
-                "env": "LOCALCLAW_WEIXIN_ALLOWED_USER_IDS",
-            },
-            "has_stored_login": {
-                "label": "Stored Login",
-                "fix": "Run Scan to Login to persist credentials under LocalClaw data.",
-                "env": "LOCALCLAW_WEIXIN_BOT_TOKEN",
-            },
-        },
-        "whatsapp": {
-            "has_verify_token": {
-                "label": "Verify Token",
-                "fix": "Set LOCALCLAW_WHATSAPP_VERIFY_TOKEN and register the same token in Meta.",
-                "env": "LOCALCLAW_WHATSAPP_VERIFY_TOKEN",
-            },
-            "has_app_secret": {
-                "label": "App Secret",
-                "fix": "Set LOCALCLAW_WHATSAPP_APP_SECRET to validate webhook signatures.",
-                "env": "LOCALCLAW_WHATSAPP_APP_SECRET",
-            },
-            "has_access_token": {
-                "label": "Access Token",
-                "fix": "Set LOCALCLAW_WHATSAPP_ACCESS_TOKEN for Cloud API outbound messages.",
-                "env": "LOCALCLAW_WHATSAPP_ACCESS_TOKEN",
-            },
-            "has_phone_number_id": {
-                "label": "Phone Number ID",
-                "fix": "Set LOCALCLAW_WHATSAPP_PHONE_NUMBER_ID for outbound Cloud API calls.",
-                "env": "LOCALCLAW_WHATSAPP_PHONE_NUMBER_ID",
-            },
-        },
-    }
-    return catalogs.get(channel_key, {})
-
-
-def _channel_setup_steps(channel_key: str) -> List[str]:
-    """Return guided setup steps for each channel."""
-
-    guides: Dict[str, List[str]] = {
-        "wechat_personal": [
-            "Enable LOCALCLAW_WECHAT_PERSONAL_ENABLED=true.",
-            "Configure LOCALCLAW_WECHAT_PERSONAL_INBOUND_TOKEN and include it in webhook calls.",
-            "If you need outbound delivery, configure LOCALCLAW_WECHAT_PERSONAL_PROXY_URL and API key.",
-            "Run Connectivity Test with reply_target to validate bridge delivery.",
-        ],
-        "weixin": [
-            "Enable LOCALCLAW_WEIXIN_ENABLED=true and configure webhook path/token.",
-            "Run Scan to Login or set LOCALCLAW_WEIXIN_BOT_TOKEN manually.",
-            "Send one inbound message first to cache context_token for outbound replies.",
-            "Run Connectivity Test with recipient and context token to verify delivery.",
-        ],
-        "whatsapp": [
-            "Enable LOCALCLAW_WHATSAPP_ENABLED=true.",
-            "Set LOCALCLAW_WHATSAPP_VERIFY_TOKEN and complete Meta webhook verification.",
-            "Set LOCALCLAW_WHATSAPP_ACCESS_TOKEN and LOCALCLAW_WHATSAPP_PHONE_NUMBER_ID for replies.",
-            "Run Connectivity Test with a destination number to validate Cloud API delivery.",
-        ],
-    }
-    return guides.get(channel_key, [])
-
-
-def _build_channel_readiness(checks: Dict[str, Any]) -> Dict[str, Any]:
-    """Build readiness score metadata from check booleans."""
-
-    normalized = {key: bool(value) for key, value in (checks or {}).items()}
-    total = len(normalized)
-    passed = sum(1 for value in normalized.values() if value)
-    missing = [key for key, value in normalized.items() if not value]
-    return {
-        "total": total,
-        "passed": passed,
-        "missing": missing,
-        "score": (passed / total) if total else 1.0,
-    }
-
-
-def _build_channel_diagnostics(
-    *,
-    channel_key: str,
-    enabled: bool,
-    checks: Dict[str, Any],
-) -> List[Dict[str, str]]:
-    """Build human-readable diagnostics for channel setup."""
-
-    diagnostics: List[Dict[str, str]] = []
-    if not enabled:
-        diagnostics.append(
-            {
-                "level": "warn",
-                "code": "channel_disabled",
-                "title": "Channel is disabled",
-                "message": "This integration is currently disabled in runtime settings.",
-                "fix": "Enable the channel env toggle and restart runtime.",
-            }
-        )
-
-    catalog = _channel_check_catalog(channel_key)
-    for key, value in (checks or {}).items():
-        if bool(value):
-            continue
-        metadata = catalog.get(key, {})
-        diagnostics.append(
-            {
-                "level": "warn",
-                "code": key,
-                "title": metadata.get("label", key.replace("_", " ").title()),
-                "message": f"Readiness check '{key}' is missing.",
-                "fix": metadata.get("fix", "Complete the missing configuration and rerun checks."),
-            }
-        )
-
-    if not diagnostics:
-        diagnostics.append(
-            {
-                "level": "ok",
-                "code": "ready",
-                "title": "Channel readiness checks passed",
-                "message": "All declared readiness checks are present.",
-                "fix": "No action required.",
-            }
-        )
-
-    return diagnostics
-
-
-def _channel_test_missing_details(channel_key: str, missing: List[str]) -> Dict[str, str]:
-    """Return actionable hints for missing manual-test fields/config."""
-
-    details: Dict[str, str] = {}
-    catalog = _channel_check_catalog(channel_key)
-    for item in missing:
-        check = catalog.get(item)
-        if check:
-            details[item] = check.get("fix", "")
-            continue
-
-        fallback = {
-            "recipient": "Provide a destination user/phone for outbound delivery tests.",
-            "reply_target": "Provide bridge reply_target, such as room ID or user wxid.",
-            "context_token": "Use a context_token from recent inbound message or paste one manually.",
-            "LOCALCLAW_WECHAT_PERSONAL_ENABLED": "Set LOCALCLAW_WECHAT_PERSONAL_ENABLED=true.",
-            "LOCALCLAW_WEIXIN_ENABLED": "Set LOCALCLAW_WEIXIN_ENABLED=true.",
-            "LOCALCLAW_WHATSAPP_ENABLED": "Set LOCALCLAW_WHATSAPP_ENABLED=true.",
-            "LOCALCLAW_WEIXIN_REPLY_VIA_API": "Enable LOCALCLAW_WEIXIN_REPLY_VIA_API or login via QR flow.",
-            "LOCALCLAW_WHATSAPP_REPLY_VIA_CLOUD_API": "Enable LOCALCLAW_WHATSAPP_REPLY_VIA_CLOUD_API.",
-        }
-        if item in fallback:
-            details[item] = fallback[item]
-
-    return details
-
-
-def _channel_test_guidance(channel_key: str, missing: List[str]) -> List[str]:
-    """Build prioritized guidance lines for channel dry-run results."""
-
-    details = _channel_test_missing_details(channel_key, missing)
-    guidance: List[str] = []
-    for key in missing:
-        hint = details.get(key)
-        if hint and hint not in guidance:
-            guidance.append(hint)
-
-    for step in _channel_setup_steps(channel_key):
-        if step not in guidance:
-            guidance.append(step)
-        if len(guidance) >= 6:
-            break
-
-    return guidance
-
-
-def _classify_skill_source(
-    path_value: Optional[str],
-    managed_dir: Path,
-    configured_dirs: List[Path],
-) -> tuple[str, bool]:
-    """Classify where a loaded skill comes from and if it is removable."""
-
-    normalized_path = str(path_value or "").strip()
-    if not normalized_path:
-        return "runtime", False
-
-    try:
-        resolved = Path(normalized_path).resolve()
-    except Exception:
-        return "unknown", False
-
-    parents = {resolved, *resolved.parents}
-    if managed_dir in parents:
-        return "managed", True
-    if any(configured_dir in parents for configured_dir in configured_dirs):
-        return "configured", False
-    return "unknown", False
-
 
 def _serialize_step(step: Optional[Step]) -> Optional[Dict[str, Any]]:
     """Serialize step metadata for task and approval APIs."""
@@ -1275,52 +1012,16 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/api/tasks", response_model=List[TaskResponse])
-    async def list_tasks(
-        limit: int = 50,
-        state: Optional[str] = None,
-        channel: Optional[str] = None,
-        query: Optional[str] = None,
-    ):
-        """List recent tasks with optional filters for logs/dashboard views."""
+    async def list_tasks(limit: int = 10):
+        """List recent tasks."""
         engine = get_engine()
-        history_limit = max(limit, 200)
         task_map = {
             task.id: task
-            for task in [*engine.get_active_tasks(), *engine.get_task_history(history_limit)]
+            for task in [*engine.get_active_tasks(), *engine.get_task_history(limit)]
         }
-        tasks = sorted(task_map.values(), key=lambda task: task.created_at, reverse=True)
+        tasks = sorted(task_map.values(), key=lambda task: task.created_at, reverse=True)[:limit]
 
-        normalized_state = str(state or "").strip().lower()
-        normalized_channel = str(channel or "").strip().lower()
-        normalized_query = str(query or "").strip().lower()
-
-        if normalized_state:
-            tasks = [
-                task for task in tasks
-                if str(task.state.value).lower() == normalized_state
-            ]
-
-        if normalized_channel:
-            tasks = [
-                task for task in tasks
-                if str(task.channel or "").lower() == normalized_channel
-            ]
-
-        if normalized_query:
-            tasks = [
-                task for task in tasks
-                if normalized_query in " ".join(
-                    [
-                        str(task.id or ""),
-                        str(task.channel or ""),
-                        str(task.state.value if task.state else ""),
-                        str(task.message.content if task.message else ""),
-                        str(task.error or ""),
-                    ]
-                ).lower()
-            ]
-
-        return [_serialize_task(task) for task in tasks[:limit]]
+        return [_serialize_task(task) for task in tasks]
     
     @app.get("/api/tasks/{task_id}", response_model=TaskResponse)
     async def get_task(task_id: str):
@@ -1362,18 +1063,6 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Task or step not found")
 
         return _serialize_task(task)
-
-    @app.post("/api/tasks/{task_id}/reject/{step_id}", response_model=TaskResponse)
-    async def reject_task_step(task_id: str, step_id: str, request: RejectStepRequest):
-        """Reject a waiting step and fail the task."""
-        engine = get_engine()
-        reason = (request.reason or "").strip() or "Rejected in Approval Center"
-        task = engine.reject_and_fail_step(task_id, step_id, reason=reason)
-
-        if not task:
-            raise HTTPException(status_code=404, detail="Task or step not found")
-
-        return _serialize_task(task)
     
     @app.get("/api/skills", response_model=List[SkillResponse])
     async def list_skills():
@@ -1385,6 +1074,23 @@ def create_app() -> FastAPI:
         settings = get_settings()
         managed_dir = settings.managed_skills_dir.resolve()
         configured_dirs = [path.resolve() for path in settings.extra_skill_dirs]
+
+        def _classify_skill_source(path_value: Optional[str]) -> tuple[str, bool]:
+            normalized_path = str(path_value or "").strip()
+            if not normalized_path:
+                return "runtime", False
+
+            try:
+                resolved = Path(normalized_path).resolve()
+            except Exception:
+                return "unknown", False
+
+            parents = {resolved, *resolved.parents}
+            if managed_dir in parents:
+                return "managed", True
+            if any(configured_dir in parents for configured_dir in configured_dirs):
+                return "configured", False
+            return "unknown", False
 
         return [
             SkillResponse(
@@ -1399,83 +1105,11 @@ def create_app() -> FastAPI:
                 availability_reason=s.get("availability_details", {}).get("reason"),
                 source_path=s.get("source_path"),
                 source_format=s.get("source_format"),
-                source_scope=_classify_skill_source(s.get("source_path"), managed_dir, configured_dirs)[0],
-                removable=_classify_skill_source(s.get("source_path"), managed_dir, configured_dirs)[1],
+                source_scope=_classify_skill_source(s.get("source_path"))[0],
+                removable=_classify_skill_source(s.get("source_path"))[1],
             )
             for s in skills
         ]
-
-    @app.post("/api/skills/{skill_id}/state", response_model=SkillStateActionResponse)
-    async def update_skill_state(skill_id: str, request: SkillStateRequest):
-        """Enable or disable a registered skill at runtime."""
-        from localclaw.skills.registry import get_skill_registry
-
-        target = str(request.state or "").strip().lower()
-        if target not in {"enabled", "disabled"}:
-            raise HTTPException(status_code=400, detail="state must be 'enabled' or 'disabled'")
-
-        registry = get_skill_registry()
-        updated = registry.enable(skill_id) if target == "enabled" else registry.disable(skill_id)
-        if not updated:
-            raise HTTPException(status_code=404, detail="Skill not found")
-
-        info = registry.get_skill_info(skill_id)
-        if not info:
-            raise HTTPException(status_code=404, detail="Skill not found after update")
-
-        return SkillStateActionResponse(
-            updated=True,
-            name=info["name"],
-            state=info["state"],
-            message=(
-                f"Skill '{info['name']}' enabled."
-                if target == "enabled"
-                else f"Skill '{info['name']}' disabled."
-            ),
-        )
-
-    @app.post("/api/skills/{skill_id}/upgrade", response_model=SkillUpgradeResponse)
-    async def upgrade_skill(skill_id: str):
-        """Reinstall a managed skill from marketplace source as a lightweight upgrade path."""
-        registry = get_tool_registry()
-
-        remove_result = await registry.execute("clawhub_remove", skill_id=skill_id)
-        removed = remove_result.status == "success"
-
-        if not removed and "not installed" not in str(remove_result.message or "").lower():
-            return SkillUpgradeResponse(
-                upgraded=False,
-                removed=False,
-                installed=False,
-                message="Failed to prepare upgrade.",
-                error=remove_result.message,
-            )
-
-        install_result = await registry.execute(
-            "clawhub_install",
-            skill_id=skill_id,
-            decision="proceed",
-        )
-
-        if install_result.status != "success":
-            return SkillUpgradeResponse(
-                upgraded=False,
-                removed=removed,
-                installed=False,
-                message="Upgrade failed during reinstall.",
-                error=install_result.message,
-                scan=install_result.data.get("scan") if isinstance(install_result.data, dict) else None,
-                guard=install_result.data.get("guard") if isinstance(install_result.data, dict) else None,
-            )
-
-        return SkillUpgradeResponse(
-            upgraded=True,
-            removed=removed,
-            installed=True,
-            message=f"Skill {skill_id} upgraded successfully.",
-            scan=install_result.data.get("scan") if isinstance(install_result.data, dict) else None,
-            guard=install_result.data.get("guard") if isinstance(install_result.data, dict) else None,
-        )
     
     @app.get("/api/tools")
     async def list_tools():
@@ -1549,7 +1183,6 @@ def create_app() -> FastAPI:
             "managed_skills_dir": str(settings.managed_skills_dir),
             "configured_skill_dirs": [str(path) for path in settings.extra_skill_dirs],
             "data_dir": str(settings.data_dir),
-            "progress_log": str(settings.progress_log),
             "wechat_personal_enabled": settings.wechat_personal_enabled,
             "wechat_personal_reply_via_proxy": settings.wechat_personal_reply_via_proxy,
             "wechat_personal_has_proxy_url": bool(settings.wechat_personal_proxy_url),
@@ -1700,8 +1333,6 @@ def create_app() -> FastAPI:
                 ),
                 request=request_preview,
                 missing=missing,
-                missing_details=_channel_test_missing_details("weixin", missing),
-                guidance=_channel_test_guidance("weixin", missing),
             )
 
         envelope = PersonalWeChatEnvelope(
@@ -1732,10 +1363,6 @@ def create_app() -> FastAPI:
             channel="wechat_personal",
             summary=summary,
             request=request_preview,
-            guidance=[
-                "If API returns non-2xx, verify bot token validity and context_token freshness.",
-                "Send a fresh inbound message to refresh context_token cache when needed.",
-            ],
             delivery=delivery,
         )
 
@@ -1789,8 +1416,6 @@ def create_app() -> FastAPI:
                 ),
                 request=request_preview,
                 missing=missing,
-                missing_details=_channel_test_missing_details("wechat_personal", missing),
-                guidance=_channel_test_guidance("wechat_personal", missing),
             )
 
         envelope = WeixinEnvelope(
@@ -1823,10 +1448,6 @@ def create_app() -> FastAPI:
             channel="weixin",
             summary=summary,
             request=request_preview,
-            guidance=[
-                "If delivery is slow, verify bridge proxy URL and credentials.",
-                "Use this route for outbound bridge diagnostics without waiting for inbound events.",
-            ],
             delivery=delivery,
         )
 
@@ -1868,8 +1489,6 @@ def create_app() -> FastAPI:
                 ),
                 request=request_preview,
                 missing=missing,
-                missing_details=_channel_test_missing_details("whatsapp", missing),
-                guidance=_channel_test_guidance("whatsapp", missing),
             )
 
         envelope = WhatsAppEnvelope(
@@ -1899,10 +1518,6 @@ def create_app() -> FastAPI:
             channel="whatsapp",
             summary=summary,
             request=request_preview,
-            guidance=[
-                "If delivery fails, confirm access token scope and phone number ID mapping in Meta.",
-                "Validate webhook verification and app secret before production rollout.",
-            ],
             delivery=delivery,
         )
 
@@ -1911,142 +1526,122 @@ def create_app() -> FastAPI:
         """Return a UI-friendly overview of supported chat channels."""
         settings = get_settings()
         weixin_status = _weixin_channel_status_payload(settings)
-        channels = [
-            {
-                "key": "wechat_personal",
-                "name": "Personal WeChat",
-                "kind": "bridge",
-                "enabled": settings.wechat_personal_enabled,
-                "reply_mode": (
-                    "bridge_proxy"
-                    if settings.wechat_personal_reply_via_proxy
-                    else "inline_response"
-                ),
-                "webhook_path": "/api/channels/wechat-personal/webhook",
-                "status_path": "/api/channels/wechat-personal/status",
-                "test_path": "/api/channels/wechat-personal/test",
-                "required_env": [
-                    "LOCALCLAW_WECHAT_PERSONAL_ENABLED",
-                    "LOCALCLAW_WECHAT_PERSONAL_INBOUND_TOKEN",
-                ],
-                "optional_env": [
-                    "LOCALCLAW_WECHAT_PERSONAL_PROXY_URL",
-                    "LOCALCLAW_WECHAT_PERSONAL_API_KEY",
-                    "LOCALCLAW_WECHAT_PERSONAL_REPLY_VIA_PROXY",
-                ],
-                "checks": {
-                    "has_inbound_token": bool(settings.wechat_personal_inbound_token),
-                    "has_proxy_url": bool(settings.wechat_personal_proxy_url),
-                    "has_api_key": bool(settings.wechat_personal_api_key),
-                },
-                "summary": "Experimental bridge for personal WeChat webhook adapters.",
-                "notes": [
-                    "Bridge must POST JSON to the webhook URL.",
-                    "Use X-LocalClaw-Token or Authorization: Bearer <token>.",
-                    "Routine commands can use /cmd and safe_shell automatically.",
-                ],
-            },
-            {
-                "key": "weixin",
-                "name": "Weixin",
-                "kind": "official",
-                "enabled": settings.weixin_enabled,
-                "reply_mode": (
-                    "weixin_api"
-                    if weixin_status["reply_via_api"]
-                    else "inline_response"
-                ),
-                "webhook_path": _normalize_path(settings.weixin_webhook_path, "/weixin/messages"),
-                "status_path": "/api/channels/weixin/status",
-                "test_path": "/api/channels/weixin/test",
-                "login_path": "/api/channels/weixin/login/start",
-                "supports_qr_login": True,
-                "required_env": [
-                    "LOCALCLAW_WEIXIN_ENABLED",
-                ],
-                "optional_env": [
-                    "LOCALCLAW_WEIXIN_WEBHOOK_PATH",
-                    "LOCALCLAW_WEIXIN_WEBHOOK_TOKEN",
-                    "LOCALCLAW_WEIXIN_ALLOWED_USER_IDS",
-                    "LOCALCLAW_WEIXIN_BASE_URL",
-                    "LOCALCLAW_WEIXIN_BOT_TOKEN",
-                    "LOCALCLAW_WEIXIN_REPLY_VIA_API",
-                ],
-                "checks": {
-                    "has_webhook_token": weixin_status["has_webhook_token"],
-                    "has_bot_token": weixin_status["has_bot_token"],
-                    "has_allowed_user_ids": weixin_status["has_allowed_user_ids"],
-                    "has_stored_login": weixin_status["has_stored_login"],
-                },
-                "connected_account": weixin_status["connected_account"],
-                "summary": "Weixin inbound webhook channel with optional outbound ilink API replies and QR login.",
-                "notes": [
-                    "Webhook token can be sent via x-weixin-webhook-token or Authorization: Bearer.",
-                    "Inbound payload supports both top-level fields and nested message objects.",
-                    "Use Scan to Login in this page to save a bot token without editing env first.",
-                    "Outbound API replies require a context_token from the latest inbound message.",
-                ],
-            },
-            {
-                "key": "whatsapp",
-                "name": "WhatsApp Cloud API",
-                "kind": "official",
-                "enabled": settings.whatsapp_enabled,
-                "reply_mode": (
-                    "cloud_api"
-                    if settings.whatsapp_reply_via_cloud_api
-                    else "inline_response"
-                ),
-                "webhook_path": "/api/channels/whatsapp/webhook",
-                "verify_path": "/api/channels/whatsapp/webhook",
-                "status_path": "/api/channels/whatsapp/status",
-                "test_path": "/api/channels/whatsapp/test",
-                "required_env": [
-                    "LOCALCLAW_WHATSAPP_ENABLED",
-                    "LOCALCLAW_WHATSAPP_VERIFY_TOKEN",
-                ],
-                "optional_env": [
-                    "LOCALCLAW_WHATSAPP_APP_SECRET",
-                    "LOCALCLAW_WHATSAPP_ACCESS_TOKEN",
-                    "LOCALCLAW_WHATSAPP_PHONE_NUMBER_ID",
-                    "LOCALCLAW_WHATSAPP_REPLY_VIA_CLOUD_API",
-                ],
-                "checks": {
-                    "has_verify_token": bool(settings.whatsapp_verify_token),
-                    "has_app_secret": bool(settings.whatsapp_app_secret),
-                    "has_access_token": bool(settings.whatsapp_access_token),
-                    "has_phone_number_id": bool(settings.whatsapp_phone_number_id),
-                },
-                "summary": "Official WhatsApp Cloud API inbound webhook and optional outbound reply channel.",
-                "notes": [
-                    "Meta verification uses the same webhook URL.",
-                    "GET verify must receive hub.mode=subscribe, hub.verify_token and hub.challenge.",
-                    "POST webhook validates X-Hub-Signature-256 when app secret is configured.",
-                ],
-            },
-        ]
-
-        enriched_channels: List[Dict[str, Any]] = []
-        for channel in channels:
-            checks = channel.get("checks", {})
-            readiness = _build_channel_readiness(checks)
-            channel_key = str(channel.get("key") or "")
-            enriched_channels.append(
+        return ChannelsOverviewResponse(
+            channels=[
                 {
-                    **channel,
-                    "check_catalog": _channel_check_catalog(channel_key),
-                    "readiness": readiness,
-                    "diagnostics": _build_channel_diagnostics(
-                        channel_key=channel_key,
-                        enabled=bool(channel.get("enabled")),
-                        checks=checks,
+                    "key": "wechat_personal",
+                    "name": "Personal WeChat",
+                    "kind": "bridge",
+                    "enabled": settings.wechat_personal_enabled,
+                    "reply_mode": (
+                        "bridge_proxy"
+                        if settings.wechat_personal_reply_via_proxy
+                        else "inline_response"
                     ),
-                    "setup_steps": _channel_setup_steps(channel_key),
-                    "missing_checks": readiness.get("missing", []),
-                }
-            )
-
-        return ChannelsOverviewResponse(channels=enriched_channels)
+                    "webhook_path": "/api/channels/wechat-personal/webhook",
+                    "status_path": "/api/channels/wechat-personal/status",
+                    "test_path": "/api/channels/wechat-personal/test",
+                    "required_env": [
+                        "LOCALCLAW_WECHAT_PERSONAL_ENABLED",
+                        "LOCALCLAW_WECHAT_PERSONAL_INBOUND_TOKEN",
+                    ],
+                    "optional_env": [
+                        "LOCALCLAW_WECHAT_PERSONAL_PROXY_URL",
+                        "LOCALCLAW_WECHAT_PERSONAL_API_KEY",
+                        "LOCALCLAW_WECHAT_PERSONAL_REPLY_VIA_PROXY",
+                    ],
+                    "checks": {
+                        "has_inbound_token": bool(settings.wechat_personal_inbound_token),
+                        "has_proxy_url": bool(settings.wechat_personal_proxy_url),
+                        "has_api_key": bool(settings.wechat_personal_api_key),
+                    },
+                    "summary": "Experimental bridge for personal WeChat webhook adapters.",
+                    "notes": [
+                        "Bridge must POST JSON to the webhook URL.",
+                        "Use X-LocalClaw-Token or Authorization: Bearer <token>.",
+                        "Routine commands can use /cmd and safe_shell automatically.",
+                    ],
+                },
+                {
+                    "key": "weixin",
+                    "name": "Weixin",
+                    "kind": "official",
+                    "enabled": settings.weixin_enabled,
+                    "reply_mode": (
+                        "weixin_api"
+                        if weixin_status["reply_via_api"]
+                        else "inline_response"
+                    ),
+                    "webhook_path": _normalize_path(settings.weixin_webhook_path, "/weixin/messages"),
+                    "status_path": "/api/channels/weixin/status",
+                    "test_path": "/api/channels/weixin/test",
+                    "login_path": "/api/channels/weixin/login/start",
+                    "supports_qr_login": True,
+                    "required_env": [
+                        "LOCALCLAW_WEIXIN_ENABLED",
+                    ],
+                    "optional_env": [
+                        "LOCALCLAW_WEIXIN_WEBHOOK_PATH",
+                        "LOCALCLAW_WEIXIN_WEBHOOK_TOKEN",
+                        "LOCALCLAW_WEIXIN_ALLOWED_USER_IDS",
+                        "LOCALCLAW_WEIXIN_BASE_URL",
+                        "LOCALCLAW_WEIXIN_BOT_TOKEN",
+                        "LOCALCLAW_WEIXIN_REPLY_VIA_API",
+                    ],
+                    "checks": {
+                        "has_webhook_token": weixin_status["has_webhook_token"],
+                        "has_bot_token": weixin_status["has_bot_token"],
+                        "has_allowed_user_ids": weixin_status["has_allowed_user_ids"],
+                        "has_stored_login": weixin_status["has_stored_login"],
+                    },
+                    "connected_account": weixin_status["connected_account"],
+                    "summary": "Weixin inbound webhook channel with optional outbound ilink API replies and QR login.",
+                    "notes": [
+                        "Webhook token can be sent via x-weixin-webhook-token or Authorization: Bearer.",
+                        "Inbound payload supports both top-level fields and nested message objects.",
+                        "Use Scan to Login in this page to save a bot token without editing env first.",
+                        "Outbound API replies require a context_token from the latest inbound message.",
+                    ],
+                },
+                {
+                    "key": "whatsapp",
+                    "name": "WhatsApp Cloud API",
+                    "kind": "official",
+                    "enabled": settings.whatsapp_enabled,
+                    "reply_mode": (
+                        "cloud_api"
+                        if settings.whatsapp_reply_via_cloud_api
+                        else "inline_response"
+                    ),
+                    "webhook_path": "/api/channels/whatsapp/webhook",
+                    "verify_path": "/api/channels/whatsapp/webhook",
+                    "status_path": "/api/channels/whatsapp/status",
+                    "test_path": "/api/channels/whatsapp/test",
+                    "required_env": [
+                        "LOCALCLAW_WHATSAPP_ENABLED",
+                        "LOCALCLAW_WHATSAPP_VERIFY_TOKEN",
+                    ],
+                    "optional_env": [
+                        "LOCALCLAW_WHATSAPP_APP_SECRET",
+                        "LOCALCLAW_WHATSAPP_ACCESS_TOKEN",
+                        "LOCALCLAW_WHATSAPP_PHONE_NUMBER_ID",
+                        "LOCALCLAW_WHATSAPP_REPLY_VIA_CLOUD_API",
+                    ],
+                    "checks": {
+                        "has_verify_token": bool(settings.whatsapp_verify_token),
+                        "has_app_secret": bool(settings.whatsapp_app_secret),
+                        "has_access_token": bool(settings.whatsapp_access_token),
+                        "has_phone_number_id": bool(settings.whatsapp_phone_number_id),
+                    },
+                    "summary": "Official WhatsApp Cloud API inbound webhook and optional outbound reply channel.",
+                    "notes": [
+                        "Meta verification uses the same webhook URL.",
+                        "GET verify must receive hub.mode=subscribe, hub.verify_token and hub.challenge.",
+                        "POST webhook validates X-Hub-Signature-256 when app secret is configured.",
+                    ],
+                },
+            ]
+        )
 
     @app.get("/api/channels/whatsapp/webhook")
     async def verify_whatsapp_webhook(request: Request):
