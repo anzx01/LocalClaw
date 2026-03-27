@@ -76,6 +76,7 @@ class ExecutionEngine:
             skill_registry=self._skill_registry,
             tool_registry=self._tool_registry,
             refine_skill_decision=self._settings.runtime_refine_skill_decision,
+            enable_request_guardrails=self._settings.runtime_request_guardrails_enabled,
         )
         self._verifier = verifier or create_default_verifier(
             settings=self._settings,

@@ -31,10 +31,12 @@ class OpenClawRuntime:
         skill_registry: SkillRegistry,
         tool_registry: ToolRegistry,
         refine_skill_decision: bool = True,
+        enable_request_guardrails: bool = True,
     ) -> None:
         self._skill_registry = skill_registry
         self._tool_registry = tool_registry
         self._enable_skill_refinement = refine_skill_decision
+        self._enable_request_guardrails = enable_request_guardrails
 
     async def decide(self, message: Message, context: Optional[Context] = None) -> AgentDecision:
         """Return the model's handling decision for a user message."""
@@ -47,17 +49,18 @@ class OpenClawRuntime:
             source="openclaw_runtime",
             raw_message=message.content,
         )
-        fast_intent = self._build_basic_intent_guardrail(str(message.content or "").strip())
-        if fast_intent:
-            return AgentDecision(
-                mode=AgentDecisionMode.INTENT,
-                intent_name=fast_intent,
-                params={},
-                confidence=0.99,
-                source="openclaw_runtime_guardrail",
-                raw_message=message.content,
-                rationale="basic_intent_guardrail",
-            )
+        if self._enable_request_guardrails:
+            fast_intent = self._build_basic_intent_guardrail(str(message.content or "").strip())
+            if fast_intent:
+                return AgentDecision(
+                    mode=AgentDecisionMode.INTENT,
+                    intent_name=fast_intent,
+                    params={},
+                    confidence=0.99,
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="basic_intent_guardrail",
+                )
 
         llm_provider = get_llm_provider()
         if not await llm_provider.is_available():
@@ -82,7 +85,8 @@ class OpenClawRuntime:
             if decision.mode != AgentDecisionMode.UNKNOWN:
                 break
 
-        decision = self._apply_request_guardrails(decision, message)
+        if self._enable_request_guardrails:
+            decision = self._apply_request_guardrails(decision, message)
 
         if decision.mode == AgentDecisionMode.SKILL and decision.source == "openclaw_runtime_guardrail":
             return decision
@@ -839,6 +843,8 @@ User: {user_request}
             "多云",
             "冷不冷",
             "热不热",
+            "冷吗",
+            "热吗",
             "风大",
             "风力",
             "风小",
@@ -847,6 +853,7 @@ User: {user_request}
         weather_patterns = (
             r"(?:外面|窗外).*(?:天|天气|云|雨|雪|晴|阴|蓝)",
             r"(?:天|天气).*(?:蓝|晴|阴|云|雨|雪)",
+            r"(?:今天|明天|后天).*(?:热吗|冷吗|热不热|冷不冷|下雨|下雪|天气|温度|气温)",
         )
         if not any(keyword in normalized for keyword in weather_keywords) and not any(
             re.search(pattern, normalized, re.IGNORECASE) for pattern in weather_patterns
@@ -895,7 +902,7 @@ User: {user_request}
         compact = re.sub(r"^(?:今天|明天|后天|现在|此刻)+", "", compact)
         match = re.search(
             r"(?P<location>[\u4e00-\u9fffA-Za-z]{1,20}?)(?:今天|明天|后天|现在|此刻)?(?:的)?"
-            r"(?:天气|气温|温度|会不会下雨|会下雨|下不下雨|下雨|下雪|冷不冷|热不热|风大不大|风大|风力)",
+            r"(?:天气|气温|温度|会不会下雨|会下雨|下不下雨|下雨|下雪|冷不冷|热不热|冷吗|热吗|风大不大|风大|风力)",
             compact,
         )
         if not match:

@@ -61,6 +61,13 @@ class Settings(BaseSettings):
             "after initial skill/tool routing"
         ),
     )
+    runtime_request_guardrails_enabled: bool = Field(
+        default=True,
+        description=(
+            "Whether OpenClaw runtime should apply deterministic request guardrails "
+            "(weather/news/filesystem shortcuts) after the model decision"
+        ),
+    )
 
     bundled_skill_catalog_dir: Path = Field(
         default=PROJECT_ROOT / "bundled_skills",

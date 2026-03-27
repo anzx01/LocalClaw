@@ -402,6 +402,65 @@ async def test_openclaw_runtime_guardrails_weather_questions(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_openclaw_runtime_guardrails_weather_hot_question(monkeypatch):
+    """Colloquial weather questions like '今天热吗' should map to weather intent."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"unknown","params":{}}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    tool_registry.register(DummyHttpGetTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+    decision = await runtime.decide(Message(content="今天热吗？"))
+
+    assert decision.mode == AgentDecisionMode.INTENT
+    assert decision.intent_name == "check_weather"
+    assert decision.params["day_offset"] == 0
+    assert decision.params["day_label"] == "今天"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_can_disable_request_guardrails(monkeypatch):
+    """When guardrails are disabled, runtime should keep the model decision."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"answer","answer":"模型直答"}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    tool_registry.register(DummyHttpGetTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(
+        SkillRegistry(),
+        tool_registry,
+        enable_request_guardrails=False,
+    )
+    decision = await runtime.decide(Message(content="今天热吗？"))
+
+    assert decision.mode == AgentDecisionMode.ANSWER
+    assert decision.answer == "模型直答"
+    assert decision.source == "openclaw_runtime"
+
+
+@pytest.mark.asyncio
 async def test_openclaw_runtime_weather_location_strips_day_prefix(monkeypatch):
     """Weather guardrails should not include relative day words inside the city name."""
 
