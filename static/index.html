@@ -3341,8 +3341,13 @@
                 },
 
                 weixinQrLink() {
-                    const value = String(this.weixinLogin.qrcode_img_content || '').trim();
-                    return /^(https?:\/\/|data:image\/)/i.test(value) ? value : '';
+                    const imageValue = String(this.weixinLogin.qrcode_img_content || '').trim();
+                    if (/^(https?:\/\/|data:image\/)/i.test(imageValue)) {
+                        return imageValue;
+                    }
+
+                    const qrValue = String(this.weixinLogin.qrcode || '').trim();
+                    return /^(https?:\/\/|data:image\/)/i.test(qrValue) ? qrValue : '';
                 },
 
                 stopWeixinLoginPolling() {
@@ -3370,23 +3375,43 @@
                     }
 
                     target.innerHTML = '';
-                    const value = String(this.weixinLogin.qrcode_img_content || this.weixinLogin.qrcode || '').trim();
-                    if (!value) {
+                    const qrPayload = String(this.weixinLogin.qrcode_img_content || '').trim();
+                    const qrFallback = String(this.weixinLogin.qrcode || '').trim();
+
+                    if (!qrPayload && !qrFallback) {
                         target.textContent = 'QR code will appear here.';
                         return;
                     }
 
-                    if (/^data:image\//i.test(value) || /^https?:\/\//i.test(value)) {
+                    if (/^data:image\//i.test(qrPayload)) {
                         const image = document.createElement('img');
-                        image.src = value;
+                        image.src = qrPayload;
                         image.alt = 'Weixin login QR code';
                         target.appendChild(image);
                         return;
                     }
 
-                    if (window.QRCode) {
+                    if (window.QRCode && qrPayload) {
                         new window.QRCode(target, {
-                            text: value,
+                            text: qrPayload,
+                            width: 220,
+                            height: 220,
+                            correctLevel: window.QRCode.CorrectLevel.M
+                        });
+                        return;
+                    }
+
+                    if (/^data:image\//i.test(qrFallback)) {
+                        const image = document.createElement('img');
+                        image.src = qrFallback;
+                        image.alt = 'Weixin login QR code';
+                        target.appendChild(image);
+                        return;
+                    }
+
+                    if (window.QRCode && qrFallback) {
+                        new window.QRCode(target, {
+                            text: qrFallback,
                             width: 220,
                             height: 220,
                             correctLevel: window.QRCode.CorrectLevel.M

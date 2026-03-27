@@ -3,6 +3,7 @@
 import json
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -55,18 +56,26 @@ from localclaw.channels.weixin import (
     WeixinEnvelope,
     WeixinQrLoginSession,
     build_weixin_message,
+    fetch_weixin_updates,
     format_task_for_weixin,
     get_cached_weixin_context_token,
     is_allowed_weixin_sender,
     is_valid_weixin_webhook_token,
+    list_stored_weixin_account_ids,
+    load_stored_weixin_account,
+    load_weixin_updates_cursor,
+    normalize_weixin_polled_message,
     normalize_weixin_webhook_payload,
     persist_weixin_context_token,
     poll_weixin_qr_login,
     provided_weixin_webhook_token,
     resolve_weixin_context_token,
     resolve_weixin_reply_configuration,
+    save_weixin_updates_cursor,
     send_weixin_text_reply,
     start_weixin_qr_login,
+    WEIXIN_GET_UPDATES_DEFAULT_TIMEOUT_MS,
+    WEIXIN_SESSION_EXPIRED_ERRCODE,
 )
 from localclaw.channels.result_formatter import format_task_for_chat
 
@@ -337,6 +346,38 @@ class ConnectionManager:
 
 
 _manager = ConnectionManager()
+_weixin_poll_tasks: Dict[str, asyncio.Task] = {}
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    """Best-effort int coercion used for external API error codes."""
+
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith(("+", "-")):
+            sign, digits = text[0], text[1:]
+            if digits.isdigit():
+                return int(f"{sign}{digits}")
+        if text.isdigit():
+            return int(text)
+    return default
+
+
+def _weixin_polling_enabled(settings) -> bool:
+    """Return whether native Weixin polling should be active."""
+
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return False
+    return bool(
+        settings.weixin_enabled
+        and getattr(settings, "weixin_polling_enabled", True)
+    )
 
 
 def _normalize_path(path: str, fallback: str) -> str:
@@ -373,9 +414,9 @@ def _weixin_login_message(session: WeixinQrLoginSession) -> str:
     """Convert a Weixin QR login status into a UI-friendly message."""
 
     status = (session.status or "").strip().lower()
-    if status == "wait":
+    if status in {"wait", "waiting", "pending"}:
         return "Scan the QR code with Weixin to start login."
-    if status == "scaned":
+    if status in {"scaned", "scanned", "scan"}:
         return "QR code scanned. Confirm the login in Weixin."
     if status == "confirmed":
         return "Weixin login confirmed. LocalClaw stored the bot token."
@@ -439,6 +480,252 @@ def _weixin_channel_status_payload(settings) -> Dict[str, Any]:
         "connected_account": connected_account.model_dump() if connected_account else None,
         "login_path": "/api/channels/weixin/login/start",
     }
+
+
+def _weixin_delivery_error(delivery: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Return a human-readable Weixin outbound error, if any."""
+
+    if not isinstance(delivery, dict):
+        return "No Weixin delivery payload was returned."
+
+    try:
+        status_code = int(delivery.get("status_code", 0) or 0)
+    except (TypeError, ValueError):
+        status_code = 0
+    if status_code < 200 or status_code >= 300:
+        return f"Weixin API returned HTTP {status_code or 'unknown'}."
+
+    body = delivery.get("body")
+    if not isinstance(body, dict):
+        return None
+
+    errcode = body.get("errcode")
+    ret = body.get("ret")
+    code = None
+    if isinstance(errcode, int) and errcode != 0:
+        code = errcode
+    elif isinstance(ret, int) and ret != 0:
+        code = ret
+
+    if code is None:
+        return None
+
+    errmsg = str(body.get("errmsg") or body.get("error") or "").strip()
+    if code == -14:
+        return (
+            "Weixin session timed out (errcode -14). Run Scan to Login again to refresh "
+            "the stored bot token."
+        )
+    return f"Weixin API error {code}: {errmsg or 'unknown error'}"
+
+
+async def _process_weixin_inbound_envelope(
+    envelope: WeixinEnvelope,
+    settings,
+) -> Dict[str, Any]:
+    """Process a normalized Weixin envelope and return webhook-style response data."""
+
+    if not is_allowed_weixin_sender(settings.weixin_allowed_user_ids, envelope.sender_id):
+        return {
+            "accepted": True,
+            "event_type": "filtered",
+            "status": "ignored",
+            "reply": {
+                "type": "text",
+                "text": "sender filtered by allowed_user_ids",
+                "to_user_id": envelope.sender_id,
+                "account_id": envelope.account_id,
+            },
+            "outbound_delivery": None,
+        }
+
+    if envelope.context_token:
+        persist_weixin_context_token(
+            envelope.account_id,
+            envelope.sender_id,
+            envelope.context_token,
+            settings=settings,
+        )
+
+    engine = get_engine()
+    task = await engine.process_message(build_weixin_message(envelope))
+    reply_text = format_task_for_weixin(task)
+    outbound_delivery = await send_weixin_text_reply(
+        envelope=envelope,
+        reply_text=reply_text,
+        settings=settings,
+    )
+    resolved_context_token = resolve_weixin_context_token(envelope)
+
+    return {
+        "accepted": True,
+        "event_type": "message",
+        "task_id": task.id,
+        "status": task.state.value,
+        "reply": {
+            "type": "text",
+            "text": reply_text,
+            "to_user_id": envelope.sender_id,
+            "account_id": envelope.account_id,
+            "context_token": resolved_context_token or "",
+        },
+        "outbound_delivery": outbound_delivery,
+    }
+
+
+async def _run_weixin_native_poll_loop(account_id: str) -> None:
+    """Continuously poll Weixin getupdates for one stored account."""
+
+    resolved_account_id = (account_id or "default").strip() or "default"
+    timeout_ms = WEIXIN_GET_UPDATES_DEFAULT_TIMEOUT_MS
+    cursor = load_weixin_updates_cursor(account_id=resolved_account_id)
+    consecutive_failures = 0
+
+    logger.info("Weixin native polling started for account '%s'", resolved_account_id)
+
+    while True:
+        settings = get_settings()
+        if not _weixin_polling_enabled(settings):
+            await asyncio.sleep(2.0)
+            continue
+
+        stored_account = load_stored_weixin_account(
+            settings=settings,
+            account_id=resolved_account_id,
+        )
+        if stored_account is None or not stored_account.token.strip():
+            await asyncio.sleep(2.0)
+            continue
+
+        try:
+            response = await fetch_weixin_updates(
+                stored_account,
+                get_updates_buf=cursor,
+                settings=settings,
+                timeout_ms=timeout_ms,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            consecutive_failures += 1
+            wait_seconds = 2.0 if consecutive_failures < 3 else 15.0
+            if consecutive_failures >= 3:
+                consecutive_failures = 0
+            logger.warning(
+                "Weixin getupdates request failed for account '%s': %s",
+                resolved_account_id,
+                exc,
+            )
+            await asyncio.sleep(wait_seconds)
+            continue
+
+        ret = _coerce_int(response.get("ret"), 0)
+        errcode = _coerce_int(response.get("errcode"), 0)
+        error_code = errcode if errcode != 0 else ret
+        if error_code != 0:
+            errmsg = str(response.get("errmsg") or response.get("error") or "").strip()
+            if error_code == WEIXIN_SESSION_EXPIRED_ERRCODE:
+                logger.warning(
+                    "Weixin session expired for account '%s' (errcode -14). "
+                    "Run Scan to Login again.",
+                    resolved_account_id,
+                )
+                await asyncio.sleep(8.0)
+                continue
+
+            consecutive_failures += 1
+            wait_seconds = 2.0 if consecutive_failures < 3 else 15.0
+            if consecutive_failures >= 3:
+                consecutive_failures = 0
+            logger.warning(
+                "Weixin getupdates API error for account '%s': code=%s, errmsg=%s",
+                resolved_account_id,
+                error_code,
+                errmsg or "unknown",
+            )
+            await asyncio.sleep(wait_seconds)
+            continue
+
+        consecutive_failures = 0
+
+        next_cursor = str(response.get("get_updates_buf") or "").strip()
+        if next_cursor and next_cursor != cursor:
+            cursor = next_cursor
+            save_weixin_updates_cursor(
+                account_id=resolved_account_id,
+                get_updates_buf=cursor,
+                settings=settings,
+            )
+
+        requested_timeout_ms = _coerce_int(response.get("longpolling_timeout_ms"), 0)
+        if requested_timeout_ms > 0:
+            timeout_ms = requested_timeout_ms
+
+        messages = response.get("msgs")
+        if not isinstance(messages, list):
+            continue
+
+        for raw_message in messages:
+            envelope = normalize_weixin_polled_message(
+                raw_message if isinstance(raw_message, dict) else {},
+                account_id=resolved_account_id,
+            )
+            if envelope is None:
+                continue
+
+            try:
+                result = await _process_weixin_inbound_envelope(envelope, settings)
+                delivery_error = _weixin_delivery_error(result.get("outbound_delivery"))
+                if delivery_error:
+                    logger.warning(
+                        "Weixin native polling reply error for account '%s' user '%s': %s",
+                        resolved_account_id,
+                        envelope.sender_id,
+                        delivery_error,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "Failed processing polled Weixin message for account '%s': %s",
+                    resolved_account_id,
+                    exc,
+                )
+
+
+async def _ensure_weixin_poll_tasks_running() -> None:
+    """Start Weixin polling workers for accounts with stored logins."""
+
+    settings = get_settings()
+    if not _weixin_polling_enabled(settings):
+        return
+
+    for account_id, task in list(_weixin_poll_tasks.items()):
+        if task.done():
+            _weixin_poll_tasks.pop(account_id, None)
+
+    for account_id in list_stored_weixin_account_ids(settings=settings):
+        stored_account = load_stored_weixin_account(settings=settings, account_id=account_id)
+        if stored_account is None or not stored_account.token.strip():
+            continue
+        existing = _weixin_poll_tasks.get(account_id)
+        if existing is not None and not existing.done():
+            continue
+        _weixin_poll_tasks[account_id] = asyncio.create_task(
+            _run_weixin_native_poll_loop(account_id),
+            name=f"weixin-poll:{account_id}",
+        )
+
+
+async def _stop_weixin_poll_tasks() -> None:
+    """Cancel all active Weixin polling workers."""
+
+    tasks = list(_weixin_poll_tasks.values())
+    _weixin_poll_tasks.clear()
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _serialize_step(step: Optional[Step]) -> Optional[Dict[str, Any]]:
@@ -671,8 +958,10 @@ async def lifespan(app: FastAPI):
     from localclaw.core.engine import _engine
     if _engine is None:
         initialize_system()
+    await _ensure_weixin_poll_tasks_running()
     logger.info("LocalClaw web server started")
     yield
+    await _stop_weixin_poll_tasks()
     logger.info("LocalClaw web server stopped")
 
 
@@ -986,6 +1275,9 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Unknown Weixin login session") from exc
 
+        if (session.status or "").strip().lower() == "confirmed":
+            await _ensure_weixin_poll_tasks_running()
+
         return _serialize_weixin_login_session(session)
 
     @app.get("/api/channels/whatsapp/status")
@@ -1142,12 +1434,13 @@ def create_app() -> FastAPI:
             settings=settings,
             context_token_override=resolved_context_token,
         )
+        delivery_error = _weixin_delivery_error(delivery)
         status_code = int((delivery or {}).get("status_code", 0))
-        ok = 200 <= status_code < 300
+        ok = delivery_error is None
         summary = (
             f"Live Weixin test delivered with HTTP {status_code}."
             if ok
-            else f"Weixin API returned HTTP {status_code or 'unknown'}."
+            else delivery_error
         )
         return ChannelTestResponse(
             ok=ok,
@@ -1431,50 +1724,8 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        if not is_allowed_weixin_sender(settings.weixin_allowed_user_ids, envelope.sender_id):
-            return WeixinWebhookResponse(
-                accepted=True,
-                event_type="filtered",
-                status="ignored",
-                reply={
-                    "type": "text",
-                    "text": "sender filtered by allowed_user_ids",
-                    "to_user_id": envelope.sender_id,
-                    "account_id": envelope.account_id,
-                },
-            )
-
-        if envelope.context_token:
-            persist_weixin_context_token(
-                envelope.account_id,
-                envelope.sender_id,
-                envelope.context_token,
-                settings=settings,
-            )
-
-        engine = get_engine()
-        task = await engine.process_message(build_weixin_message(envelope))
-        reply_text = format_task_for_weixin(task)
-        outbound_delivery = await send_weixin_text_reply(
-            envelope=envelope,
-            reply_text=reply_text,
-            settings=settings,
-        )
-        resolved_context_token = resolve_weixin_context_token(envelope)
-
         return WeixinWebhookResponse(
-            accepted=True,
-            event_type="message",
-            task_id=task.id,
-            status=task.state.value,
-            reply={
-                "type": "text",
-                "text": reply_text,
-                "to_user_id": envelope.sender_id,
-                "account_id": envelope.account_id,
-                "context_token": resolved_context_token or "",
-            },
-            outbound_delivery=outbound_delivery,
+            **(await _process_weixin_inbound_envelope(envelope, settings))
         )
 
     configured_weixin_webhook_path = _normalize_path(

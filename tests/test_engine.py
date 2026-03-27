@@ -1,5 +1,6 @@
 """Tests for the engine module."""
 
+import asyncio
 import pytest
 
 from localclaw.config.settings import Settings
@@ -145,6 +146,44 @@ async def test_engine_local_model_mode_bypasses_parser():
     assert task.intent is not None
     assert task.intent.intent == "answer"
     assert task.result.data["result"] == "Local model handled this message directly."
+
+
+@pytest.mark.asyncio
+async def test_engine_local_model_decision_timeout_falls_back_to_deterministic_parser():
+    """Runtime-decision timeout should fall back to the deterministic parser path."""
+
+    class SlowRuntime(OpenClawRuntime):
+        def __init__(self):
+            pass
+
+        async def decide(self, message, context=None):
+            await asyncio.sleep(0.2)
+            return AgentDecision(
+                mode=AgentDecisionMode.UNKNOWN,
+                confidence=0.0,
+                source="openclaw_runtime",
+                raw_message=message.content,
+            )
+
+    engine = ExecutionEngine(
+        settings=Settings(
+            _env_file=None,
+            llm_enabled=True,
+            llm_parse_only=True,
+            default_timeout=0.05,
+        ),
+        planner=create_default_planner(),
+        verifier=create_default_verifier(),
+        tool_registry=ToolRegistry(),
+        skill_registry=SkillRegistry(),
+        openclaw_runtime=SlowRuntime(),
+    )
+
+    task = await engine.process_message(Message(content="help", user_id="u1", channel="test"))
+
+    assert task.state == TaskState.COMPLETED
+    assert task.intent is not None
+    assert task.intent.intent == "help"
 
 
 @pytest.mark.asyncio

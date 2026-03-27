@@ -11,11 +11,16 @@ from localclaw.channels.weixin import (
     StoredWeixinAccount,
     WeixinQrLoginSession,
     build_weixin_message,
+    fetch_weixin_updates,
+    format_task_for_weixin,
     is_valid_weixin_webhook_token,
+    load_weixin_updates_cursor,
     load_stored_weixin_account,
+    normalize_weixin_polled_message,
     normalize_weixin_webhook_payload,
     poll_weixin_qr_login,
     provided_weixin_webhook_token,
+    save_weixin_updates_cursor,
     save_stored_weixin_account,
     send_weixin_text_reply,
     start_weixin_qr_login,
@@ -56,6 +61,25 @@ def _sample_nested_payload() -> dict:
     }
 
 
+def _sample_weather_body() -> dict:
+    return {
+        "nearest_area": [{"areaName": [{"value": "Shanghai"}]}],
+        "current_condition": [
+            {"temp_C": "28", "weatherDesc": [{"value": "Sunny"}]},
+        ],
+        "weather": [
+            {
+                "date": "2026-03-27",
+                "mintempC": "22",
+                "maxtempC": "30",
+                "hourly": [
+                    {"time": "1200", "weatherDesc": [{"value": "Sunny"}], "chanceofrain": "5"},
+                ],
+            }
+        ],
+    }
+
+
 def test_normalize_weixin_webhook_payload():
     """Inbound webhook payloads should normalize to a runtime envelope."""
 
@@ -77,6 +101,38 @@ def test_normalize_weixin_webhook_payload_nested_items():
     assert envelope.message_id == "m-2"
     assert envelope.context_token == "ctx-bob"
     assert envelope.content == "[image]\nvoice transcript\nhello"
+
+
+def test_normalize_weixin_polled_message():
+    """Polled getupdates messages should normalize into runtime envelopes."""
+
+    envelope = normalize_weixin_polled_message(
+        {
+            "from_user_id": "alice@im.wechat",
+            "message_id": 7,
+            "create_time_ms": "1710000001",
+            "context_token": "ctx-poll-7",
+            "item_list": [{"type": 1, "text_item": {"text": "hello from poll"}}],
+        },
+        account_id="main",
+    )
+
+    assert envelope is not None
+    assert envelope.account_id == "main"
+    assert envelope.sender_id == "alice@im.wechat"
+    assert envelope.message_id == "7"
+    assert envelope.context_token == "ctx-poll-7"
+    assert envelope.content == "hello from poll"
+
+
+def test_weixin_updates_cursor_roundtrip(tmp_path):
+    """Polling cursors should round-trip through local storage."""
+
+    settings = Settings(data_dir=tmp_path)
+    save_weixin_updates_cursor("default", "cursor-123", settings=settings)
+    loaded = load_weixin_updates_cursor("default", settings=settings)
+
+    assert loaded == "cursor-123"
 
 
 def test_build_weixin_message():
@@ -102,6 +158,31 @@ def test_weixin_token_helpers():
     assert bearer_token == "xyz"
     assert is_valid_weixin_webhook_token("secret", "secret") is True
     assert is_valid_weixin_webhook_token("secret", "wrong") is False
+
+
+def test_format_task_for_weixin_uses_rich_chat_formatter():
+    """Weixin replies should not fall back to generic task-success text for weather data."""
+
+    task = Task(
+        message=Message(content="今天热吗？", user_id="alice", channel="weixin"),
+        user_id="alice",
+        channel="weixin",
+        state=TaskState.COMPLETED,
+    )
+    task.result = ExecutionResult.success(
+        message="Task completed successfully",
+        data={
+            "step-weather": {
+                "status_code": 200,
+                "body": _sample_weather_body(),
+            }
+        },
+    )
+
+    text = format_task_for_weixin(task)
+
+    assert text
+    assert text != "Task completed successfully"
 
 
 def test_send_weixin_text_reply():
@@ -136,6 +217,8 @@ def test_send_weixin_text_reply():
         assert result is not None
         assert captured["url"] == "https://ilinkai.weixin.qq.com/ilink/bot/sendmessage"
         assert "wx-token" in captured["headers"]["authorization"]
+        assert captured["headers"]["authorizationtype"] == "ilink_bot_token"
+        assert "x-wechat-uin" in captured["headers"]
         assert '"to_user_id":"alice@im.wechat"' in captured["body"]
         assert '"context_token":"ctx-42"' in captured["body"]
 
@@ -233,6 +316,145 @@ def test_weixin_qr_login_persists_account(tmp_path):
         assert stored.token == "qr-bot-token"
         assert stored.remote_account_id == "remote-bot"
         assert stored.user_id == "wx-user"
+
+    asyncio.run(main())
+
+
+def test_fetch_weixin_updates():
+    """getupdates requests should include bearer auth and cursor payload."""
+
+    async def main():
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            captured["authorization"] = request.headers.get("Authorization")
+            captured["authorizationtype"] = request.headers.get("AuthorizationType")
+            captured["x-wechat-uin"] = request.headers.get("X-WECHAT-UIN")
+            captured["body"] = request.content.decode("utf-8")
+            return httpx.Response(
+                200,
+                json={
+                    "ret": 0,
+                    "errcode": 0,
+                    "msgs": [],
+                    "get_updates_buf": "next-buf",
+                    "longpolling_timeout_ms": 35000,
+                },
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        settings = Settings(
+            weixin_base_url="https://ilinkai.weixin.qq.com",
+            default_timeout=30,
+        )
+        result = await fetch_weixin_updates(
+            StoredWeixinAccount(
+                token="wx-token",
+                base_url="https://ilinkai.weixin.qq.com",
+            ),
+            get_updates_buf="buf-1",
+            settings=settings,
+            client=client,
+            timeout_ms=12345,
+        )
+        await client.aclose()
+
+        assert result["get_updates_buf"] == "next-buf"
+        assert captured["url"] == "https://ilinkai.weixin.qq.com/ilink/bot/getupdates"
+        assert captured["authorization"] == "Bearer wx-token"
+        assert captured["authorizationtype"] == "ilink_bot_token"
+        assert captured["x-wechat-uin"]
+        assert '"get_updates_buf":"buf-1"' in captured["body"]
+
+    asyncio.run(main())
+
+
+def test_weixin_qr_login_accepts_scanned_alias(tmp_path):
+    """QR polling should treat scanned/scaned aliases as the same in-progress state."""
+
+    async def main():
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/ilink/bot/get_bot_qrcode"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "qrcode": "qr-session-2",
+                        "qrcode_img_content": "weixin://dl/business/?ticket=xyz987",
+                    },
+                )
+
+            if request.url.path.endswith("/ilink/bot/get_qrcode_status"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "scanned",
+                    },
+                )
+
+            return httpx.Response(404)
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        settings = Settings(
+            data_dir=tmp_path,
+            weixin_base_url="https://ilinkai.weixin.qq.com",
+        )
+
+        session = await start_weixin_qr_login(settings=settings, client=client)
+        updated = await poll_weixin_qr_login(session.session_id, settings=settings, client=client)
+        await client.aclose()
+
+        assert session.status == "wait"
+        assert updated.status == "scaned"
+        assert updated.error == ""
+
+    asyncio.run(main())
+
+
+def test_weixin_qr_login_accepts_confirmed_alt_fields(tmp_path):
+    """QR polling should accept confirmed payloads that use alternate key names."""
+
+    async def main():
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/ilink/bot/get_bot_qrcode"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "qrcode": "qr-session-3",
+                        "qrcode_img_content": "weixin://dl/business/?ticket=alt123",
+                    },
+                )
+
+            if request.url.path.endswith("/ilink/bot/get_qrcode_status"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "confirmed",
+                        "token": "qr-bot-token-alt",
+                        "bot_id": "remote-bot-alt",
+                        "base_url": "https://ilinkai.weixin.qq.com",
+                        "user_id": "wx-user-alt",
+                    },
+                )
+
+            return httpx.Response(404)
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        settings = Settings(
+            data_dir=tmp_path,
+            weixin_base_url="https://ilinkai.weixin.qq.com",
+        )
+
+        session = await start_weixin_qr_login(settings=settings, client=client)
+        updated = await poll_weixin_qr_login(session.session_id, settings=settings, client=client)
+        stored = load_stored_weixin_account(settings=settings)
+        await client.aclose()
+
+        assert updated.status == "confirmed"
+        assert stored is not None
+        assert stored.token == "qr-bot-token-alt"
+        assert stored.remote_account_id == "remote-bot-alt"
+        assert stored.user_id == "wx-user-alt"
 
     asyncio.run(main())
 
@@ -435,12 +657,50 @@ def test_weixin_test_route_live(monkeypatch):
     assert data["delivery"]["status_code"] == 200
 
 
-def test_weixin_test_route_dry_run(monkeypatch):
+def test_weixin_test_route_session_timeout(monkeypatch):
+    """Manual test route should surface Weixin session timeout clearly."""
+
+    from localclaw.channels import web as web_channel
+
+    settings = Settings(
+        weixin_enabled=True,
+        weixin_reply_via_api=True,
+        weixin_bot_token="wx-token",
+    )
+
+    async def fake_send(envelope, reply_text, settings, context_token_override=None):
+        return {"status_code": 200, "body": {"errcode": -14, "errmsg": "session timeout"}}
+
+    monkeypatch.setattr(web_channel, "get_settings", lambda: settings)
+    monkeypatch.setattr(web_channel, "send_weixin_text_reply", fake_send)
+    monkeypatch.setattr(web_channel, "initialize_system", lambda: None)
+
+    app = web_channel.create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/channels/weixin/test",
+            json={
+                "recipient": "alice@im.wechat",
+                "context_token": "ctx-manual",
+                "text": "ping",
+            },
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert data["mode"] == "live"
+    assert "session timed out" in data["summary"].lower()
+    assert data["delivery"]["body"]["errcode"] == -14
+
+
+def test_weixin_test_route_dry_run(monkeypatch, tmp_path):
     """Manual test route should return dry-run details if config is incomplete."""
 
     from localclaw.channels import web as web_channel
 
     settings = Settings(
+        data_dir=tmp_path,
         weixin_enabled=True,
         weixin_reply_via_api=False,
     )

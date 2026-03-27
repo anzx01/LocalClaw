@@ -65,6 +65,10 @@ class ExecutionEngine:
             llm_enabled=self._settings.llm_enabled,
             llm_parse_only=self._settings.llm_parse_only,
         )
+        self._fallback_parser = create_default_parser(
+            llm_enabled=False,
+            llm_parse_only=False,
+        )
         self._planner = planner or create_default_planner()
         self._tool_registry = tool_registry or get_tool_registry()
         self._skill_registry = skill_registry or get_skill_registry()
@@ -131,14 +135,38 @@ class ExecutionEngine:
                 )
 
             if self._settings.llm_enabled and self._settings.llm_parse_only and not self._parser_override:
-                decision = await self._openclaw_runtime.decide(message, task.context)
-                self._logger.info(
-                    "Task %s: OpenClaw runtime decision mode '%s'",
-                    task.id,
-                    decision.mode.value,
-                )
+                decision: Optional[AgentDecision] = None
+                decision_timeout = max(0.1, float(self._settings.default_timeout))
+                try:
+                    decision = await asyncio.wait_for(
+                        self._openclaw_runtime.decide(message, task.context),
+                        timeout=decision_timeout,
+                    )
+                    self._logger.info(
+                        "Task %s: OpenClaw runtime decision mode '%s'",
+                        task.id,
+                        decision.mode.value,
+                    )
+                except asyncio.TimeoutError:
+                    self._logger.warning(
+                        "Task %s: OpenClaw runtime decision timed out after %.1fs; using deterministic parser fallback",
+                        task.id,
+                        decision_timeout,
+                    )
 
-                if decision.mode == AgentDecisionMode.ANSWER and decision.answer:
+                if decision is None:
+                    intent = await self._fallback_parser.parse(message)
+                    task.intent = intent
+                    plan = await self._planner.plan(intent, task.context)
+                    if plan.intent is None:
+                        plan.intent = intent
+                    task.plan = plan
+                    self._logger.info(
+                        "Task %s: Planned via deterministic fallback intent '%s'",
+                        task.id,
+                        intent.intent,
+                    )
+                elif decision.mode == AgentDecisionMode.ANSWER and decision.answer:
                     self._complete_with_direct_answer(task, decision)
                 else:
                     intent = decision.to_intent()

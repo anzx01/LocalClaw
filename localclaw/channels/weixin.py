@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 import uuid
+import base64
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -16,6 +17,7 @@ from urllib.parse import quote
 import httpx
 
 from localclaw.channels.wechat_personal import format_task_for_personal_wechat
+from localclaw.channels.result_formatter import format_task_for_chat
 from localclaw.config.settings import Settings, get_settings
 from localclaw.core.models import Message, Task
 
@@ -26,6 +28,8 @@ DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com"
 WEIXIN_QR_LOGIN_BOT_TYPE = "3"
 WEIXIN_QR_CLIENT_VERSION = "1"
 WEIXIN_QR_SESSION_TTL = timedelta(minutes=15)
+WEIXIN_GET_UPDATES_DEFAULT_TIMEOUT_MS = 35_000
+WEIXIN_SESSION_EXPIRED_ERRCODE = -14
 MSG_TYPE_BOT = 2
 MSG_STATE_FINISH = 2
 MSG_ITEM_TEXT = 1
@@ -91,6 +95,50 @@ def _utcnow_iso() -> str:
     return _utcnow().isoformat()
 
 
+def _build_weixin_post_headers(bot_token: str) -> Dict[str, str]:
+    """Build Weixin API POST headers compatible with native clients."""
+
+    token = str(bot_token or "").strip()
+    if not token:
+        raise ValueError("Missing Weixin bot token")
+
+    random_bytes = uuid.uuid4().bytes
+    wechat_uin = int.from_bytes(random_bytes[:4], byteorder="big", signed=False)
+    encoded_uin = base64.b64encode(str(wechat_uin).encode("utf-8")).decode("ascii")
+    return {
+        "Authorization": f"Bearer {token}",
+        "AuthorizationType": "ilink_bot_token",
+        "X-WECHAT-UIN": encoded_uin,
+        "Content-Type": "application/json",
+    }
+
+
+def _normalize_weixin_qr_status(raw_status: Any) -> str:
+    """Normalize Weixin QR status values across known upstream variants."""
+
+    status = str(raw_status or "").strip().lower()
+    aliases = {
+        "0": "wait",
+        "wait": "wait",
+        "waiting": "wait",
+        "pending": "wait",
+        "1": "scaned",
+        "scan": "scaned",
+        "scaned": "scaned",
+        "scanned": "scaned",
+        "2": "confirmed",
+        "confirmed": "confirmed",
+        "success": "confirmed",
+        "ok": "confirmed",
+        "3": "expired",
+        "expired": "expired",
+        "timeout": "expired",
+        "error": "error",
+        "failed": "error",
+    }
+    return aliases.get(status, status)
+
+
 def normalize_weixin_account_id(account_id: str) -> str:
     """Normalize an optional account id into a local storage key."""
 
@@ -120,6 +168,16 @@ def _weixin_account_file_path(settings: Settings, account_id: str = "") -> Path:
     return (
         _weixin_state_root(settings)
         / "accounts"
+        / f"{_sanitize_weixin_account_key(account_id)}.json"
+    )
+
+
+def _weixin_sync_file_path(settings: Settings, account_id: str = "") -> Path:
+    """Resolve the persisted sync-cursor path for Weixin polling."""
+
+    return (
+        _weixin_state_root(settings)
+        / "sync"
         / f"{_sanitize_weixin_account_key(account_id)}.json"
     )
 
@@ -208,6 +266,58 @@ def get_weixin_connected_account(
     """Return the persisted Weixin account, if LocalClaw has one."""
 
     return load_stored_weixin_account(settings=settings, account_id=account_id)
+
+
+def list_stored_weixin_account_ids(settings: Optional[Settings] = None) -> list[str]:
+    """List account ids that have persisted Weixin login state."""
+
+    resolved_settings = settings or get_settings()
+    root = _weixin_state_root(resolved_settings) / "accounts"
+    if not root.exists():
+        return []
+
+    account_ids: list[str] = []
+    for entry in root.glob("*.json"):
+        account_id = normalize_weixin_account_id(entry.stem)
+        if account_id:
+            account_ids.append(account_id)
+    return sorted(set(account_ids))
+
+
+def load_weixin_updates_cursor(
+    account_id: str = "",
+    settings: Optional[Settings] = None,
+) -> str:
+    """Load persisted getupdates cursor for an account."""
+
+    resolved_settings = settings or get_settings()
+    path = _weixin_sync_file_path(resolved_settings, account_id)
+    if not path.exists():
+        return ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    if isinstance(payload, dict):
+        return str(payload.get("get_updates_buf") or "").strip()
+    if isinstance(payload, str):
+        return payload.strip()
+    return ""
+
+
+def save_weixin_updates_cursor(
+    account_id: str,
+    get_updates_buf: str,
+    settings: Optional[Settings] = None,
+) -> Path:
+    """Persist getupdates cursor for an account."""
+
+    resolved_settings = settings or get_settings()
+    path = _weixin_sync_file_path(resolved_settings, account_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"get_updates_buf": str(get_updates_buf or "").strip()}
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+    return path
 
 
 def resolve_weixin_reply_configuration(
@@ -536,6 +646,47 @@ def normalize_weixin_webhook_payload(payload: Dict[str, Any]) -> WeixinEnvelope:
     )
 
 
+def normalize_weixin_polled_message(
+    message: Dict[str, Any],
+    account_id: str = "",
+) -> Optional[WeixinEnvelope]:
+    """Normalize a message returned by ilink/bot/getupdates into an envelope."""
+
+    if not isinstance(message, dict):
+        return None
+
+    sender_id = _pick_string(message, "from_user_id")
+    direct_text = _pick_string(message, "text")
+    items = _as_list(message.get("item_list"))
+    content = direct_text or summarize_weixin_items(items)
+    if not sender_id or not content:
+        return None
+
+    message_id = _coerce_flexible_id(message.get("message_id"))
+    timestamp_ms_raw = message.get("create_time_ms", message.get("timestamp_ms"))
+    timestamp_ms: Optional[int]
+    if isinstance(timestamp_ms_raw, int):
+        timestamp_ms = timestamp_ms_raw
+    elif isinstance(timestamp_ms_raw, str) and timestamp_ms_raw.strip().isdigit():
+        timestamp_ms = int(timestamp_ms_raw.strip())
+    else:
+        timestamp_ms = None
+
+    context_token = _pick_string(message, "context_token")
+    if context_token:
+        cache_weixin_context_token(account_id, sender_id, context_token)
+
+    return WeixinEnvelope(
+        content=content,
+        sender_id=sender_id,
+        account_id=account_id,
+        message_id=message_id,
+        timestamp_ms=timestamp_ms,
+        context_token=context_token,
+        raw_payload={"source": "poll", "message": message},
+    )
+
+
 def build_weixin_message(envelope: WeixinEnvelope) -> Message:
     """Convert a normalized Weixin payload to a runtime message."""
 
@@ -556,6 +707,11 @@ def build_weixin_message(envelope: WeixinEnvelope) -> Message:
 def format_task_for_weixin(task: Task) -> str:
     """Format a task result for Weixin replies."""
 
+    # Prefer the richer chat formatter so HTTP/weather/tool outputs
+    # are rendered into user-facing text instead of generic success strings.
+    text = format_task_for_chat(task)
+    if isinstance(text, str) and text.strip():
+        return text
     return format_task_for_personal_wechat(task)
 
 
@@ -665,6 +821,51 @@ async def fetch_weixin_login_status(
             await client.aclose()
 
 
+async def fetch_weixin_updates(
+    account: StoredWeixinAccount,
+    *,
+    get_updates_buf: str = "",
+    settings: Optional[Settings] = None,
+    client: Optional[httpx.AsyncClient] = None,
+    timeout_ms: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Call ilink/bot/getupdates for a stored Weixin account."""
+
+    token = str(account.token or "").strip()
+    if not token:
+        raise ValueError("Missing Weixin bot token for getupdates")
+
+    resolved_settings = settings or get_settings()
+    base_url = (account.base_url or resolved_settings.weixin_base_url or DEFAULT_WEIXIN_BASE_URL).rstrip("/")
+    url = f"{base_url}/ilink/bot/getupdates"
+    timeout_seconds = (
+        max(float(timeout_ms or 0) / 1000.0, 1.0)
+        if timeout_ms is not None
+        else resolved_settings.default_timeout
+    )
+    payload = {
+        "get_updates_buf": str(get_updates_buf or "").strip(),
+        "base_info": {"channel_version": "localclaw"},
+    }
+    headers = _build_weixin_post_headers(token)
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=timeout_seconds)
+        close_client = True
+
+    try:
+        response = await client.post(url, json=payload, headers=headers, timeout=timeout_seconds)
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict):
+            raise ValueError("Unexpected Weixin getupdates response shape")
+        return body
+    finally:
+        if close_client:
+            await client.aclose()
+
+
 async def start_weixin_qr_login(
     settings: Optional[Settings] = None,
     account_id: str = "",
@@ -727,7 +928,7 @@ async def poll_weixin_qr_login(
             error=str(exc),
         )
 
-    status = str(payload.get("status") or "").strip().lower()
+    status = _normalize_weixin_qr_status(payload.get("status"))
     if status in {"wait", "scaned"}:
         return _save_weixin_qr_login_session_status(session, status=status or "wait")
 
@@ -739,8 +940,13 @@ async def poll_weixin_qr_login(
         )
 
     if status == "confirmed":
-        bot_token = str(payload.get("bot_token") or "").strip()
-        remote_account_id = str(payload.get("ilink_bot_id") or "").strip()
+        bot_token = str(payload.get("bot_token") or payload.get("token") or "").strip()
+        remote_account_id = str(
+            payload.get("ilink_bot_id")
+            or payload.get("bot_id")
+            or payload.get("botid")
+            or ""
+        ).strip()
         if not bot_token or not remote_account_id:
             return _save_weixin_qr_login_session_status(
                 session,
@@ -754,9 +960,12 @@ async def poll_weixin_qr_login(
         )
         connected_account = StoredWeixinAccount(
             token=bot_token,
-            base_url=str(payload.get("baseurl") or session.base_url).strip() or session.base_url,
+            base_url=(
+                str(payload.get("baseurl") or payload.get("base_url") or session.base_url).strip()
+                or session.base_url
+            ),
             remote_account_id=remote_account_id,
-            user_id=str(payload.get("ilink_user_id") or "").strip(),
+            user_id=str(payload.get("ilink_user_id") or payload.get("user_id") or "").strip(),
             saved_at=_utcnow_iso(),
             context_tokens=(
                 deepcopy(existing_account.context_tokens)
@@ -778,7 +987,10 @@ async def poll_weixin_qr_login(
     return _save_weixin_qr_login_session_status(
         session,
         status="error",
-        error=f"Unexpected Weixin QR login status: {status or 'missing'}",
+        error=(
+            "Unexpected Weixin QR login status: "
+            f"{status or 'missing'}; payload={json.dumps(payload, ensure_ascii=True)}"
+        ),
     )
 
 
@@ -829,8 +1041,7 @@ async def send_weixin_text_reply(
         "base_info": {"channel_version": "localclaw"},
     }
     headers = {
-        "Authorization": f"Bearer {reply_config['bot_token']}",
-        "Content-Type": "application/json",
+        **_build_weixin_post_headers(reply_config["bot_token"]),
     }
 
     close_client = False
