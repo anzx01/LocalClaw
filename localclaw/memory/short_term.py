@@ -1,5 +1,6 @@
 """Short-term memory for session-based storage."""
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -20,7 +21,7 @@ class MemoryEntry:
         if self.ttl_seconds is None:
             return False
         
-        elapsed = (datetime.now() - self.created_at).total_seconds()
+        elapsed = (datetime.now() - self.updated_at).total_seconds()
         return elapsed > self.ttl_seconds
 
 
@@ -150,3 +151,12 @@ class SessionManager:
         for session in self._sessions.values():
             total += session.cleanup_expired()
         return total
+
+    async def start_cleanup_task(self, interval_seconds: float = 60.0) -> asyncio.Task:
+        """Start a background task that periodically removes expired entries."""
+        async def _loop() -> None:
+            while True:
+                await asyncio.sleep(interval_seconds)
+                self.cleanup_all_expired()
+
+        return asyncio.create_task(_loop())

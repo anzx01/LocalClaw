@@ -170,7 +170,7 @@ async def test_engine_local_model_decision_timeout_falls_back_to_deterministic_p
             _env_file=None,
             llm_enabled=True,
             llm_parse_only=True,
-            default_timeout=0.05,
+            runtime_decision_timeout=0.05,
         ),
         planner=create_default_planner(),
         verifier=create_default_verifier(),
@@ -188,7 +188,7 @@ async def test_engine_local_model_decision_timeout_falls_back_to_deterministic_p
 
 @pytest.mark.asyncio
 async def test_engine_local_model_unknown_does_not_use_legacy_parser_fallback(monkeypatch):
-    """In llm_parse_only mode, planner retries should stay on the local-model path."""
+    """In llm_parse_only mode, unknown decisions should stay on the runtime path."""
 
     class UnknownRuntime(OpenClawRuntime):
         def __init__(self):
@@ -202,21 +202,10 @@ async def test_engine_local_model_unknown_does_not_use_legacy_parser_fallback(mo
                 raw_message=message.content,
             )
 
-    class FakeProvider:
-        async def is_available(self):
-            return True
-
-        async def generate(self, prompt, max_tokens=None, temperature=0.0):
-            class Response:
-                content = '{"intent":"unknown","params":{}}'
-
-            return Response()
-
     class UnavailableChatProvider:
         async def is_available(self):
             return False
 
-    monkeypatch.setattr("localclaw.core.planner.get_llm_provider", lambda: FakeProvider())
     monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: UnavailableChatProvider())
 
     engine = ExecutionEngine(
@@ -233,7 +222,7 @@ async def test_engine_local_model_unknown_does_not_use_legacy_parser_fallback(mo
     assert task.state == TaskState.COMPLETED
     assert task.intent is not None
     assert task.intent.intent == "unknown"
-    assert task.intent.source == "planner_llm"
+    assert task.intent.source == "openclaw_runtime"
 
 
 @pytest.mark.asyncio
@@ -303,6 +292,75 @@ async def test_engine_local_model_unknown_falls_back_to_free_chat(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_engine_local_model_unknown_can_fallback_to_web_skill(monkeypatch):
+    """Unknown planner outcomes should execute fallback skill/tool decisions when provided."""
+
+    class UnknownRuntime(OpenClawRuntime):
+        def __init__(self):
+            pass
+
+        async def decide(self, message, context=None):
+            return AgentDecision(
+                mode=AgentDecisionMode.UNKNOWN,
+                confidence=0.0,
+                source="openclaw_runtime",
+                raw_message=message.content,
+            )
+
+        async def fallback_to_chat_answer(self, message, context=None):
+            return AgentDecision(
+                mode=AgentDecisionMode.SKILL,
+                skill_name="web-access",
+                params={"request": message.content},
+                confidence=0.8,
+                source="openclaw_runtime_web_fallback",
+                raw_message=message.content,
+            )
+
+    class PlannerProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"intent":"unknown","params":{}}'
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.planner.get_llm_provider", lambda: PlannerProvider())
+
+    registry = SkillRegistry()
+    web_skill = create_skill_from_dict(
+        {
+            "name": "web-access",
+            "description": "Fallback web lookup",
+            "type": "workflow",
+            "inputs": {"request": "string"},
+            "actions": [{"type": "transform", "template": "web lookup: {{request}}"}],
+        }
+    )
+    web_skill.enable()
+    registry.register(web_skill)
+
+    engine = ExecutionEngine(
+        settings=Settings(_env_file=None, llm_enabled=True, llm_parse_only=True),
+        planner=create_default_planner(),
+        verifier=create_default_verifier(),
+        tool_registry=ToolRegistry(),
+        skill_registry=registry,
+        openclaw_runtime=UnknownRuntime(),
+    )
+
+    task = await engine.process_message(Message(content="量子纠缠是什么意思？", user_id="u1", channel="test"))
+
+    assert task.state == TaskState.COMPLETED
+    assert task.intent is not None
+    assert task.intent.intent == "skill.web-access"
+    step_id = task.plan.steps[0].id
+    assert task.result.data[step_id]["result"] == "web lookup: 量子纠缠是什么意思？"
+
+
+@pytest.mark.asyncio
 async def test_engine_local_model_pseudo_chat_intent_falls_back_to_free_chat(monkeypatch):
     """Pseudo conversational intents should still route to chat fallback answers."""
 
@@ -359,30 +417,22 @@ async def test_engine_local_model_pseudo_chat_intent_falls_back_to_free_chat(mon
 
 
 @pytest.mark.asyncio
-async def test_engine_local_model_can_plan_drive_directory_listing(monkeypatch):
-    """Drive-root folder questions should be handled by the local-model planner path."""
+async def test_engine_local_model_can_plan_drive_directory_listing():
+    """Drive-root folder questions should execute from the runtime model intent."""
 
-    class UnknownRuntime(OpenClawRuntime):
+    class FolderRuntime(OpenClawRuntime):
         def __init__(self):
             pass
 
         async def decide(self, message, context=None):
             return AgentDecision(
-                mode=AgentDecisionMode.UNKNOWN,
-                confidence=0.0,
+                mode=AgentDecisionMode.INTENT,
+                intent_name="list_folders",
+                params={"path": "D:/", "folders_only": True},
+                confidence=0.9,
                 source="openclaw_runtime",
                 raw_message=message.content,
             )
-
-    class FakeProvider:
-        async def is_available(self):
-            return True
-
-        async def generate(self, prompt, max_tokens=None, temperature=0.0):
-            class Response:
-                content = '{"intent":"list_folders","params":{"path":"D:/","folders_only":true}}'
-
-            return Response()
 
     class MockFileListTool(Tool):
         name = "file_list"
@@ -400,8 +450,6 @@ async def test_engine_local_model_can_plan_drive_directory_listing(monkeypatch):
                 }
             )
 
-    monkeypatch.setattr("localclaw.core.planner.get_llm_provider", lambda: FakeProvider())
-
     tool_registry = ToolRegistry()
     tool_registry.register(MockFileListTool())
 
@@ -411,7 +459,7 @@ async def test_engine_local_model_can_plan_drive_directory_listing(monkeypatch):
         verifier=create_default_verifier(),
         tool_registry=tool_registry,
         skill_registry=SkillRegistry(),
-        openclaw_runtime=UnknownRuntime(),
+        openclaw_runtime=FolderRuntime(),
     )
 
     task = await engine.process_message(Message(content="我d盘有哪些目录？", user_id="u1", channel="test"))
@@ -419,7 +467,7 @@ async def test_engine_local_model_can_plan_drive_directory_listing(monkeypatch):
     assert task.state == TaskState.COMPLETED
     assert task.intent is not None
     assert task.intent.intent == "list_folders"
-    assert task.intent.source == "planner_llm"
+    assert task.intent.source == "openclaw_runtime"
     step_id = task.plan.steps[0].id
     assert task.result.data[step_id]["path"] == "D:/"
     assert task.result.data[step_id]["directories"] == ["Projects", "Temp"]
@@ -985,3 +1033,63 @@ async def test_engine_executes_internal_local_model_prompt_skill():
     assert task.state == TaskState.COMPLETED
     step_id = task.plan.steps[0].id
     assert task.result.data[step_id]["content"] == "This sounds much more natural."
+
+
+@pytest.mark.asyncio
+async def test_planner_prefers_web_skill_for_date_query_when_available():
+    """Date/time intents should prefer web-access skill plans when installed."""
+
+    planner = create_default_planner()
+    registry = SkillRegistry()
+    web_access = create_skill_from_dict(
+        {
+            "name": "web-access",
+            "version": "1.0.0",
+            "description": "Browse and fetch live web information",
+            "type": "workflow",
+            "inputs": {"request": "string"},
+            "actions": [{"type": "transform", "template": "browse {{request}}"}],
+        }
+    )
+    web_access.enable()
+    registry.register(web_access)
+    planner.set_skill_registry(registry)
+
+    intent = Intent(intent="date_query", params={}, raw_message="今天周几？")
+    plan = await planner.plan(intent, None)
+
+    assert plan.skill_name == "web-access"
+    assert len(plan.steps) == 1
+    assert plan.steps[0].type == StepType.TRANSFORM
+
+
+@pytest.mark.asyncio
+async def test_planner_prefers_weather_skill_for_weather_intent_when_available():
+    """Weather intents should prefer installed weather skills over raw http_get fallback."""
+
+    planner = create_default_planner()
+    registry = SkillRegistry()
+    weather = create_skill_from_dict(
+        {
+            "name": "weather",
+            "version": "1.0.0",
+            "description": "Weather skill",
+            "type": "workflow",
+            "inputs": {"location": "string"},
+            "actions": [{"type": "transform", "template": "weather {{location}}"}],
+        }
+    )
+    weather.enable()
+    registry.register(weather)
+    planner.set_skill_registry(registry)
+
+    intent = Intent(
+        intent="check_weather",
+        params={"location": "北京", "day_offset": 1, "day_label": "明天"},
+        raw_message="明天天气？",
+    )
+    plan = await planner.plan(intent, None)
+
+    assert plan.skill_name == "weather"
+    assert len(plan.steps) == 1
+    assert plan.steps[0].type == StepType.TRANSFORM

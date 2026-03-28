@@ -187,9 +187,9 @@ def create_skill_from_dict(data: Dict[str, Any]) -> DeclarativeSkill:
         ))
     
     definition = SkillDefinition(
-        name=data.get("name", "unknown"),
-        version=data.get("version", "1.0.0"),
-        description=data.get("description", ""),
+        name=str(data.get("name", "unknown")),
+        version=str(data.get("version", "1.0.0")),
+        description=str(data.get("description", "")),
         type=SkillType(data.get("type", "atomic")),
         inputs=data.get("inputs", {}),
         outputs=data.get("outputs", {}),

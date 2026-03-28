@@ -1,10 +1,10 @@
-"""Tests for Windows background service helpers."""
+"""Tests for Windows background auto-start helpers."""
 
 from localclaw.system import windows_service
 
 
-def test_status_reports_not_installed_when_service_missing(monkeypatch):
-    """Query code 1060 should map to a clean NOT_INSTALLED status."""
+def test_status_reports_not_installed_when_task_and_service_are_missing(monkeypatch):
+    """Missing scheduled task and legacy service should map to NOT_INSTALLED."""
 
     monkeypatch.setattr(windows_service, "_is_windows", lambda: True)
     monkeypatch.setattr(windows_service, "_is_admin", lambda: True)
@@ -13,7 +13,12 @@ def test_status_reports_not_installed_when_service_missing(monkeypatch):
         "_build_runtime_command",
         lambda: ("C:/Python/python.exe", "G:/LocalClaw/run_server.py", '"C:/Python/python.exe" "G:/LocalClaw/run_server.py"'),
     )
-    monkeypatch.setattr(windows_service, "_run_sc", lambda args, timeout=8.0: (1060, "FAILED 1060"))
+    monkeypatch.setattr(windows_service, "_query_scheduled_task", lambda name: (None, "not found"))
+    monkeypatch.setattr(
+        windows_service,
+        "_query_legacy_service_status",
+        lambda service_name, python_executable, script_path, command: (None, None),
+    )
 
     status = windows_service.get_background_service_status(service_name="LocalClaw")
 
@@ -22,8 +27,8 @@ def test_status_reports_not_installed_when_service_missing(monkeypatch):
     assert status["state"] == "NOT_INSTALLED"
 
 
-def test_status_parses_running_service_details(monkeypatch):
-    """Running service output should populate state/startup/path metadata."""
+def test_status_prefers_scheduled_task_details(monkeypatch):
+    """Scheduled task metadata should populate running/startup/path fields."""
 
     monkeypatch.setattr(windows_service, "_is_windows", lambda: True)
     monkeypatch.setattr(windows_service, "_is_admin", lambda: True)
@@ -33,20 +38,22 @@ def test_status_parses_running_service_details(monkeypatch):
         lambda: ("C:/Python/python.exe", "G:/LocalClaw/run_server.py", '"C:/Python/python.exe" "G:/LocalClaw/run_server.py"'),
     )
 
-    def fake_run_sc(args, timeout=8.0):
-        if args[0] == "query":
-            return 0, "STATE              : 4  RUNNING"
-        if args[0] == "qc":
-            return 0, "\n".join(
-                [
-                    "START_TYPE         : 2   AUTO_START",
-                    'BINARY_PATH_NAME   : "C:/Python/python.exe" "G:/LocalClaw/run_server.py"',
-                    "DISPLAY_NAME       : LocalClaw Runtime",
-                ]
-            )
-        return 0, ""
-
-    monkeypatch.setattr(windows_service, "_run_sc", fake_run_sc)
+    monkeypatch.setattr(
+        windows_service,
+        "_query_scheduled_task",
+        lambda name: (
+            {
+                "task_name": name,
+                "state": "Running",
+                "last_task_result": 0,
+                "execute": "C:/Python/python.exe",
+                "arguments": '"G:/LocalClaw/run_server.py"',
+                "working_directory": "G:/LocalClaw",
+                "trigger_kinds": ["MSFT_TaskBootTrigger"],
+            },
+            None,
+        ),
+    )
 
     status = windows_service.get_background_service_status(service_name="LocalClaw")
 
@@ -87,10 +94,10 @@ def test_install_requires_admin_permissions(monkeypatch):
     assert "Administrator" in result["message"]
 
 
-def test_install_creates_service_when_missing(monkeypatch):
-    """Install action should call sc create and return changed=True."""
+def test_install_registers_scheduled_task_when_missing(monkeypatch):
+    """Install action should register the scheduled task and return changed=True."""
 
-    calls = []
+    ps_scripts = []
     query_count = {"value": 0}
 
     def fake_status(service_name=windows_service.DEFAULT_SERVICE_NAME):
@@ -113,22 +120,60 @@ def test_install_creates_service_when_missing(monkeypatch):
             "message": "",
         }
 
-    def fake_run_sc(args, timeout=8.0):
-        calls.append(args)
-        return 0, "ok"
-
     monkeypatch.setattr(windows_service, "get_background_service_status", fake_status)
-    monkeypatch.setattr(windows_service, "_run_sc", fake_run_sc)
+    monkeypatch.setattr(windows_service, "_query_scheduled_task", lambda name: (None, "not found"))
+    monkeypatch.setattr(
+        windows_service,
+        "_query_legacy_service_status",
+        lambda service_name, python_executable, script_path, command: (None, None),
+    )
+    monkeypatch.setattr(
+        windows_service,
+        "_run_powershell",
+        lambda script, timeout=12.0: (ps_scripts.append(script) or 0, ""),
+    )
 
     result = windows_service.install_background_service(service_name="LocalClaw")
 
     assert result["ok"] is True
     assert result["changed"] is True
-    create_call = next(call for call in calls if call and call[0] == "create")
-    assert create_call[1] == "LocalClaw"
-    assert create_call[2] == "binPath="
-    assert create_call[4] == "start="
-    assert create_call[5] == "auto"
-    assert create_call[6] == "DisplayName="
-    assert create_call[7] == windows_service.DEFAULT_DISPLAY_NAME
+    assert ps_scripts
+    assert "Register-ScheduledTask" in ps_scripts[0]
+    assert "LocalClaw" in ps_scripts[0]
+
+
+def test_start_legacy_service_1053_returns_migration_hint(monkeypatch):
+    """Legacy service start failures should explain that this is not a winsock problem."""
+
+    monkeypatch.setattr(
+        windows_service,
+        "get_background_service_status",
+        lambda service_name=windows_service.DEFAULT_SERVICE_NAME: {
+            "supported": True,
+            "platform": "win32",
+            "service_name": service_name,
+            "display_name": "LocalClaw Runtime",
+            "installed": True,
+            "state": "STOPPED",
+            "running": False,
+            "startup_type": "AUTO_START",
+            "binary_path": '"C:/Python/python.exe" "G:/LocalClaw/run_server.py"',
+            "can_manage": True,
+            "python_executable": "C:/Python/python.exe",
+            "script_path": "G:/LocalClaw/run_server.py",
+            "command": '"C:/Python/python.exe" "G:/LocalClaw/run_server.py"',
+            "message": windows_service._LEGACY_SERVICE_HINT,
+        },
+    )
+    monkeypatch.setattr(windows_service, "_query_scheduled_task", lambda name: (None, "not found"))
+    monkeypatch.setattr(
+        windows_service,
+        "_run_sc",
+        lambda args, timeout=8.0: (1, "StartService FAILED 1053"),
+    )
+
+    result = windows_service.start_background_service(service_name="LocalClaw")
+
+    assert result["ok"] is False
+    assert "1053" in result["message"] or "Task Scheduler" in result["message"]
 

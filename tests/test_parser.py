@@ -138,6 +138,18 @@ async def test_default_parser_help():
 
 
 @pytest.mark.asyncio
+async def test_default_parser_date_and_time_queries():
+    """Chinese date/time questions should map to built-in deterministic intents."""
+    parser = create_default_parser()
+
+    date_intent = await parser.parse(Message(content="今天周几？"))
+    time_intent = await parser.parse(Message(content="现在几点了？"))
+
+    assert date_intent.intent == "date_query"
+    assert time_intent.intent == "time_now"
+
+
+@pytest.mark.asyncio
 async def test_default_parser_chinese_help_request():
     """Chinese capability questions should map to help instead of unknown."""
     parser = create_default_parser()
@@ -198,6 +210,36 @@ async def test_llm_parse_only_uses_local_model(monkeypatch):
     assert intent.intent == "check_weather"
     assert intent.params["day_offset"] == 2
     assert intent.params["day_label"] == "后天"
+    assert intent.source == "llm"
+
+
+@pytest.mark.asyncio
+async def test_llm_parse_only_extracts_last_json_object_from_reasoning(monkeypatch):
+    """LLM parsing should recover the final JSON object from verbose reasoning output."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            del prompt, max_tokens, temperature
+
+            class Response:
+                content = (
+                    'Example: {"intent":"unknown","params":{}}\n'
+                    "</think>\n"
+                    '{"intent":"check_weather","params":{"location":"上海","day_offset":1}}'
+                )
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.parser.get_llm_provider", lambda: FakeProvider())
+
+    parser = create_default_parser(llm_enabled=True, llm_parse_only=True)
+    intent = await parser.parse(Message(content="明天上海天气呢"))
+
+    assert intent.intent == "check_weather"
+    assert intent.params == {"location": "上海", "day_offset": 1}
     assert intent.source == "llm"
 
 

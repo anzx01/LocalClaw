@@ -487,6 +487,73 @@ class TestOllamaClient:
         assert changed is True
         assert client._ollama_config.model == "gemma3:4b"
 
+    @pytest.mark.asyncio
+    async def test_ollama_generate_falls_back_to_chat_when_response_is_thinking_only(self):
+        client = OllamaClient(OllamaConfig(model="qwen3:4b"))
+
+        class FakeResponse:
+            def __init__(self, status, payload=None, text=""):
+                self.status = status
+                self._payload = payload or {}
+                self._text = text
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def json(self):
+                return self._payload
+
+            async def text(self):
+                return self._text
+
+        class FakeSession:
+            def __init__(self):
+                self.requests = []
+                self._responses = [
+                    FakeResponse(
+                        200,
+                        {
+                            "response": "",
+                            "thinking": "step by step",
+                            "prompt_eval_count": 1,
+                            "eval_count": 2,
+                        },
+                    ),
+                    FakeResponse(
+                        200,
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": '{"mode":"answer","answer":"ok"}',
+                            },
+                            "prompt_eval_count": 1,
+                            "eval_count": 2,
+                        },
+                    ),
+                ]
+
+            def post(self, url, json):
+                self.requests.append((url, json))
+                return self._responses.pop(0)
+
+        session = FakeSession()
+        client._get_session = AsyncMock(return_value=session)
+
+        response = await client.generate("Return JSON only.", max_tokens=32, temperature=0.0)
+
+        assert response.content == '{"mode":"answer","answer":"ok"}'
+        assert response.metadata["generate_fallback"] == "chat_from_thinking"
+        assert response.metadata["thinking"] == "step by step"
+        assert session.requests[0][0].endswith("/api/generate")
+        assert session.requests[0][1]["think"] is False
+        assert session.requests[0][1]["format"] == "json"
+        assert session.requests[1][0].endswith("/api/chat")
+        assert session.requests[1][1]["think"] is False
+        assert session.requests[1][1]["format"] == "json"
+
 
 class TestOpenClawCompatibility:
     """Tests for OpenClaw skill compatibility."""

@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from enum import Enum
+import re
 from typing import Any, Dict, List, Optional
 
 from localclaw.config.settings import Settings, get_settings
@@ -69,6 +70,38 @@ class PermissionVerifier(VerifierBackend):
     
     HIGH_RISK_TOOLS = {"shell", "http_post", "browser_cdp"}
     CRITICAL_TOOLS = {"shell"}
+    LOW_RISK_BROWSER_PATTERNS = (
+        r"(?:今天|今日|明天|后天|周几|星期|几号|日期|时间|几点|天气|气温|温度|下雨|下雪)",
+        r"\b(?:today|tomorrow|yesterday|date|day|time|weekday|weather|forecast|temperature|rain|snow|hot|cold)\b",
+    )
+    BROWSER_MUTATION_MARKERS = (
+        "登录",
+        "注册",
+        "支付",
+        "购买",
+        "下单",
+        "上传",
+        "下载",
+        "删除",
+        "提交",
+        "填写",
+        "点击",
+        "click",
+        "submit",
+        "login",
+        "sign in",
+        "upload",
+        "download",
+        "delete",
+        "remove",
+        "buy",
+        "purchase",
+        "checkout",
+        "transfer",
+        "set_files",
+        "eval",
+        "script",
+    )
     
     def __init__(
         self,
@@ -82,6 +115,50 @@ class PermissionVerifier(VerifierBackend):
         self._approved_operations: set = set()
         self._settings = settings or get_settings()
         self._skill_registry = skill_registry or get_skill_registry()
+        self._auto_approve_readonly_browser_cdp = bool(
+            getattr(self._settings, "browser_cdp_auto_approve_readonly", True)
+        )
+
+    @staticmethod
+    def _is_question_like(text: str) -> bool:
+        """Best-effort detection for informational user questions."""
+
+        if not text:
+            return False
+        if "?" in text or "？" in text:
+            return True
+        lowered = text.lower()
+        return any(token in lowered for token in ("what", "when", "how", "which", "who", "where", "是不是", "吗"))
+
+    def _is_low_risk_browser_cdp_request(self, step: Step) -> bool:
+        """Classify read-only browser queries that can skip confirmation prompts."""
+
+        if (step.tool_name or "").strip() != "browser_cdp":
+            return False
+
+        payload = step.input or {}
+        action = str(payload.get("action") or "agent").strip().lower()
+        if action in {"check", "targets", "info", "fetch"}:
+            return True
+        if action != "agent":
+            return False
+
+        request_text = str(payload.get("request") or "").strip()
+        url_text = str(payload.get("url") or "").strip()
+        combined = f"{request_text} {url_text}".strip().lower()
+        if not combined:
+            return False
+
+        if any(marker in combined for marker in self.BROWSER_MUTATION_MARKERS):
+            return False
+
+        if url_text and not re.match(r"^https?://", url_text, re.IGNORECASE):
+            return False
+
+        if not self._is_question_like(request_text):
+            return False
+
+        return any(re.search(pattern, combined, re.IGNORECASE) for pattern in self.LOW_RISK_BROWSER_PATTERNS)
 
     def _get_skill_guard(self, step: Step) -> Dict[str, Any]:
         """Return post-install guard metadata for the source skill if present."""
@@ -107,6 +184,10 @@ class PermissionVerifier(VerifierBackend):
             tool_name = step.tool_name or ""
             if tool_name in self.CRITICAL_TOOLS:
                 return RiskLevel.CRITICAL
+            if tool_name == "browser_cdp":
+                if self._auto_approve_readonly_browser_cdp and self._is_low_risk_browser_cdp_request(step):
+                    return RiskLevel.LOW
+                return RiskLevel.HIGH
             if tool_name in self.HIGH_RISK_TOOLS:
                 return RiskLevel.HIGH
             return RiskLevel.LOW

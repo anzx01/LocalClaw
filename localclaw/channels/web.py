@@ -4,12 +4,13 @@ import json
 import asyncio
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -78,6 +79,20 @@ from localclaw.channels.weixin import (
     WEIXIN_SESSION_EXPIRED_ERRCODE,
 )
 from localclaw.channels.result_formatter import format_task_for_chat
+from localclaw.skills.loader import SkillLoader
+from localclaw.skills.registry import get_skill_registry
+from localclaw.skills.registry.clawhub import (
+    build_skill_detail_from_bundle,
+    build_uploaded_skill_bundle,
+    build_uploaded_skill_bundle_from_files,
+    cleanup_uploaded_skill_bundle,
+    get_local_registry,
+)
+from localclaw.skills.security_review import (
+    apply_post_install_guard,
+    build_post_install_guard,
+    review_skill_installation,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -299,6 +314,15 @@ class SkillInstallResponse(BaseModel):
     guard: Optional[Dict[str, Any]] = None
 
 
+class UploadedSkillScanResponse(BaseModel):
+    """Security review payload for a locally uploaded skill artifact."""
+
+    upload_token: str
+    filename: str
+    skill: Dict[str, Any]
+    scan: SkillSecurityReviewResponse
+
+
 class BackgroundServiceStatusResponse(BaseModel):
     """Status payload for LocalClaw background service management."""
 
@@ -382,6 +406,16 @@ class ConnectionManager:
 
 _manager = ConnectionManager()
 _weixin_poll_tasks: Dict[str, asyncio.Task] = {}
+_uploaded_skill_staging: Dict[str, Dict[str, Any]] = {}
+
+
+def _clear_uploaded_skill_stage(upload_token: str) -> None:
+    """Remove one staged upload and any temporary files behind it."""
+
+    staged = _uploaded_skill_staging.pop(upload_token, None)
+    if not staged:
+        return
+    cleanup_uploaded_skill_bundle(staged.get("temp_dir"))
 
 
 def _coerce_int(value: Any, default: int = 0) -> int:
@@ -1224,6 +1258,8 @@ async def lifespan(app: FastAPI):
     await _ensure_weixin_poll_tasks_running()
     logger.info("LocalClaw web server started")
     yield
+    for upload_token in list(_uploaded_skill_staging.keys()):
+        _clear_uploaded_skill_stage(upload_token)
     await _stop_weixin_poll_tasks()
     logger.info("LocalClaw web server stopped")
 
@@ -1525,6 +1561,153 @@ def create_app() -> FastAPI:
             "error": result.message,
             "scan": result.data.get("scan"),
             "guard": result.data.get("guard"),
+        }
+
+    @app.post("/api/skills/upload/scan", response_model=UploadedSkillScanResponse)
+    async def upload_skill_scan(
+        file: Optional[UploadFile] = File(None),
+        files: Optional[List[UploadFile]] = File(None),
+    ):
+        """Stage a locally uploaded skill file/archive or directory and return its security review."""
+
+        uploaded_entries: List[tuple[str, bytes]] = []
+        for candidate in [*(files or []), *([file] if file is not None else [])]:
+            filename = str(candidate.filename or "").strip()
+            if not filename:
+                continue
+            payload = await candidate.read()
+            if not payload:
+                continue
+            uploaded_entries.append((filename, payload))
+
+        if not uploaded_entries:
+            raise HTTPException(status_code=400, detail="Upload is empty.")
+
+        display_name = uploaded_entries[0][0]
+        upload_source = "upload"
+        try:
+            if len(uploaded_entries) == 1:
+                skill_id, bundle, temp_dir = build_uploaded_skill_bundle(*uploaded_entries[0])
+            else:
+                skill_id, bundle, temp_dir = build_uploaded_skill_bundle_from_files(uploaded_entries)
+                upload_source = "upload_directory"
+                display_name = str((bundle.get("metadata", {}) or {}).get("upload_name") or display_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to parse uploaded skill: {exc}") from exc
+
+        detail = build_skill_detail_from_bundle(skill_id, bundle, source=upload_source)
+        scan = review_skill_installation(skill_id=skill_id, detail=detail, bundle=bundle)
+        scan.setdefault("metadata_snapshot", {})
+        scan["metadata_snapshot"]["source"] = upload_source
+        scan["metadata_snapshot"]["upload_name"] = display_name
+
+        upload_token = secrets.token_urlsafe(24)
+        _uploaded_skill_staging[upload_token] = {
+            "skill_id": skill_id,
+            "filename": display_name,
+            "bundle": bundle,
+            "detail": detail,
+            "scan": scan,
+            "temp_dir": temp_dir,
+        }
+
+        return {
+            "upload_token": upload_token,
+            "filename": display_name,
+            "skill": {
+                "id": skill_id,
+                "name": detail.get("name") or skill_id,
+                "version": detail.get("version") or "1.0.0",
+                "description": detail.get("description") or "",
+                "author": detail.get("author") or "Local upload",
+                "source": "upload",
+                "source_label": "Upload",
+            },
+            "scan": scan,
+        }
+
+    @app.post("/api/skills/upload/install", response_model=SkillInstallResponse)
+    async def install_uploaded_skill(
+        upload_token: str,
+        decision: Optional[str] = None,
+        overwrite_existing: bool = False,
+    ):
+        """Install a previously scanned local upload."""
+
+        staged = _uploaded_skill_staging.get(upload_token)
+        if not staged:
+            raise HTTPException(status_code=404, detail="Upload review token expired or was not found.")
+
+        skill_id = str(staged.get("skill_id") or "").strip()
+        scan = staged.get("scan") or {}
+        if (decision or "").strip().lower() != "proceed":
+            return {
+                "installed": False,
+                "requires_review": True,
+                "error": f"Skill {skill_id or 'upload'} requires a security review decision before installation",
+                "scan": scan,
+            }
+
+        local_registry = get_local_registry()
+        if local_registry.is_skill_installed(skill_id) and not overwrite_existing:
+            return {
+                "installed": False,
+                "requires_review": False,
+                "error": f"Skill {skill_id} is already installed. Retry with overwrite_existing=true to replace it.",
+                "scan": scan,
+            }
+
+        settings = get_settings()
+        bundle = staged["bundle"]
+        guard = build_post_install_guard(
+            bundle=bundle,
+            scan=scan,
+            protection_mode=settings.skill_install_protection_mode.value,
+            isolation_require_approval=settings.skill_isolation_require_approval,
+            isolation_block_critical=settings.skill_isolation_block_critical,
+        )
+        protected_bundle = apply_post_install_guard(bundle, guard)
+
+        from localclaw.skills.registry.clawhub import get_clawhub_client
+
+        registry = get_skill_registry()
+        if local_registry.is_skill_installed(skill_id):
+            registry.unregister(skill_id)
+
+        saved = get_clawhub_client().save_skill_bundle(skill_id, protected_bundle, local_registry.skills_dir)
+        if not saved:
+            return {
+                "installed": False,
+                "requires_review": False,
+                "error": f"Failed to save skill {skill_id}",
+                "scan": scan,
+                "guard": guard,
+            }
+
+        skill_path = local_registry.get_skill_path(skill_id)
+        loader = SkillLoader()
+        skills = loader.load_from_directory(skill_path, recursive=True)
+        if not skills:
+            return {
+                "installed": False,
+                "requires_review": False,
+                "error": f"Failed to load skill {skill_id}",
+                "scan": scan,
+                "guard": guard,
+            }
+
+        for skill in skills:
+            availability = skill.get_definition().metadata.get("availability", {})
+            registry.register(skill, enable=availability.get("status") != "blocked")
+
+        _clear_uploaded_skill_stage(upload_token)
+        return {
+            "installed": True,
+            "skill_path": str(skill_path),
+            "scan": scan,
+            "guard": guard,
         }
 
     @app.post("/api/clawhub/remove")

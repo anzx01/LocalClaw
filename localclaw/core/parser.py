@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from localclaw.core.json_utils import extract_last_json_object
 from localclaw.core.models import Intent, Message
 from localclaw.llm.provider import get_llm_provider
 from localclaw.skills.registry import get_skill_registry
@@ -232,18 +233,8 @@ User: {user_request}
     def _intent_from_model_output(self, content: str, raw_message: str) -> Optional[Intent]:
         """Parse a model response into an Intent."""
         content = content.strip()
-
-        if content.startswith("```json") and "```" in content:
-            content = content.split("```json", 1)[1].split("```", 1)[0].strip()
-        elif content.startswith("```") and "```" in content:
-            content = content.split("```", 1)[1].split("```", 1)[0].strip()
-
-        json_start = content.find("{")
-        json_end = content.rfind("}") + 1
-        if json_start >= 0 and json_end > json_start:
-            content = content[json_start:json_end]
-
-        result = json.loads(content)
+        extracted = extract_last_json_object(content)
+        result = json.loads(extracted or content)
         params = result.get("params", {})
         if not isinstance(params, dict):
             params = {}
@@ -456,6 +447,16 @@ def create_default_parser(llm_enabled: bool = False, llm_parse_only: bool = Fals
             pattern=r"^今天.*?(?:星期|几号|日期)",
             intent="date_query",
             priority=15,
+        ),
+        ParseRule(
+            pattern=r"^(?:今天|今日).*(?:周几|星期几|星期|几号|日期|几月几日).*$",
+            intent="date_query",
+            priority=16,
+        ),
+        ParseRule(
+            pattern=r"^(?:现在|当前).*(?:几点|几时|时间).*$",
+            intent="time_now",
+            priority=16,
         ),
         ParseRule(
             pattern=r"^what.*?(?:date|day|time)",

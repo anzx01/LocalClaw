@@ -6,15 +6,18 @@ import json
 import logging
 import re
 import shutil
+import socket
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 import httpx
 
 from localclaw.config.settings import get_settings
+from localclaw.core.json_utils import extract_last_json_object
 from localclaw.core.models import ErrorType, ExecutionResult, RiskLevel
 from localclaw.llm.provider import get_llm_provider
 from localclaw.tools.base import Tool, ToolError, register_tool
@@ -149,6 +152,19 @@ class BrowserCDPTool(Tool):
 
     DEFAULT_MAX_STEPS = 6
     MAX_FETCH_CHARS = 6000
+    _VALID_AGENT_ACTIONS = {
+        "finish",
+        "fetch",
+        "new_tab",
+        "info",
+        "navigate",
+        "back",
+        "eval",
+        "click",
+        "click_at",
+        "scroll",
+        "close",
+    }
 
     def validate_inputs(self, kwargs: Dict[str, Any]) -> List[str]:
         """Allow either high-level request mode or explicit low-level action mode."""
@@ -203,6 +219,22 @@ class BrowserCDPTool(Tool):
 
         normalized_action = (action or "agent").strip().lower()
         if normalized_action == "agent":
+            quick_clock_reply = self._quick_clock_answer(request)
+            if quick_clock_reply:
+                return ExecutionResult.success(
+                    message=quick_clock_reply,
+                    data={
+                        "message": quick_clock_reply,
+                        "request": request,
+                        "fast_path": "clock_query",
+                    },
+                )
+            quick_lookup = await self._quick_web_lookup(request=request, url=(url or "").strip() or None)
+            if quick_lookup is not None:
+                return ExecutionResult.success(
+                    message=str(quick_lookup.get("message") or "Quick web lookup completed."),
+                    data=quick_lookup,
+                )
             return await self._execute_agent_mode(
                 request=request.strip(),
                 url=(url or "").strip() or None,
@@ -246,6 +278,11 @@ class BrowserCDPTool(Tool):
             return ExecutionResult.success(message=readiness["message"], data=readiness)
 
         if not readiness.get("connected"):
+            if readiness.get("ok"):
+                return ExecutionResult.success(
+                    message=readiness["message"],
+                    data={**readiness, "needs_user_action": True, "action_required": "enable_chrome_remote_debugging"},
+                )
             return ExecutionResult.from_error(
                 readiness["message"],
                 ErrorType.TOOL_ERROR,
@@ -323,6 +360,11 @@ class BrowserCDPTool(Tool):
 
         readiness = await self._ensure_proxy_ready(start_proxy=True)
         if not readiness.get("connected"):
+            if readiness.get("ok"):
+                return ExecutionResult.success(
+                    message=readiness["message"],
+                    data={**readiness, "needs_user_action": True, "action_required": "enable_chrome_remote_debugging"},
+                )
             return ExecutionResult.from_error(
                 readiness["message"],
                 ErrorType.TOOL_ERROR,
@@ -378,6 +420,7 @@ class BrowserCDPTool(Tool):
                     action_plan=action_plan,
                     created_targets=created_targets,
                     current_target=current_target,
+                    request=request,
                 )
                 if step_result.get("current_target"):
                     current_target = str(step_result["current_target"])
@@ -471,10 +514,20 @@ class BrowserCDPTool(Tool):
         for candidate in (prompt, retry_prompt):
             response = await provider.generate(candidate, max_tokens=320, temperature=0.0)
             parsed = self._parse_json_object(response.content)
-            if parsed is not None:
-                return parsed
+            normalized = self._normalize_action_plan(parsed)
+            if normalized and normalized.get("action") == "finish":
+                answer = str(normalized.get("answer") or "").strip()
+                if not self._allow_early_finish(state=state, answer=answer, step_index=step_index):
+                    normalized = None
+            if normalized is not None:
+                return normalized
 
-        raise ToolError("Local model did not return valid JSON for web-access planning.", ErrorType.PARSE_ERROR)
+        return self._fallback_action_plan(
+            request=request,
+            state=state,
+            step_index=step_index,
+            max_steps=max_steps,
+        )
 
     def _build_agent_prompt(
         self,
@@ -487,19 +540,12 @@ class BrowserCDPTool(Tool):
         """Build the action-planning prompt."""
 
         state_json = json.dumps(state, ensure_ascii=False, indent=2)
-        return f"""Return JSON only.
+        return f"""Return one JSON object only.
 You are the LocalClaw web-access controller.
 
-Goal:
-- Finish the user's real web task with the minimum necessary actions.
-- Be evidence-driven: inspect results, then adapt.
-- Prefer low-friction reads first. Use HTTP/Jina when a simple page read is enough.
-- Use Chrome CDP when the task needs login state, dynamic rendering, search engine navigation, page interaction, or anti-bot-sensitive access.
-- Only use tabs listed in managed_targets. Never touch the user's unrelated tabs.
-- This runtime is text-centric. Prefer DOM extraction and page text over screenshots.
-- Stop as soon as you have enough evidence to answer.
+Your object MUST contain key "action". Never echo the state or request.
 
-Available actions:
+Allowed actions:
 - {{"action":"finish","answer":"final reply in the user's language"}}
 - {{"action":"fetch","url":"https://example.com","mode":"http"}}
 - {{"action":"fetch","url":"https://example.com","mode":"jina"}}
@@ -514,10 +560,11 @@ Available actions:
 - {{"action":"close","target":"TARGET_ID"}}
 
 Rules:
-- Use complete URLs, not placeholders.
+- Only use tabs listed in managed_targets.
+- Use full URLs.
 - Use short, serializable eval results.
-- If the request cannot proceed until the user logs into Chrome or opens a page manually, finish with a concise instruction.
-- You are currently on step {step_index} of {max_steps}.
+- If login/manual user action is required, use finish with a short instruction.
+- Current step: {step_index}/{max_steps}
 
 User request:
 {json.dumps(request, ensure_ascii=False)}
@@ -533,6 +580,7 @@ Current state:
         action_plan: Dict[str, Any],
         created_targets: List[str],
         current_target: Optional[str],
+        request: str,
     ) -> Dict[str, Any]:
         """Execute the model-selected browser action."""
 
@@ -563,6 +611,23 @@ Current state:
             }
 
         target = str(action_plan.get("target") or current_target or "").strip()
+        bootstrap_observation: Optional[Dict[str, Any]] = None
+        if not target:
+            bootstrap_url = self._build_bootstrap_url(request=request, action_plan=action_plan)
+            seed = await proxy.new_tab(bootstrap_url)
+            seed_target = str(seed.get("targetId") or "").strip()
+            if not seed_target:
+                raise ToolError("CDP proxy did not return a targetId while bootstrapping a tab.", ErrorType.TOOL_ERROR)
+            created_targets.append(seed_target)
+            seed_info = await proxy.info(seed_target)
+            target = seed_target
+            bootstrap_observation = {
+                "kind": "bootstrap_tab",
+                "target": seed_target,
+                "url": bootstrap_url,
+                "details": seed_info,
+            }
+
         self._require_value(target, "target")
         if target not in created_targets:
             raise ToolError(f"Refusing to operate on unmanaged target '{target}'.", ErrorType.PERMISSION_ERROR)
@@ -610,10 +675,10 @@ Current state:
         else:
             raise ToolError(f"Unsupported browser agent action: {action}", ErrorType.VALIDATION_ERROR)
 
-        return {
-            "observation": {"kind": action, "target": target, "details": details},
-            "current_target": target,
-        }
+        observation: Dict[str, Any] = {"kind": action, "target": target, "details": details}
+        if bootstrap_observation is not None:
+            observation["bootstrap"] = bootstrap_observation
+        return {"observation": observation, "current_target": target}
 
     async def _fetch_url(self, url: str, mode: str) -> Dict[str, Any]:
         """Fetch a URL through plain HTTP or Jina."""
@@ -648,6 +713,32 @@ Current state:
             return {"ok": True, "connected": True, "started_proxy": False, "message": "Chrome CDP proxy is ready."}
 
         if initial_health.get("ok") and not initial_health.get("connected"):
+            if await self._probe_proxy_connection():
+                return {
+                    "ok": True,
+                    "connected": True,
+                    "started_proxy": False,
+                    "message": "Chrome CDP proxy connected on demand.",
+                }
+
+            if self._spawn_chrome_debug_instance():
+                for _ in range(12):
+                    await self._sleep_short()
+                    health = await self._safe_health()
+                    if health.get("ok") and health.get("connected"):
+                        return {
+                            "ok": True,
+                            "connected": True,
+                            "started_proxy": False,
+                            "message": "Chrome CDP proxy connected after launching a dedicated Chrome debug instance.",
+                        }
+                    if health.get("ok") and await self._probe_proxy_connection():
+                        return {
+                            "ok": True,
+                            "connected": True,
+                            "started_proxy": False,
+                            "message": "Chrome CDP proxy connected after launching a dedicated Chrome debug instance.",
+                        }
             return {"ok": True, "connected": False, "started_proxy": False, "message": self._chrome_debugging_help()}
 
         if not start_proxy:
@@ -682,13 +773,43 @@ Current state:
 
         self._spawn_proxy_process(node_path, proxy_script)
 
+        saw_proxy = False
         for _ in range(10):
             await self._sleep_short()
             health = await self._safe_health()
             if health.get("ok") and health.get("connected"):
                 return {"ok": True, "connected": True, "started_proxy": True, "message": "Chrome CDP proxy started and connected."}
             if health.get("ok"):
-                return {"ok": True, "connected": False, "started_proxy": True, "message": self._chrome_debugging_help()}
+                if await self._probe_proxy_connection():
+                    return {
+                        "ok": True,
+                        "connected": True,
+                        "started_proxy": True,
+                        "message": "Chrome CDP proxy started and connected.",
+                    }
+                saw_proxy = True
+
+        if saw_proxy and self._spawn_chrome_debug_instance():
+            for _ in range(12):
+                await self._sleep_short()
+                health = await self._safe_health()
+                if health.get("ok") and health.get("connected"):
+                    return {
+                        "ok": True,
+                        "connected": True,
+                        "started_proxy": True,
+                        "message": "Chrome CDP proxy connected after launching a dedicated Chrome debug instance.",
+                    }
+                if health.get("ok") and await self._probe_proxy_connection():
+                    return {
+                        "ok": True,
+                        "connected": True,
+                        "started_proxy": True,
+                        "message": "Chrome CDP proxy connected after launching a dedicated Chrome debug instance.",
+                    }
+
+        if saw_proxy:
+            return {"ok": True, "connected": False, "started_proxy": True, "message": self._chrome_debugging_help()}
 
         return {
             "ok": False,
@@ -704,7 +825,31 @@ Current state:
             health = await _BrowserProxyClient().health()
         except httpx.HTTPError:
             return {"ok": False, "connected": False}
-        return {"ok": bool(health.get("ok")), "connected": bool(health.get("connected")), "raw": health}
+        if not isinstance(health, dict):
+            return {"ok": False, "connected": False}
+
+        raw_ok = health.get("ok")
+        if raw_ok is None:
+            raw_ok = str(health.get("status") or "").strip().lower() in {"ok", "healthy", "running"}
+
+        raw_connected = health.get("connected")
+        if raw_connected is None and health.get("chromePort") is not None:
+            raw_connected = True
+
+        return {
+            "ok": bool(raw_ok),
+            "connected": bool(raw_connected),
+            "raw": health,
+        }
+
+    async def _probe_proxy_connection(self) -> bool:
+        """Attempt a lightweight connect call through /targets."""
+
+        try:
+            await _BrowserProxyClient(timeout=8.0).targets()
+        except Exception:
+            return False
+        return True
 
     def _resolve_proxy_script_path(self) -> Optional[Path]:
         """Find the adapted upstream cdp-proxy.mjs shipped with web-access."""
@@ -744,6 +889,85 @@ Current state:
             kwargs["creationflags"] = creationflags
 
         subprocess.Popen([node_path, str(proxy_script)], **kwargs)
+
+    def _spawn_chrome_debug_instance(self) -> bool:
+        """Best-effort bootstrap of a dedicated Chrome instance with CDP enabled."""
+
+        chrome_binary = self._resolve_chrome_binary()
+        if not chrome_binary:
+            logger.debug("browser_cdp: no Chrome/Edge executable found for debug bootstrap")
+            return False
+
+        settings = get_settings()
+        profile_dir = settings.data_dir / "chrome-cdp-profile"
+        profile_dir.mkdir(parents=True, exist_ok=True)
+
+        candidate_ports = [9222, 9333, 9229]
+        launch_ports = [port for port in candidate_ports if not self._is_tcp_port_open(port)]
+        if not launch_ports:
+            return False
+
+        kwargs: Dict[str, Any] = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "start_new_session": True,
+        }
+        if sys.platform == "win32":
+            creationflags = 0
+            creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            kwargs["creationflags"] = creationflags
+
+        for port in launch_ports:
+            args = [
+                chrome_binary,
+                f"--remote-debugging-port={port}",
+                f"--user-data-dir={profile_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "about:blank",
+            ]
+            try:
+                subprocess.Popen(args, **kwargs)
+            except Exception:
+                logger.debug("browser_cdp: failed to launch Chrome debug instance on port %s", port, exc_info=True)
+                continue
+            return True
+
+        return False
+
+    def _resolve_chrome_binary(self) -> Optional[str]:
+        """Resolve a Chrome/Chromium-family browser executable path."""
+
+        for name in ("chrome", "google-chrome", "chromium", "chromium-browser", "msedge"):
+            found = shutil.which(name)
+            if found:
+                return found
+
+        if sys.platform == "win32":
+            candidates = [
+                Path("C:/Program Files/Google/Chrome/Application/chrome.exe"),
+                Path("C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"),
+                Path("C:/Program Files/Chromium/Application/chrome.exe"),
+                Path("C:/Program Files (x86)/Chromium/Application/chrome.exe"),
+                Path("C:/Program Files/Microsoft/Edge/Application/msedge.exe"),
+                Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"),
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    return str(candidate)
+
+        return None
+
+    def _is_tcp_port_open(self, port: int, host: str = "127.0.0.1") -> bool:
+        """Return True when a local TCP port is currently listening."""
+
+        try:
+            with socket.create_connection((host, int(port)), timeout=0.5):
+                return True
+        except OSError:
+            return False
 
     def _node_major_version(self, node_path: str) -> Optional[int]:
         """Return the installed Node.js major version."""
@@ -844,6 +1068,298 @@ Current state:
             return ""
         return str(parsed.netloc or "").strip().lower()
 
+    def _build_bootstrap_url(self, *, request: str, action_plan: Dict[str, Any]) -> str:
+        """Build a safe initial page when the model omitted target selection."""
+
+        requested_url = str(action_plan.get("url") or "").strip()
+        if requested_url:
+            parsed = urlparse(requested_url)
+            if parsed.scheme and parsed.netloc:
+                return requested_url
+        query = str(request or "").strip()
+        if query:
+            return f"https://www.bing.com/search?q={quote_plus(query)}"
+        return "https://www.bing.com/"
+
+    def _quick_clock_answer(self, request: str) -> Optional[str]:
+        """Fast path for date/time questions to avoid long browser-agent loops."""
+
+        text = str(request or "").strip()
+        if not text:
+            return None
+        normalized = text.lower()
+
+        weekday_tokens = (
+            "今天周几",
+            "今天星期几",
+            "星期几",
+            "周几",
+            "weekday",
+            "what day is today",
+            "what day is it",
+        )
+        date_tokens = (
+            "今天几号",
+            "今天日期",
+            "日期",
+            "几月几日",
+            "today date",
+            "current date",
+        )
+        time_tokens = (
+            "现在几点",
+            "当前时间",
+            "现在时间",
+            "what time is it",
+            "current time",
+            "time now",
+        )
+
+        is_weekday = any(token in normalized for token in weekday_tokens)
+        is_date = any(token in normalized for token in date_tokens)
+        is_time = any(token in normalized for token in time_tokens)
+        if not (is_weekday or is_date or is_time):
+            return None
+
+        now = datetime.now()
+        weekday_zh = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][now.weekday()]
+        prefers_english = bool(re.search(r"[a-zA-Z]", text))
+
+        if prefers_english:
+            if is_time:
+                return now.strftime("Current local time: %H:%M:%S.")
+            if is_date and not is_weekday:
+                return now.strftime("Today's date is %Y-%m-%d.")
+            return now.strftime("%A")
+
+        if is_time:
+            return now.strftime("现在时间是 %H:%M:%S。")
+        if is_date and not is_weekday:
+            return now.strftime("今天是 %Y-%m-%d。")
+        return f"今天是{weekday_zh}。"
+
+    async def _quick_web_lookup(self, *, request: str, url: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Fast fallback for generic factual web questions to avoid long agent loops/timeouts."""
+
+        text = str(request or "").strip()
+        if not text or not self._looks_like_fact_lookup(text):
+            return None
+
+        explicit_url = (url or "").strip()
+        if explicit_url or _URL_PATTERN.search(text):
+            return None
+
+        search_query = self._rewrite_lookup_query(text)
+        search_url = f"https://duckduckgo.com/?q={quote_plus(search_query)}"
+        try:
+            fetch_payload = await self._fetch_url(search_url, "jina")
+        except Exception:
+            return None
+
+        body = str(fetch_payload.get("body") or "")
+        highlights = self._extract_search_highlights(body)
+        if not highlights:
+            return None
+
+        date_hints = self._extract_date_hints_from_text(
+            " ".join(str(item.get("snippet") or "") for item in highlights)
+        )
+        has_tomorrow_marker = bool(re.search(r"(明天|tomorrow)", text, re.IGNORECASE))
+        tomorrow_iso = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        is_race_query = bool(re.search(r"(马拉松|赛事|比赛|跑步|race|marathon)", text, re.IGNORECASE))
+        is_event_query = bool(re.search(r"(活动|演出|展览|好事|events?|happening|what's on|whats on)", text, re.IGNORECASE))
+        combined_snippets = " ".join(str(item.get("snippet") or "") for item in highlights)
+        has_event_signals = bool(
+            re.search(r"(活动|演出|展览|赛事|比赛|节|发布会|开幕|马拉松|赛事安排|报名)", combined_snippets)
+        )
+        prefers_chinese = bool(re.search(r"[\u4e00-\u9fff]", text))
+
+        lead_parts = []
+        for item in highlights[:3]:
+            source = str(item.get("source") or "").strip()
+            snippet = str(item.get("snippet") or "").strip()
+            if not source and not snippet:
+                continue
+            lead_parts.append(f"{source}: {self._truncate_text(snippet, 110)}")
+
+        if is_event_query and not has_event_signals:
+            if prefers_chinese:
+                message = "快速检索到的摘要主要是天气等泛信息，未提取到明确的活动/事件线索。建议补充关键词（例如：演出、展览、马拉松、发布会）。"
+            else:
+                message = (
+                    "Quick web check mostly returned generic results and did not extract clear event clues. "
+                    "Please add more specific keywords."
+                )
+        elif has_tomorrow_marker and date_hints and tomorrow_iso not in date_hints:
+            if prefers_chinese:
+                if is_race_query:
+                    message = (
+                        f"快速检索未找到明确指向 {tomorrow_iso} 的比赛信息。"
+                        f"摘要中出现的日期有：{', '.join(date_hints[:3])}。请以赛事官方日程为准。"
+                    )
+                elif is_event_query:
+                    message = (
+                        f"快速检索未在摘要中找到明确标注 {tomorrow_iso} 的活动条目。"
+                        f"摘要中出现的日期有：{', '.join(date_hints[:3])}。建议进一步限定关键词再查。"
+                    )
+                else:
+                    message = (
+                        f"快速检索未找到明确指向 {tomorrow_iso} 的结果。"
+                        f"摘要中出现的日期有：{', '.join(date_hints[:3])}。请结合官方来源核实。"
+                    )
+            else:
+                if is_race_query:
+                    message = (
+                        f"Quick web check did not find clear race evidence for {tomorrow_iso}. "
+                        f"Dates seen in snippets: {', '.join(date_hints[:3])}. Please verify on official race schedules."
+                    )
+                elif is_event_query:
+                    message = (
+                        f"Quick web check did not find snippets explicitly dated {tomorrow_iso}. "
+                        f"Dates seen in snippets: {', '.join(date_hints[:3])}. Please refine the query and verify with official listings."
+                    )
+                else:
+                    message = (
+                        f"Quick web check did not find clear evidence for {tomorrow_iso}. "
+                        f"Dates seen in snippets: {', '.join(date_hints[:3])}. Please verify with official sources."
+                    )
+        elif has_tomorrow_marker and tomorrow_iso in date_hints:
+            if prefers_chinese:
+                message = f"快速检索在摘要中发现了 {tomorrow_iso} 相关线索，请继续以官方来源核实具体细节。"
+            else:
+                message = (
+                    f"Quick web check found snippets that include {tomorrow_iso}. "
+                    "Please verify details on official sources before relying on it."
+                )
+        else:
+            if prefers_chinese:
+                message = "快速检索已返回相关摘要，但结论还不够权威，请继续用官方来源核实。"
+            else:
+                message = (
+                    "Quick web check found relevant snippets, but the result is not authoritative yet. "
+                    "Please verify with an official source."
+                )
+
+        if lead_parts:
+            if prefers_chinese:
+                message = f"{message} 关键摘要：{' | '.join(lead_parts)}"
+            else:
+                message = f"{message} Top snippets: {' | '.join(lead_parts)}"
+
+        return {
+            "message": message,
+            "request": text,
+            "fast_path": "web_search",
+            "search_query": search_query,
+            "search_url": search_url,
+            "highlights": highlights[:5],
+            "date_hints": date_hints,
+        }
+
+    def _rewrite_lookup_query(self, request: str) -> str:
+        """Lightweight query rewrite for vague factual prompts."""
+
+        text = str(request or "").strip()
+        if not text:
+            return text
+
+        if re.search(r"(有啥好事|有什么好事|有啥活动|有什么活动|有什么安排|啥活动)", text, re.IGNORECASE):
+            suffix = " 活动 赛事 演出 展览 新闻"
+            if not re.search(r"(活动|赛事|演出|展览|新闻|event|show|concert)", text, re.IGNORECASE):
+                return f"{text}{suffix}"
+        return text
+
+    def _looks_like_fact_lookup(self, request: str) -> bool:
+        """Heuristic for quick web-question fallback."""
+
+        normalized = str(request or "").strip().lower()
+        if len(normalized) < 6:
+            return False
+
+        # Keep imperative browser-driving tasks on the normal agent flow.
+        browser_action_markers = (
+            "open ",
+            "open url",
+            "navigate",
+            "click ",
+            "scroll",
+            "screenshot",
+            "login",
+            "sign in",
+            "upload",
+            "打开",
+            "进入",
+            "点击",
+            "登录",
+            "上传",
+            "截图",
+        )
+        if any(marker in normalized for marker in browser_action_markers):
+            return False
+
+        question_mark = ("?" in request) or ("？" in request)
+        question_markers = (
+            "有没有",
+            "是否",
+            "吗",
+            "什么",
+            "怎么",
+            "谁",
+            "哪里",
+            "when",
+            "where",
+            "who",
+            "what",
+            "is there",
+            "are there",
+        )
+        has_question_words = any(marker in normalized for marker in question_markers)
+        return question_mark or has_question_words
+
+    def _extract_search_highlights(self, body: str) -> List[Dict[str, str]]:
+        """Extract compact source/snippet pairs from Jina-rendered search markdown."""
+
+        if not body:
+            return []
+
+        highlights: List[Dict[str, str]] = []
+        seen_sources: set[str] = set()
+        for raw_line in body.splitlines():
+            line = raw_line.strip()
+            match = re.match(
+                r"^\d+\.\s+(?P<source>[^\[]+?)\s+\[!\[Image[^\]]*\]\([^)]+\)\]\([^)]+\)\s*(?P<snippet>.*)$",
+                line,
+            )
+            if not match:
+                continue
+
+            source = re.sub(r"\s+", " ", str(match.group("source") or "").strip())
+            snippet = re.sub(r"\s+", " ", str(match.group("snippet") or "").strip())
+            source_key = source.lower()
+            if not source or source_key in seen_sources:
+                continue
+            seen_sources.add(source_key)
+            highlights.append({"source": source, "snippet": self._truncate_text(snippet, 220)})
+            if len(highlights) >= 8:
+                break
+        return highlights
+
+    def _extract_date_hints_from_text(self, text: str) -> List[str]:
+        """Extract normalized ISO date hints from snippets."""
+
+        if not text:
+            return []
+
+        dates: List[str] = []
+        for year, month, day in re.findall(r"(20\d{2})[年/\-.](\d{1,2})[月/\-.](\d{1,2})[日号]?", text):
+            try:
+                iso = f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+            except Exception:
+                continue
+            if iso not in dates:
+                dates.append(iso)
+        return dates
+
     async def _close_created_targets(self, proxy: _BrowserProxyClient, created_targets: List[str]) -> None:
         """Close any tabs the tool created."""
 
@@ -862,16 +1378,92 @@ Current state:
         elif text.startswith("```") and "```" in text:
             text = text.split("```", 1)[1].split("```", 1)[0].strip()
 
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            text = text[start:end]
+        extracted = extract_last_json_object(text)
+        if extracted is not None:
+            text = extracted
 
         try:
             payload = json.loads(text)
         except Exception:
             return None
         return payload if isinstance(payload, dict) else None
+
+    def _normalize_action_plan(self, payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Normalize model action plans and reject malformed responses."""
+
+        if not isinstance(payload, dict):
+            return None
+
+        action = str(payload.get("action") or "").strip().lower()
+        if not action:
+            if payload.get("url"):
+                action = "new_tab"
+            else:
+                return None
+
+        if action not in self._VALID_AGENT_ACTIONS:
+            return None
+
+        normalized = dict(payload)
+        normalized["action"] = action
+        return normalized
+
+    def _allow_early_finish(self, *, state: Dict[str, Any], answer: str, step_index: int) -> bool:
+        """Decide whether step-1 finish actions are trustworthy enough to accept."""
+
+        if step_index > 1:
+            return True
+
+        recent_observations = state.get("recent_observations") if isinstance(state, dict) else None
+        managed_targets = state.get("managed_targets") if isinstance(state, dict) else None
+        if recent_observations:
+            return True
+        if managed_targets:
+            return True
+
+        normalized_answer = (answer or "").strip().lower()
+        if any(marker in normalized_answer for marker in ("chrome", "remote debugging", "登录", "log in", "sign in")):
+            return True
+        return False
+
+    def _fallback_action_plan(
+        self,
+        *,
+        request: str,
+        state: Dict[str, Any],
+        step_index: int,
+        max_steps: int,
+    ) -> Dict[str, Any]:
+        """Deterministic fallback when the model fails to emit a valid action."""
+
+        managed_targets = state.get("managed_targets") if isinstance(state, dict) else []
+        if not isinstance(managed_targets, list):
+            managed_targets = []
+
+        current_target = str((state or {}).get("current_target") or "").strip()
+        if not current_target and managed_targets:
+            current_target = str((managed_targets[0] or {}).get("targetId") or "").strip()
+
+        if not current_target:
+            return {
+                "action": "new_tab",
+                "url": self._build_bootstrap_url(request=request, action_plan={}),
+                "reason": "fallback_missing_action",
+            }
+
+        if step_index >= max_steps:
+            return {
+                "action": "finish",
+                "answer": "我没有拿到足够稳定的浏览器动作结果，请重试或提供更明确的网址。",
+                "reason": "fallback_finish_on_last_step",
+            }
+
+        return {
+            "action": "eval",
+            "target": current_target,
+            "script": "(() => ({ title: document.title || '', text: (document.body?.innerText || '').slice(0, 3000) }))()",
+            "reason": "fallback_missing_action",
+        }
 
     def _truncate_text(self, value: Any, limit: int) -> str:
         """Render and truncate arbitrary values for model context."""

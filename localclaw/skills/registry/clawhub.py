@@ -1,12 +1,14 @@
 """ClawHub client for skill registry."""
 
+import asyncio
 import json
 import logging
 import shutil
+import tarfile
 import tempfile
 import zipfile
-from pathlib import Path
-from typing import Dict, List, Optional, Any
+from pathlib import Path, PurePosixPath
+from typing import Dict, List, Optional, Any, Tuple
 
 import aiohttp
 import yaml
@@ -16,6 +18,9 @@ from localclaw.skills.loader import SkillLoader
 
 
 logger = logging.getLogger(__name__)
+
+UPLOAD_ARCHIVE_SUFFIXES = (".zip", ".tar", ".tgz", ".tar.gz")
+UPLOAD_FILE_SUFFIXES = (".json", ".yaml", ".yml", ".md")
 
 
 class ClawHubClient:
@@ -70,7 +75,7 @@ class ClawHubClient:
                     self.last_search_error = self.last_request_error or "ClawHub search returned no data"
                     return []
                 results = (payload or {}).get("results", [])
-                return [
+                listings = [
                     listing
                     for listing in (
                         self._normalize_search_result(item)
@@ -78,6 +83,7 @@ class ClawHubClient:
                     )
                     if listing is not None and self._matches_category(listing, category)
                 ]
+                return await self._enrich_search_results(listings)
 
             payload = await self._get_json(
                 "/api/v1/skills",
@@ -99,6 +105,31 @@ class ClawHubClient:
             self.last_search_error = str(e)
             logger.error(f"Error searching skills: {e}")
             return []
+
+    async def _enrich_search_results(self, listings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Fill marketplace stats for search hits using the detail endpoint when needed."""
+
+        if not listings:
+            return listings
+
+        pending_indexes = [
+            index for index, listing in enumerate(listings)
+            if self._listing_missing_marketplace_stats(listing)
+        ]
+        if not pending_indexes:
+            return listings
+
+        detail_results = await asyncio.gather(
+            *(self.get_skill_detail(str(listings[index].get("id") or "")) for index in pending_indexes),
+            return_exceptions=True,
+        )
+        for index, detail in zip(pending_indexes, detail_results):
+            if isinstance(detail, Exception) or not isinstance(detail, dict):
+                continue
+            self._merge_marketplace_stats(listings[index], detail)
+            if listings[index].get("author") in ("", "ClawHub"):
+                listings[index]["author"] = detail.get("author") or listings[index].get("author")
+        return listings
 
     async def get_skill_detail(self, skill_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed information about a skill."""
@@ -395,7 +426,7 @@ class ClawHubClient:
         slug = str(item.get("slug") or "").strip()
         if not slug:
             return None
-        return {
+        listing = {
             "id": slug,
             "name": str(item.get("displayName") or slug),
             "version": str(item.get("version") or ""),
@@ -410,6 +441,8 @@ class ClawHubClient:
             "updated_at": item.get("updatedAt"),
             "score": item.get("score"),
         }
+        self._merge_marketplace_stats(listing, item)
+        return listing
 
     def _normalize_list_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Normalize `/api/v1/skills` list records."""
@@ -427,7 +460,7 @@ class ClawHubClient:
             if isinstance(system_list, list) and system_list and str(system_list[0]).strip()
             else "remote"
         )
-        return {
+        listing = {
             "id": slug,
             "name": str(item.get("displayName") or slug),
             "version": str((latest_version or {}).get("version") or ""),
@@ -441,6 +474,8 @@ class ClawHubClient:
             "source_label": "ClawHub",
             "updated_at": item.get("updatedAt"),
         }
+        self._merge_marketplace_stats(listing, item)
+        return listing
 
     def _normalize_skill_detail(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Normalize `/api/v1/skills/{slug}` detail records."""
@@ -458,7 +493,7 @@ class ClawHubClient:
         metadata = payload.get("metadata") or {}
         tags = skill.get("tags") or {}
         author = str(owner.get("displayName") or owner.get("handle") or "ClawHub")
-        return {
+        detail = {
             "id": slug,
             "slug": slug,
             "name": str(skill.get("displayName") or slug),
@@ -484,6 +519,76 @@ class ClawHubClient:
             "created_at": skill.get("createdAt"),
             "raw": payload,
         }
+        self._merge_marketplace_stats(detail, payload)
+        self._merge_marketplace_stats(detail, skill)
+        return detail
+
+    def _listing_missing_marketplace_stats(self, listing: Dict[str, Any]) -> bool:
+        """Return True when no marketplace stat was normalized for a listing."""
+
+        return not any(
+            listing.get(field) is not None
+            for field in ("stars", "downloads", "current_installs", "all_time_installs")
+        )
+
+    def _merge_marketplace_stats(self, listing: Dict[str, Any], payload: Dict[str, Any]) -> None:
+        """Best-effort extraction for ClawHub popularity/install counters."""
+
+        stats = payload.get("stats") if isinstance(payload, dict) else None
+        sources = [stats, payload]
+        field_aliases = {
+            "stars": ("stars", "starCount", "star_count"),
+            "downloads": ("downloads", "downloadCount", "download_count"),
+            "current_installs": (
+                "current_installs",
+                "installsCurrent",
+                "currentInstalls",
+                "current_install_count",
+                "currentInstallsCount",
+            ),
+            "all_time_installs": (
+                "installsAllTime",
+                "allTimeInstalls",
+                "all_time_installs",
+                "installCount",
+                "install_count",
+                "totalInstalls",
+                "total_install_count",
+            ),
+        }
+
+        for target_field, aliases in field_aliases.items():
+            if listing.get(target_field) is not None:
+                continue
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                for alias in aliases:
+                    value = self._coerce_stat_number(source.get(alias))
+                    if value is not None:
+                        listing[target_field] = value
+                        break
+                if listing.get(target_field) is not None:
+                    break
+
+    def _coerce_stat_number(self, value: Any) -> Optional[int]:
+        """Convert API stat payloads into compact integer counters."""
+
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            normalized = value.strip().replace(",", "")
+            if not normalized:
+                return None
+            try:
+                return int(float(normalized))
+            except ValueError:
+                return None
+        return None
 
     def _matches_category(self, listing: Dict[str, Any], category: Optional[str]) -> bool:
         """Apply best-effort local category filtering for ClawHub listings."""
@@ -674,6 +779,195 @@ class BundledSkillCatalog:
             "source": "bundled",
             "source_label": "Bundled",
         }
+
+
+def resolve_bundle_skill_id(bundle: Dict[str, Any], fallback: str = "uploaded-skill") -> str:
+    """Resolve the canonical install ID for a bundle."""
+
+    metadata = bundle.get("metadata", {}) or {}
+    openclaw = metadata.get("openclaw", {}) or {}
+    candidates = [
+        metadata.get("catalog_id"),
+        metadata.get("skill_key"),
+        openclaw.get("skillKey"),
+        bundle.get("name"),
+        fallback,
+    ]
+    for candidate in candidates:
+        normalized = str(candidate or "").strip()
+        if normalized:
+            return normalized
+    return fallback
+
+
+def build_skill_detail_from_bundle(
+    skill_id: str,
+    bundle: Dict[str, Any],
+    source: str = "upload",
+) -> Dict[str, Any]:
+    """Build a detail payload for reviews from a local bundle."""
+
+    metadata = bundle.get("metadata", {}) or {}
+    tags = metadata.get("tags") or metadata.get("keywords") or []
+    if not isinstance(tags, list):
+        tags = [tags]
+    return {
+        "id": skill_id,
+        "slug": skill_id,
+        "name": str(bundle.get("name") or skill_id),
+        "version": str(bundle.get("version") or "1.0.0"),
+        "description": str(bundle.get("description") or ""),
+        "author": str(bundle.get("author") or metadata.get("author") or "Local upload"),
+        "owner": str(bundle.get("author") or metadata.get("author") or "Local upload"),
+        "homepage": bundle.get("homepage") or metadata.get("homepage") or "",
+        "repository": bundle.get("repository") or metadata.get("repository") or "",
+        "category": str(metadata.get("category") or source),
+        "tags": [str(tag) for tag in tags if str(tag).strip()],
+        "metadata": {
+            "registry": "local-upload",
+            "source": source,
+            "source_format": metadata.get("source_format"),
+        },
+    }
+
+
+def _extract_uploaded_archive(archive_path: Path, extract_dir: Path) -> None:
+    """Extract a local uploaded archive into a directory."""
+
+    lowered_name = archive_path.name.lower()
+    if lowered_name.endswith(".zip"):
+        with zipfile.ZipFile(archive_path) as zip_file:
+            zip_file.extractall(extract_dir)
+        return
+
+    if lowered_name.endswith((".tar", ".tgz", ".tar.gz")):
+        with tarfile.open(archive_path, "r:*") as tar_file:
+            tar_file.extractall(extract_dir)
+        return
+
+    raise ValueError(f"Unsupported archive format: {archive_path.name}")
+
+
+def _find_primary_skill_path(base_dir: Path, loader: SkillLoader) -> Optional[Path]:
+    """Locate the primary skill definition path inside an extracted upload."""
+
+    own_skill_md = base_dir / loader.SKILL_MARKDOWN_NAME
+    if own_skill_md.exists():
+        return own_skill_md
+
+    candidates = list(loader._iter_skill_paths(base_dir, recursive=True))
+    return candidates[0] if candidates else None
+
+
+def build_uploaded_skill_bundle(upload_name: str, payload: bytes) -> Tuple[str, Dict[str, Any], Path]:
+    """Turn an uploaded local skill artifact into a bundle suitable for review/install."""
+
+    filename = Path(str(upload_name or "").strip()).name or "uploaded-skill"
+    lowered_name = filename.lower()
+    if not any(
+        lowered_name.endswith(suffix)
+        for suffix in [*UPLOAD_ARCHIVE_SUFFIXES, *UPLOAD_FILE_SUFFIXES]
+    ):
+        raise ValueError("Supported uploads are .zip, .tar, .tgz, .tar.gz, .json, .yaml, .yml, and .md")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="localclaw-upload-"))
+    upload_path = temp_dir / filename
+    upload_path.write_bytes(payload)
+    loader = SkillLoader()
+
+    bundle: Dict[str, Any]
+    source_root: Optional[Path] = None
+
+    if any(lowered_name.endswith(suffix) for suffix in UPLOAD_ARCHIVE_SUFFIXES):
+        extract_dir = temp_dir / "extract"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        _extract_uploaded_archive(upload_path, extract_dir)
+        skill_path = _find_primary_skill_path(extract_dir, loader)
+        if skill_path is None:
+            raise ValueError("Uploaded archive does not contain a recognizable skill definition or SKILL.md")
+        raw_data = loader._load_skill_data(skill_path)
+        bundle = dict(loader._prepare_skill_data(raw_data, skill_path))
+        source_root = skill_path.parent
+        bundle["files"] = ClawHubClient()._snapshot_skill_files(source_root)
+    else:
+        source_path = upload_path
+        if lowered_name.endswith(".md") and upload_path.name.upper() != ClawHubClient.SKILL_MARKDOWN_NAME:
+            source_path = temp_dir / ClawHubClient.SKILL_MARKDOWN_NAME
+            upload_path.replace(source_path)
+        raw_data = loader._load_skill_data(source_path)
+        bundle = dict(loader._prepare_skill_data(raw_data, source_path))
+        try:
+            bundle["files"] = {source_path.name: source_path.read_text(encoding="utf-8")}
+        except UnicodeDecodeError:
+            bundle["files"] = {}
+
+    metadata = dict(bundle.get("metadata", {}) or {})
+    metadata["upload_name"] = filename
+    metadata["upload_source"] = "local_file"
+    bundle["metadata"] = metadata
+
+    if source_root is not None:
+        bundle["_localclaw_source_dir"] = str(source_root)
+
+    skill_id = resolve_bundle_skill_id(bundle, fallback=Path(filename).stem or "uploaded-skill")
+    return skill_id, bundle, temp_dir
+
+
+def _sanitize_uploaded_relative_path(filename: str) -> PurePosixPath:
+    """Validate and normalize relative upload paths from directory uploads."""
+
+    normalized = PurePosixPath(str(filename or "").replace("\\", "/"))
+    parts = [part for part in normalized.parts if part not in ("", ".")]
+    if not parts:
+        raise ValueError("Uploaded directory entry is missing a valid relative path.")
+    if normalized.is_absolute() or any(part == ".." for part in parts):
+        raise ValueError(f"Unsafe upload path: {filename}")
+    return PurePosixPath(*parts)
+
+
+def build_uploaded_skill_bundle_from_files(
+    uploaded_files: List[Tuple[str, bytes]],
+) -> Tuple[str, Dict[str, Any], Path]:
+    """Turn a set of uploaded files into a bundle suitable for review/install."""
+
+    if not uploaded_files:
+        raise ValueError("Uploaded directory is empty.")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="localclaw-upload-"))
+    upload_root = temp_dir / "upload"
+    upload_root.mkdir(parents=True, exist_ok=True)
+
+    for filename, payload in uploaded_files:
+        relative_path = _sanitize_uploaded_relative_path(filename)
+        target_path = upload_root.joinpath(*relative_path.parts)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(payload)
+
+    loader = SkillLoader()
+    skill_path = _find_primary_skill_path(upload_root, loader)
+    if skill_path is None:
+        raise ValueError("Uploaded directory does not contain a recognizable skill definition or SKILL.md")
+
+    raw_data = loader._load_skill_data(skill_path)
+    bundle = dict(loader._prepare_skill_data(raw_data, skill_path))
+    bundle["files"] = ClawHubClient()._snapshot_skill_files(skill_path.parent)
+
+    metadata = dict(bundle.get("metadata", {}) or {})
+    top_level_dir = _sanitize_uploaded_relative_path(uploaded_files[0][0]).parts[0]
+    metadata["upload_name"] = f"{top_level_dir}/"
+    metadata["upload_source"] = "local_directory"
+    bundle["metadata"] = metadata
+    bundle["_localclaw_source_dir"] = str(skill_path.parent)
+
+    skill_id = resolve_bundle_skill_id(bundle, fallback=top_level_dir or "uploaded-skill")
+    return skill_id, bundle, temp_dir
+
+
+def cleanup_uploaded_skill_bundle(temp_dir: Optional[Path]) -> None:
+    """Delete temporary files created while staging a local upload."""
+
+    if temp_dir:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def get_clawhub_client() -> ClawHubClient:

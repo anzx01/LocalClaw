@@ -445,7 +445,7 @@ LocalClaw 的安全思路不是“靠 prompt 自觉”，而是明确把安全�
 |   |-- memory/          # 短期内存与 SQLite 长期记忆
 |   |-- security/        # 审计、权限、人机确认、沙箱预留
 |   |-- skills/          # skill 定义、加载、注册、安全审查
-|   |-- system/          # Windows 后台服务管理
+|   |-- system/          # Windows 自动启动与后台运行管理
 |   `-- tools/           # 文件、命令、HTTP、浏览器、模型、ClawHub 等工具
 |-- bundled_skills/      # 仓库自带“可安装 skill catalog”
 |-- agents/              # agent 配置样例
@@ -466,7 +466,7 @@ LocalClaw 的安全思路不是“靠 prompt 自觉”，而是明确把安全�
 | `tools/` | 唯一真实执行入口 | 是 |
 | `skills/` | 声明式扩展层、skill 加载与安全保护 | 是 |
 | `llm/` | 本地模型 provider 抽象 | 是 |
-| `system/windows_service.py` | Windows 服务安装/启动/停止/卸载 | Web UI 中可用 |
+| `system/windows_service.py` | Windows 自动启动任务管理（Task Scheduler 优先，兼容 legacy service 检测） | Web UI 中可用 |
 | `gateway/` | 消息队列、session、handler 基础设施 | 目前不是默认主路径中心 |
 | `memory/` | 短期与长期记忆能力 | 当前已存在，但尚未深度接入主决策链 |
 | `agents/` | 多 agent 配置、路由与权限封装 | 当前能力较轻，更多是骨架 |
@@ -506,7 +506,7 @@ LocalClaw 的安全思路不是“靠 prompt 自觉”，而是明确把安全�
 
 > 核心执行骨架已经稳定，但部分平台化子系统还在“准备好接入”的阶段，而不是“已经成为默认主流程”。
 
-## 开发进度（截至 2026-03-26）
+## 开发进度（截至 2026-03-27）
 
 这一节不讨论“目录里有没有代码”，只讨论“哪些能力已经成为用户真实可见、可操作、可验证的产品能力”。
 
@@ -535,6 +535,7 @@ LocalClaw 的安全思路不是“靠 prompt 自觉”，而是明确把安全�
 - Chat Workspace 主工作台
 - Approval Center 审批中心
 - Skill Library 技能库
+- Skill 上传扫描与本地安装入口
 - Channels 渠道配置与测试台
 - System Settings 运行与服务控制台
 
@@ -549,7 +550,7 @@ LocalClaw 的安全思路不是“靠 prompt 自觉”，而是明确把安全�
 - Security 风格的 guardrail 可视化
 - Channels 风格的主从布局与状态聚焦
 - Skills 风格的“安全策略 + 存储路径 + 来源区分”说明
-- Settings 中集中暴露后台服务、工具库存、诊断结果、活动历史
+- Settings 中集中暴露自动启动状态、工具库存、诊断结果、活动历史
 
 这类补强不是单纯“换主题颜色”，而是在信息架构上把“运行状态、风险、诊断、最近行为”做成了显式面板。
 
@@ -570,13 +571,38 @@ LocalClaw 的安全思路不是“靠 prompt 自觉”，而是明确把安全�
 
 当前 Settings 页面已经集中提供：
 
-- Windows 后台服务状态展示
-- 安装 / 启动 / 停止 / 卸载服务
+- Windows 自动启动状态展示
+- 安装 / 启动 / 停止 / 卸载自动启动任务
 - Runtime Diagnostics 运行时健康检查
 - Tool Inventory 工具库存与风险级别展示
 - Recent Activity 最近任务活动流
 
+这一层最近还有两个比较关键的收口：
+
+- Skills 页把真正的 Installed / Available 列表提前到首屏，避免“有统计但内容在折叠下方”的误解
+- Windows 自启动明确从“直接把 Python 进程注册成 SCM service”的旧方案，转向更适合当前项目形态的 Task Scheduler 自动启动方案；旧 service 会被标记为 legacy，并提示重新安装迁移
+
 这让 LocalClaw 已经开始具备类似 `openclaw-manager` 的“本地运行台”特征，而不只是一个聊天界面。
+
+#### 6. Skills 安装入口不再只依赖 ClawHub
+
+当前 Skills 页面除了搜索 Bundled Catalog / ClawHub 之外，也支持直接上传本地 skill 文件后安装。
+
+当前支持的上传形态包括：
+
+- `.zip`
+- `.tar`
+- `.tgz` / `.tar.gz`
+- 单个 `SKILL.md`
+- 单个 `.json` / `.yaml` / `.yml` skill 定义
+
+上传后的流程仍然是：
+
+1. 先做安装前安全体检
+2. 再由用户确认 `proceed`
+3. 最后写入 `managed_skills_dir` 并注册进运行时
+
+也就是说，“本地上传安装”没有绕过原有的风控链路。
 
 ### 正在补齐、但还没有完全做到的部分
 
@@ -713,6 +739,8 @@ python main.py run "帮我总结这个目录"
 - `uvicorn ... --port 8000` 时监听 `127.0.0.1:8000`
 - 默认产品路线要求本地模型可用
 - 关闭 `LOCALCLAW_LLM_ENABLED` 后，当前主产品路径不会自动回退旧 parser 兼容链
+- Settings 里的自动启动现在优先走 Task Scheduler；如果你之前装过旧版 Windows service，页面会提示它是 legacy，需要重新安装迁移
+- `sc start` 报 `1053` 通常不是 winsock 问题，而是“普通 Python 进程没有实现原生 Windows Service 控制协议”导致的旧方案失配
 
 ## 与 OpenClaw 的详细比较
 

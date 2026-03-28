@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import quote_plus
 
+from localclaw.core.json_utils import extract_last_json_object
 from localclaw.core.models import AgentDecision, AgentDecisionMode, Context, Message
 from localclaw.llm.provider import get_llm_provider
 from localclaw.skills.registry.registry import SkillRegistry
@@ -38,6 +39,37 @@ class OpenClawRuntime:
         self._enable_skill_refinement = refine_skill_decision
         self._enable_request_guardrails = enable_request_guardrails
 
+    def _guardrails_enabled(self) -> bool:
+        """Return whether deterministic guardrails are enabled."""
+
+        return bool(getattr(self, "_enable_request_guardrails", True))
+
+    def _skill_refinement_enabled(self) -> bool:
+        """Return whether second-pass skill refinement is enabled."""
+
+        return bool(getattr(self, "_enable_skill_refinement", True))
+
+    def _get_skill_registry(self) -> Optional[SkillRegistry]:
+        """Return the configured skill registry, if available."""
+
+        return getattr(self, "_skill_registry", None)
+
+    def _get_tool_registry(self) -> Optional[ToolRegistry]:
+        """Return the configured tool registry, if available."""
+
+        return getattr(self, "_tool_registry", None)
+
+    def _lookup_tool(self, tool_name: str) -> Any:
+        """Best-effort tool lookup that tolerates runtime test doubles."""
+
+        registry = self._get_tool_registry()
+        if registry is None:
+            return None
+        try:
+            return registry.get(tool_name)
+        except Exception:
+            return None
+
     async def decide(self, message: Message, context: Optional[Context] = None) -> AgentDecision:
         """Return the model's handling decision for a user message."""
 
@@ -49,7 +81,7 @@ class OpenClawRuntime:
             source="openclaw_runtime",
             raw_message=message.content,
         )
-        if self._enable_request_guardrails:
+        if self._guardrails_enabled():
             fast_intent = self._build_basic_intent_guardrail(str(message.content or "").strip())
             if fast_intent:
                 return AgentDecision(
@@ -85,13 +117,13 @@ class OpenClawRuntime:
             if decision.mode != AgentDecisionMode.UNKNOWN:
                 break
 
-        if self._enable_request_guardrails:
+        if self._guardrails_enabled():
             decision = self._apply_request_guardrails(decision, message)
 
         if decision.mode == AgentDecisionMode.SKILL and decision.source == "openclaw_runtime_guardrail":
             return decision
 
-        if decision.mode == AgentDecisionMode.SKILL and self._enable_skill_refinement:
+        if decision.mode == AgentDecisionMode.SKILL and self._skill_refinement_enabled():
             refined = await self._refine_skill_decision(decision, message)
             if refined.mode != AgentDecisionMode.UNKNOWN:
                 return refined
@@ -106,6 +138,11 @@ class OpenClawRuntime:
         """Ask the local model to answer conversationally when no action was planned."""
 
         del context  # Reserved for future multi-turn prompting.
+
+        if self._guardrails_enabled():
+            web_fallback = self._build_unknown_web_fallback_decision(message.content)
+            if web_fallback is not None:
+                return web_fallback
 
         llm_provider = get_llm_provider()
         if not await llm_provider.is_available():
@@ -169,6 +206,42 @@ class OpenClawRuntime:
 
         today = datetime.now().strftime("%Y-%m-%d")
         user_request = json.dumps(message.content, ensure_ascii=False)
+        if not self._guardrails_enabled():
+            installed_skills = self._build_compact_skill_name_list()
+            installed_tools = self._build_compact_tool_name_list()
+            return f"""Return JSON only.
+You are the LocalClaw local-model runtime.
+Current local date: {today}
+
+Output exactly one JSON object in one of these forms:
+- {{"mode":"answer","answer":"..."}}
+- {{"mode":"skill","skill":"<exact installed skill name>","params":{{...}}}}
+- {{"mode":"tool","tool":"<exact tool name>","params":{{...}}}}
+- {{"mode":"intent","intent":"<built-in intent>","params":{{...}}}}
+- If unsure, return {{"mode":"unknown"}}.
+
+Rules:
+- Use mode="answer" only for casual chat, explanations, writing, or stable general knowledge.
+- If current date/time/weekday, current weather, live web data, files, system state, or tool use is needed, do not answer from memory.
+- Prefer mode="intent" for common built-in actions like help, greeting, status, list_skills, date_query, time_now, check_weather, list_folders, file_list, and check_disk_space.
+- For current weekday/date/time questions, prefer intent "date_query".
+- For current weather or forecast questions, prefer intent "check_weather".
+- Prefer mode="skill" when the user explicitly asks for an installed skill or uses "/<skill> ...".
+- Prefer mode="tool" only for explicit tool-style requests such as "/cmd <command>" and "/shell <command>".
+- For "/cmd <command>", choose tool "safe_shell" with params.command.
+- For "/shell <command>", choose tool "shell" with params.command.
+- Use exact installed skill names and tool names from the lists below.
+
+Installed skills: {installed_skills}
+Installed tools: {installed_tools}
+
+Examples:
+- Current weekday/date/time question -> {{"mode":"intent","intent":"date_query","params":{{}}}}
+- Current weather question -> {{"mode":"intent","intent":"check_weather","params":{{}}}}
+- /cmd git status -> {{"mode":"tool","tool":"safe_shell","params":{{"command":"git status"}}}}
+
+User: {user_request}
+"""
         return f"""Return JSON only.
 You are the LocalClaw local-model runtime.
 Current local date: {today}
@@ -215,6 +288,32 @@ User: {user_request}
         """Build a shorter retry prompt for smaller local models."""
 
         user_request = json.dumps(message.content, ensure_ascii=False)
+        if not self._guardrails_enabled():
+            installed_skills = self._build_compact_skill_name_list()
+            installed_tools = self._build_compact_tool_name_list()
+            return f"""Return JSON only.
+Output one JSON object only:
+- {{"mode":"answer","answer":"..."}}
+- {{"mode":"skill","skill":"<exact installed skill name>","params":{{...}}}}
+- {{"mode":"tool","tool":"<exact tool name>","params":{{...}}}}
+- {{"mode":"intent","intent":"date_query","params":{{}}}}
+- {{"mode":"intent","intent":"check_weather","params":{{}}}}
+- {{"mode":"unknown"}}
+
+Rules:
+- Use answer only for casual chat or stable knowledge.
+- Current/live/date/time/weather/files/system requests must not use answer.
+- Current weekday/date/time -> intent "date_query".
+- Current weather/forecast -> intent "check_weather".
+- /cmd <command> -> tool "safe_shell".
+- /shell <command> -> tool "shell".
+- Use exact installed skill/tool names when choosing skill/tool.
+
+Installed skills: {installed_skills}
+Installed tools: {installed_tools}
+
+User: {user_request}
+"""
         return f"""Return JSON only.
 Choose one mode for the LocalClaw user request:
 - answer: chat/help/general knowledge only
@@ -245,8 +344,12 @@ User: {user_request}
     def _build_skill_catalog(self, compact: bool = False) -> str:
         """Serialize model-invocable skills in an OpenClaw-like prompt format."""
 
+        registry = self._get_skill_registry()
+        if registry is None:
+            return "  <none />"
+
         try:
-            infos = self._skill_registry.get_model_invocable_info()
+            infos = registry.get_model_invocable_info()
         except Exception:
             infos = []
 
@@ -273,10 +376,17 @@ User: {user_request}
     def _build_tool_catalog(self, compact: bool = False) -> str:
         """Serialize available tools for model selection."""
 
-        infos = sorted(
-            self._tool_registry.get_all_info(),
-            key=lambda item: str(item.get("name", "")),
-        )
+        registry = self._get_tool_registry()
+        if registry is None:
+            return "  <none />"
+
+        try:
+            infos = sorted(
+                registry.get_all_info(),
+                key=lambda item: str(item.get("name", "")),
+            )
+        except Exception:
+            infos = []
         if not infos:
             return "  <none />"
 
@@ -296,11 +406,58 @@ User: {user_request}
             lines.append("  </tool>")
         return "\n".join(lines) if lines else "  <none />"
 
+    def _build_compact_skill_name_list(self) -> str:
+        """Return a compact, token-light list of model-invocable skill names."""
+
+        registry = self._get_skill_registry()
+        if registry is None:
+            return "<none>"
+
+        try:
+            infos = registry.get_model_invocable_info()
+        except Exception:
+            infos = []
+
+        names: list[str] = []
+        seen: set[str] = set()
+        for info in infos:
+            name = str(info.get("name") or info.get("skill_key") or "").strip()
+            lowered = name.lower()
+            if not name or lowered in seen:
+                continue
+            seen.add(lowered)
+            names.append(name)
+        return ", ".join(names) if names else "<none>"
+
+    def _build_compact_tool_name_list(self) -> str:
+        """Return a compact, token-light list of available tool names."""
+
+        registry = self._get_tool_registry()
+        if registry is None:
+            return "<none>"
+
+        try:
+            infos = registry.get_all_info()
+        except Exception:
+            infos = []
+
+        names: list[str] = []
+        for info in infos:
+            tool_name = str(info.get("name", "")).strip()
+            if not tool_name or tool_name.startswith("_"):
+                continue
+            names.append(tool_name)
+        return ", ".join(sorted(set(names))) if names else "<none>"
+
     async def _refine_skill_decision(self, decision: AgentDecision, message: Message) -> AgentDecision:
         """Load the selected skill's docs and ask the model to confirm params."""
 
+        registry = self._get_skill_registry()
+        if registry is None:
+            return decision
+
         skill_identifier = decision.skill_name or ""
-        skill = self._skill_registry.get(skill_identifier)
+        skill = registry.get(skill_identifier)
         if skill is None:
             return decision
 
@@ -346,7 +503,11 @@ User: {user_request}
     def _build_skill_detail(self, skill_identifier: str) -> str:
         """Build a prompt block for a selected skill, including SKILL.md docs when available."""
 
-        skill = self._skill_registry.get(skill_identifier)
+        registry = self._get_skill_registry()
+        if registry is None:
+            return "  <missing />"
+
+        skill = registry.get(skill_identifier)
         if skill is None:
             return "  <missing />"
 
@@ -530,6 +691,53 @@ User: {user_request}
                 rationale="basic_intent_guardrail",
             )
 
+        if (
+            decision.mode == AgentDecisionMode.INTENT
+            and str(decision.intent_name or "").strip().lower() in {"date_query", "time_now", "date_today"}
+        ):
+            # Guard against LLM overfitting on words like "tomorrow" in non-clock questions.
+            # If the raw request is not actually asking for date/time, treat it as a general
+            # factual query and route via normal web fallback instead of forcing clock intent.
+            if not self._looks_like_clock_query(request):
+                web_fallback = self._build_unknown_web_fallback_decision(request)
+                if web_fallback is not None:
+                    return web_fallback
+                return decision
+
+            params: Dict[str, Any] = {
+                "request": request,
+                "query": request,
+                "q": request,
+            }
+            preferred_skill = self._select_available_skill(
+                "web-access",
+                "tavily-web-search",
+                "agent-browser",
+                "web.fetch",
+            )
+            if preferred_skill:
+                return AgentDecision(
+                    mode=AgentDecisionMode.SKILL,
+                    skill_name=preferred_skill,
+                    params=params,
+                    confidence=max(decision.confidence, 0.95),
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="clock_query_web_guardrail",
+                )
+
+            browser_tool = self._lookup_tool("browser_cdp")
+            if browser_tool is not None:
+                return AgentDecision(
+                    mode=AgentDecisionMode.TOOL,
+                    tool_name="browser_cdp",
+                    params=params,
+                    confidence=max(decision.confidence, 0.9),
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="clock_query_web_guardrail",
+                )
+
         desktop_listing_params = self._build_desktop_listing_intent_params(request)
         if desktop_listing_params:
             if desktop_listing_params.get("error"):
@@ -578,7 +786,27 @@ User: {user_request}
         if weather_params:
             if decision.mode in {AgentDecisionMode.SKILL, AgentDecisionMode.TOOL}:
                 return decision
-            if self._tool_registry.get("http_get") is not None:
+            preferred_weather_skill = self._select_available_skill(
+                "weather.forecast",
+                "weather",
+                "forecast",
+            )
+            if preferred_weather_skill:
+                skill_params: Dict[str, Any] = {
+                    "request": request,
+                    "query": request,
+                }
+                skill_params.update(weather_params)
+                return AgentDecision(
+                    mode=AgentDecisionMode.SKILL,
+                    skill_name=preferred_weather_skill,
+                    params=skill_params,
+                    confidence=max(decision.confidence, 0.97),
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="weather_skill_guardrail",
+                )
+            if self._lookup_tool("http_get") is not None:
                 return AgentDecision(
                     mode=AgentDecisionMode.INTENT,
                     intent_name="check_weather",
@@ -596,6 +824,48 @@ User: {user_request}
                 raw_message=message.content,
                 rationale="weather_guardrail_no_tool",
             )
+
+        if self._looks_like_clock_query(request):
+            if decision.mode in {AgentDecisionMode.SKILL, AgentDecisionMode.TOOL}:
+                return decision
+
+            params: Dict[str, Any] = {
+                "request": request,
+                "query": request,
+                "q": request,
+            }
+            extracted_url = self._extract_first_url(request)
+            if extracted_url:
+                params["url"] = extracted_url
+
+            preferred_skill = self._select_available_skill(
+                "web-access",
+                "tavily-web-search",
+                "agent-browser",
+                "web.fetch",
+            )
+            if preferred_skill:
+                return AgentDecision(
+                    mode=AgentDecisionMode.SKILL,
+                    skill_name=preferred_skill,
+                    params=params,
+                    confidence=max(decision.confidence, 0.95),
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="clock_query_web_guardrail",
+                )
+
+            browser_tool = self._lookup_tool("browser_cdp")
+            if browser_tool is not None:
+                return AgentDecision(
+                    mode=AgentDecisionMode.TOOL,
+                    tool_name="browser_cdp",
+                    params=params,
+                    confidence=max(decision.confidence, 0.9),
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="clock_query_web_guardrail",
+                )
 
         if not self._looks_like_news_request(request):
             return decision
@@ -637,7 +907,7 @@ User: {user_request}
                 rationale="live_news_guardrail",
             )
 
-        browser_tool = self._tool_registry.get("browser_cdp")
+        browser_tool = self._lookup_tool("browser_cdp")
         if browser_tool is not None:
             return AgentDecision(
                 mode=AgentDecisionMode.TOOL,
@@ -658,6 +928,9 @@ User: {user_request}
         if not normalized or normalized.startswith("/"):
             return None
 
+        if self._looks_like_clock_query(request):
+            return None
+
         if re.fullmatch(r"(?:hi+|hello+|hey+|你好+|您好+|哈喽+|嗨+|在吗|在么|在嗎)[!,.?\s]*", normalized):
             return "greeting"
 
@@ -673,15 +946,98 @@ User: {user_request}
         )
         if len(normalized) <= 32 and any(marker in normalized for marker in help_markers):
             return "help"
+
+        time_markers = (
+            "现在几点",
+            "当前时间",
+            "现在时间",
+            "几点了",
+            "time now",
+            "what time is it",
+            "current time",
+        )
+        if any(marker in normalized for marker in time_markers):
+            return "time_now"
+
+        date_markers = (
+            "今天周几",
+            "今天星期几",
+            "今天几号",
+            "今天日期",
+            "几月几日",
+            "today date",
+            "what day is today",
+            "weekday today",
+        )
+        if any(marker in normalized for marker in date_markers):
+            return "date_query"
+
+        if re.search(r"(今天|今日|today).*(周几|星期几|几号|日期|几月几日|weekday|date|day)", normalized):
+            return "date_query"
+
         return None
+
+    def _looks_like_clock_query(self, request: str) -> bool:
+        """Detect date/time questions that should prefer live browser-based lookup."""
+
+        normalized = self._normalize_request_text(request)
+        if not normalized or normalized.startswith("/"):
+            return False
+
+        clock_markers = (
+            "\u4eca\u5929\u5468\u51e0",
+            "\u4eca\u5929\u661f\u671f\u51e0",
+            "\u4eca\u5929\u51e0\u53f7",
+            "\u4eca\u5929\u65e5\u671f",
+            "\u660e\u5929\u5468\u51e0",
+            "\u660e\u5929\u661f\u671f\u51e0",
+            "\u540e\u5929\u5468\u51e0",
+            "\u540e\u5929\u661f\u671f\u51e0",
+            "\u6628\u5929\u5468\u51e0",
+            "\u6628\u5929\u661f\u671f\u51e0",
+            "\u4e0b\u5468\u51e0",
+            "\u4e0b\u661f\u671f\u51e0",
+            "\u4eca\u5929\u51e0\u70b9",
+            "\u660e\u5929\u51e0\u70b9",
+            "\u73b0\u5728\u51e0\u70b9",
+            "\u73b0\u5728\u51e0\u70b9\u4e86",
+            "\u5f53\u524d\u65f6\u95f4",
+            "\u73b0\u5728\u65f6\u95f4",
+            "\u4eca\u5929\u65e5\u671f\u662f\u4ec0\u4e48",
+            "\u51e0\u6708\u51e0\u65e5",
+            "time now",
+            "what time is it",
+            "what day is today",
+            "what day is tomorrow",
+            "what day is it tomorrow",
+            "what date is tomorrow",
+            "today date",
+            "weekday today",
+            "date today",
+            "current time",
+            "current date",
+        )
+        if any(marker in normalized for marker in clock_markers):
+            return True
+
+        return bool(
+            re.search(
+                r"(?:\u4eca\u5929|\u4eca\u65e5|\u660e\u5929|\u540e\u5929|\u6628\u5929|\u4e0b\u5468|\u4e0b\u661f\u671f|today|tomorrow|yesterday|now).*(?:\u5468\u51e0|\u661f\u671f|\u51e0\u53f7|\u65e5\u671f|\u51e0\u6708\u51e0\u65e5|\u51e0\u70b9|weekday|date|day|time)",
+                normalized,
+            )
+        )
 
     def _select_available_skill(self, *identifiers: str) -> Optional[str]:
         """Return the first model-invocable available skill from the preference list."""
 
+        registry = self._get_skill_registry()
+        if registry is None:
+            return None
+
         try:
             allowed = {
                 str(item.get("name") or "").strip()
-                for item in self._skill_registry.get_model_invocable_info()
+                for item in registry.get_model_invocable_info()
             }
         except Exception:
             allowed = set()
@@ -690,8 +1046,31 @@ User: {user_request}
             resolved = self._resolve_skill_name(identifier)
             if not resolved:
                 continue
-            if allowed and resolved not in allowed:
+            try:
+                skill = registry.get(resolved)
+            except Exception:
+                skill = None
+            if skill is None:
                 continue
+
+            if allowed and resolved not in allowed:
+                definition = getattr(skill, "get_definition", lambda: None)()
+                canonical_name = str(getattr(definition, "name", "") or "").strip()
+                metadata = getattr(definition, "metadata", {}) if definition is not None else {}
+                skill_key = str((metadata or {}).get("skill_key", "")).strip()
+                aliases = {str(alias).strip() for alias in (metadata or {}).get("aliases", [])}
+                if (
+                    canonical_name not in allowed
+                    and skill_key not in allowed
+                    and not aliases.intersection(allowed)
+                ):
+                    continue
+
+            state = getattr(skill, "state", None)
+            if state is not None:
+                state_value = str(getattr(state, "value", state)).strip().lower()
+                if state_value not in {"enabled", "running"}:
+                    continue
             return resolved
         return None
 
@@ -732,6 +1111,129 @@ User: {user_request}
         has_news = any(keyword in normalized for keyword in news_keywords)
         has_current = any(keyword in normalized for keyword in current_keywords)
         return has_news and (has_current or "个" in normalized or "条" in normalized or "10" in normalized)
+
+    def _build_unknown_web_fallback_decision(self, request: str) -> Optional[AgentDecision]:
+        """Route unknown factual questions to an installed web-search skill when available."""
+
+        normalized = self._normalize_request_text(request)
+        if not self._should_try_unknown_web_fallback(request, normalized):
+            return None
+
+        params: Dict[str, Any] = {
+            "request": request,
+            "query": request,
+            "q": request,
+        }
+        extracted_url = self._extract_first_url(request)
+        if extracted_url:
+            params["url"] = extracted_url
+
+        preferred_skill = self._select_available_skill(
+            "web-access",
+            "tavily-web-search",
+            "agent-browser",
+            "web.fetch",
+        )
+        if preferred_skill:
+            return AgentDecision(
+                mode=AgentDecisionMode.SKILL,
+                skill_name=preferred_skill,
+                params=params,
+                confidence=0.78,
+                source="openclaw_runtime_web_fallback",
+                raw_message=request,
+                rationale="unknown_question_web_fallback",
+            )
+
+        browser_tool = self._lookup_tool("browser_cdp")
+        if browser_tool is not None:
+            return AgentDecision(
+                mode=AgentDecisionMode.TOOL,
+                tool_name="browser_cdp",
+                params=params,
+                confidence=0.7,
+                source="openclaw_runtime_web_fallback",
+                raw_message=request,
+                rationale="unknown_question_web_fallback",
+            )
+
+        return None
+
+    def _should_try_unknown_web_fallback(self, request: str, normalized: str) -> bool:
+        """Decide whether an unknown request should attempt a web-search skill fallback."""
+
+        if not normalized or normalized.startswith("/"):
+            return False
+
+        if self._build_basic_intent_guardrail(request):
+            return False
+
+        if self._looks_like_news_request(request):
+            return False
+        if self._build_weather_intent_params(request):
+            return False
+        if self._build_desktop_listing_intent_params(request):
+            return False
+        if self._build_disk_space_intent_params(request):
+            return False
+
+        if self._looks_like_clock_query(request):
+            return True
+
+        local_clock_markers = (
+            "周几",
+            "星期几",
+            "几号",
+            "几月几日",
+            "现在几点",
+            "当前时间",
+            "time now",
+            "today date",
+            "date today",
+        )
+        if any(marker in normalized for marker in local_clock_markers):
+            return True
+
+        casual_markers = (
+            "随便聊",
+            "聊聊",
+            "你怎么看",
+            "你觉得",
+            "谈谈",
+            "写一段",
+            "润色",
+            "改写",
+            "翻译",
+            "总结",
+            "解释一下代码",
+            "讲个笑话",
+            "闲聊",
+        )
+        if any(marker in normalized for marker in casual_markers):
+            return False
+
+        has_question_mark = ("?" in request) or ("？" in request)
+        question_terms = (
+            "是什么",
+            "什么意思",
+            "为什么",
+            "怎么",
+            "如何",
+            "谁是",
+            "哪里",
+            "哪儿",
+            "哪国",
+            "哪位",
+            "what",
+            "why",
+            "how",
+            "who",
+            "where",
+            "when",
+            "which",
+        )
+        has_question_terms = any(term in normalized for term in question_terms)
+        return has_question_mark or has_question_terms
 
     def _build_desktop_listing_intent_params(self, request: str) -> Optional[Dict[str, Any]]:
         """Detect simple desktop or drive listing requests that can be routed deterministically."""
@@ -870,7 +1372,10 @@ User: {user_request}
 
         day_offset = 0
         day_label = "今天"
-        if "后天" in normalized:
+        if "大后天" in normalized:
+            day_offset = 3
+            day_label = "大后天"
+        elif "后天" in normalized:
             day_offset = 2
             day_label = "后天"
         elif "明天" in normalized:
@@ -916,8 +1421,11 @@ User: {user_request}
         if not match:
             return ""
 
-        location = re.sub(r"^(?:今天|明天|后天|现在|此刻)+", "", match.group("location"))
+        location = re.sub(r"^(?:大后天|今天|明天|后天|现在|此刻)+", "", match.group("location"))
+        if len(location.strip()) <= 1:
+            return ""
         if location in {
+            "大后天",
             "今天",
             "明天",
             "后天",
@@ -942,7 +1450,7 @@ User: {user_request}
         if not request or request.lstrip().startswith("/"):
             return None
 
-        if self._tool_registry.get("http_get") is None:
+        if self._lookup_tool("http_get") is None:
             return None
 
         if self._extract_first_url(request):
@@ -1077,24 +1585,15 @@ User: {user_request}
         normalized = str(identifier or "").strip()
         if not normalized:
             return None
-        if hasattr(self._skill_registry, "resolve_name"):
-            resolved = self._skill_registry.resolve_name(normalized)
+        registry = self._get_skill_registry()
+        if registry is not None and hasattr(registry, "resolve_name"):
+            resolved = registry.resolve_name(normalized)
             return resolved or normalized
         return normalized
 
     def _extract_json_block(self, content: str) -> Optional[str]:
         """Extract a JSON object from model output."""
-
-        if content.startswith("```json") and "```" in content:
-            content = content.split("```json", 1)[1].split("```", 1)[0].strip()
-        elif content.startswith("```") and "```" in content:
-            content = content.split("```", 1)[1].split("```", 1)[0].strip()
-
-        json_start = content.find("{")
-        json_end = content.rfind("}") + 1
-        if json_start >= 0 and json_end > json_start:
-            return content[json_start:json_end]
-        return None
+        return extract_last_json_object(content)
 
     def _xml_escape(self, value: str) -> str:
         """Escape XML-sensitive characters for prompt sections."""

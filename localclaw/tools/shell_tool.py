@@ -42,17 +42,24 @@ class ShellTool(Tool):
     
     def _validate_command(self, command: str) -> None:
         """Validate the command for security."""
-        command_lower = command.lower().strip()
-        
-        for blocked in self._blocked_commands:
-            if blocked.lower() in command_lower:
-                raise ToolError(f"Blocked command detected: {blocked}", ErrorType.PERMISSION_ERROR)
-        
+        try:
+            cmd_parts = shlex.split(command, posix=platform.system() != "Windows")
+        except ValueError:
+            cmd_parts = command.strip().split()
+
+        if self._blocked_commands and cmd_parts:
+            base_cmd = cmd_parts[0].lower()
+            for blocked in self._blocked_commands:
+                blocked_parts = blocked.lower().split()
+                if not blocked_parts:
+                    continue
+                # Match on base command token first, then check remaining tokens
+                if base_cmd == blocked_parts[0] and all(
+                    p in [t.lower() for t in cmd_parts] for p in blocked_parts[1:]
+                ):
+                    raise ToolError(f"Blocked command detected: {blocked}", ErrorType.PERMISSION_ERROR)
+
         if self._allowed_commands is not None:
-            try:
-                cmd_parts = shlex.split(command, posix=platform.system() != "Windows")
-            except ValueError:
-                cmd_parts = command.strip().split()
             if cmd_parts:
                 base_cmd = cmd_parts[0]
                 if base_cmd not in self._allowed_commands:

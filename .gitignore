@@ -58,6 +58,9 @@ data/
 *.log
 logs/
 
+# Temporary scratch files
+__tmp*
+
 # OS
 .DS_Store
 Thumbs.db

@@ -1,9 +1,12 @@
 """Tests for local-first configuration and skill loading."""
 
+import logging
+
 from localclaw.config.settings import ModelProvider, Mode, Settings, SkillInstallProtectionMode
 from localclaw.llm.ollama import OllamaClient
 from localclaw.llm.openai_compatible import OpenAICompatibleProvider
 from localclaw.llm.provider import LLMConfig, LLMProviderType, create_llm_provider
+from localclaw.skills.base import create_skill_from_dict
 from localclaw.skills.loader import SkillLoader, load_skills_from_settings
 from localclaw.skills.registry.clawhub import LocalSkillRegistry
 from localclaw.skills.registry import SkillRegistry
@@ -22,6 +25,23 @@ def test_settings_default_to_local_first():
     assert settings.extra_skill_dirs == []
     assert settings.skill_install_protection_mode == SkillInstallProtectionMode.DISABLE_HIGH_RISK
     assert settings.skill_isolation_require_approval is True
+
+
+def test_create_skill_from_dict_normalizes_string_fields():
+    """Skill scalar fields should be coerced to strings for stable API serialization."""
+    skill = create_skill_from_dict(
+        {
+            "name": 123,
+            "version": 2,
+            "description": True,
+            "actions": [{"type": "transform", "template": "ok"}],
+        }
+    )
+    definition = skill.get_definition()
+
+    assert definition.name == "123"
+    assert definition.version == "2"
+    assert definition.description == "True"
 
 
 def test_create_ollama_provider_from_default_settings():
@@ -83,6 +103,63 @@ This skill is defined with markdown front matter.
     assert info["availability"] == "available"
     assert info["state"] == "enabled"
     assert info["user_invocable"] is False
+
+
+def test_skill_loader_ignores_package_manifests(tmp_path, caplog):
+    """Node package manifests inside skills directories should be skipped silently."""
+    unknown_dir = tmp_path / "unknown"
+    unknown_dir.mkdir()
+    (unknown_dir / "package.json").write_text(
+        '{"name":"unknown","version":"1.0.0","type":"module"}',
+        encoding="utf-8",
+    )
+    (unknown_dir / "package-lock.json").write_text(
+        '{"name":"unknown","lockfileVersion":3,"requires":true}',
+        encoding="utf-8",
+    )
+
+    registry = SkillRegistry()
+    loader = SkillLoader(registry)
+
+    with caplog.at_level(logging.ERROR):
+        count = loader.register_from_directory(tmp_path, recursive=True)
+
+    assert count == 0
+    assert not any("Error loading skill from" in record.message for record in caplog.records)
+
+
+def test_skill_loader_ignores_ci_workflows_and_invalid_skill_types(tmp_path, caplog):
+    """CI YAML and invalid skill type manifests should never be registered as skills."""
+    unknown_dir = tmp_path / "unknown"
+    workflow_dir = unknown_dir / ".github" / "workflows"
+    workflow_dir.mkdir(parents=True)
+    (workflow_dir / "ci.yml").write_text(
+        """
+name: CI
+on:
+  push:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+""".strip(),
+        encoding="utf-8",
+    )
+    (unknown_dir / "unknown.json").write_text(
+        '{"name":"unknown","type":"module","version":"2"}',
+        encoding="utf-8",
+    )
+
+    registry = SkillRegistry()
+    loader = SkillLoader(registry)
+
+    with caplog.at_level(logging.ERROR):
+        count = loader.register_from_directory(tmp_path, recursive=True)
+
+    assert count == 0
+    assert registry.list_skills() == []
+    assert not any("Error loading skill from" in record.message for record in caplog.records)
 
 
 def test_skill_loader_marks_missing_requirements_as_blocked(tmp_path):

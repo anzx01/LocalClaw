@@ -139,7 +139,7 @@ class ExecutionEngine:
 
             if self._settings.llm_enabled and self._settings.llm_parse_only and not self._parser_override:
                 decision: Optional[AgentDecision] = None
-                decision_timeout = max(0.1, float(self._settings.default_timeout))
+                decision_timeout = max(0.1, float(self._settings.runtime_decision_timeout))
                 try:
                     decision = await asyncio.wait_for(
                         self._openclaw_runtime.decide(message, task.context),
@@ -174,20 +174,22 @@ class ExecutionEngine:
                 else:
                     intent = decision.to_intent()
                     if intent is None:
+                        intent = Intent(
+                            intent="unknown",
+                            params=dict(decision.params or {}),
+                            confidence=decision.confidence,
+                            source=decision.source,
+                            raw_message=decision.raw_message or message.content,
+                        )
                         self._logger.info(
-                            "Task %s: OpenClaw runtime returned no executable action; retrying planner understanding",
+                            "Task %s: OpenClaw runtime returned no executable action; keeping model-first unknown intent",
                             task.id,
                         )
-                        plan = await self._planner.plan_from_message(
-                            message,
-                            task.context,
-                            allow_parser_fallback=False,
-                        )
-                    else:
-                        task.intent = intent
-                        plan = await self._planner.plan(intent, task.context)
-                        if plan.intent is None:
-                            plan.intent = intent
+
+                    task.intent = intent
+                    plan = await self._planner.plan(intent, task.context)
+                    if plan.intent is None:
+                        plan.intent = intent
                     resolved_intent = plan.intent.intent if plan and plan.intent else "unknown"
                     if self._is_unknown_plan(plan):
                         self._logger.info(
@@ -202,8 +204,26 @@ class ExecutionEngine:
                             self._complete_with_direct_answer(task, fallback_decision)
                             plan = None
                         else:
-                            task.plan = plan
-                            task.intent = plan.intent
+                            fallback_intent = fallback_decision.to_intent()
+                            if fallback_intent is not None:
+                                self._logger.info(
+                                    "Task %s: Using fallback executable action '%s' from %s",
+                                    task.id,
+                                    fallback_intent.intent,
+                                    fallback_decision.source,
+                                )
+                                fallback_plan = await self._planner.plan(fallback_intent, task.context)
+                                if fallback_plan.intent is None:
+                                    fallback_plan.intent = fallback_intent
+                                if self._is_unknown_plan(fallback_plan):
+                                    task.plan = plan
+                                    task.intent = plan.intent
+                                else:
+                                    task.plan = fallback_plan
+                                    task.intent = fallback_plan.intent
+                            else:
+                                task.plan = plan
+                                task.intent = plan.intent
                     else:
                         task.plan = plan
                         task.intent = plan.intent
@@ -215,7 +235,7 @@ class ExecutionEngine:
             else:
                 intent = await self._parser.parse(message)
                 task.intent = intent
-                self._logger.info(f"Task {task.id}: Parsed intent '{intent.intent}'")
+                self._logger.info("Task %s: Parsed intent '%s'", task.id, intent.intent)
                 plan = await self._planner.plan(intent, task.context)
                 task.plan = plan
 

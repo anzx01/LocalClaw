@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from localclaw.core.models import Message
@@ -19,13 +19,13 @@ class Session:
     session_id: str
     user_id: str
     channel: str
-    created_at: datetime = field(default_factory=datetime.now)
-    last_activity: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     def touch(self) -> None:
         """Update last activity time."""
-        self.last_activity = datetime.now()
+        self.last_activity = datetime.now(timezone.utc)
 
 
 class MessageQueue:
@@ -149,7 +149,7 @@ class SessionManager:
     
     def cleanup_expired(self) -> int:
         """Remove expired sessions."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         expired = [
             sid for sid, s in self._sessions.items()
             if (now - s.last_activity).total_seconds() > self._session_timeout

@@ -24,6 +24,21 @@ class SkillLoader:
 
     SUPPORTED_EXTENSIONS = {".json", ".yaml", ".yml"}
     SKILL_MARKDOWN_NAME = "SKILL.md"
+    NON_SKILL_FILENAMES = {
+        "package.json",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+    }
+    NON_SKILL_DIRECTORIES = {
+        ".github",
+        "node_modules",
+        ".git",
+        "__pycache__",
+        "dist",
+        "build",
+    }
 
     def __init__(self, registry: Optional[SkillRegistry] = None) -> None:
         self._registry = registry or get_skill_registry()
@@ -50,6 +65,9 @@ class SkillLoader:
             data = self._load_skill_data(resolved_path)
             if not isinstance(data, dict):
                 self._logger.error(f"Invalid skill definition in {resolved_path}")
+                return None
+            if not self._looks_like_skill_definition(data, resolved_path):
+                self._logger.debug("Skipping non-skill definition file: %s", resolved_path)
                 return None
 
             prepared = self._prepare_skill_data(data, resolved_path)
@@ -146,12 +164,22 @@ class SkillLoader:
 
         candidates = dir_path.rglob("*") if recursive else dir_path.iterdir()
         for candidate in candidates:
+            try:
+                relative_parts = candidate.relative_to(dir_path).parts
+            except Exception:
+                relative_parts = candidate.parts
+            if any(part.lower() in self.NON_SKILL_DIRECTORIES for part in relative_parts):
+                continue
+
             if candidate.is_dir():
                 skill_md = candidate / self.SKILL_MARKDOWN_NAME
                 if skill_md.exists():
                     yielded = add(skill_md)
                     if yielded:
                         yield yielded
+                continue
+
+            if candidate.name.lower() in self.NON_SKILL_FILENAMES:
                 continue
 
             if candidate.name.upper() == self.SKILL_MARKDOWN_NAME.upper() or candidate.suffix.lower() in self.SUPPORTED_EXTENSIONS:
@@ -201,12 +229,13 @@ class SkillLoader:
         prepared = dict(data)
         metadata = dict(prepared.get("metadata", {}))
         openclaw_metadata = self._extract_openclaw_metadata(metadata)
-        requirements = (
+        requirements_raw = (
             prepared.get("requires")
             or metadata.get("requires")
             or openclaw_metadata.get("requires")
             or {}
         )
+        requirements = requirements_raw if isinstance(requirements_raw, dict) else {}
         user_invocable = prepared.get(
             "user_invocable",
             prepared.get("user-invocable", metadata.get("user_invocable", True)),
@@ -245,6 +274,58 @@ class SkillLoader:
         )
         prepared["metadata"] = metadata
         return prepared
+
+    def _looks_like_skill_definition(self, data: Dict[str, Any], source_path: Path) -> bool:
+        """Best-effort detection to avoid parsing project manifests as skills."""
+        name = source_path.name.lower()
+        if name in self.NON_SKILL_FILENAMES:
+            return False
+        if source_path.name.upper() == self.SKILL_MARKDOWN_NAME.upper():
+            return True
+
+        # GitHub Actions or CI workflow files are not skills.
+        if "jobs" in data and ("on" in data or "permissions" in data):
+            return False
+
+        if "actions" in data and not isinstance(data.get("actions"), list):
+            return False
+        if "metadata" in data and not isinstance(data.get("metadata"), dict):
+            return False
+        if "requires" in data and not isinstance(data.get("requires"), dict):
+            return False
+        if "type" in data:
+            raw_type = str(data.get("type") or "").strip().lower()
+            if raw_type and raw_type not in {"atomic", "workflow", "agent"}:
+                return False
+
+        action_markers = (
+            "actions",
+            "steps",
+            "command",
+            "script",
+            "handler",
+        )
+        if any(marker in data for marker in action_markers):
+            return True
+
+        schema_markers = (
+            "tools",
+            "triggers",
+            "inputs",
+            "outputs",
+            "requires",
+            "metadata",
+        )
+        if any(marker in data for marker in schema_markers) and (
+            "name" in data or "description" in data or "type" in data
+        ):
+            return True
+
+        # Common package manifest shape (Node/npm).
+        if "scripts" in data or "dependencies" in data or "devDependencies" in data:
+            return False
+
+        return False
 
     def _normalize_aliases(self, *values: Any) -> List[str]:
         """Collect normalized skill aliases from multiple metadata locations."""

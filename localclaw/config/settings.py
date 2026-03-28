@@ -68,6 +68,13 @@ class Settings(BaseSettings):
             "(weather/news/filesystem shortcuts) after the model decision"
         ),
     )
+    browser_cdp_auto_approve_readonly: bool = Field(
+        default=True,
+        description=(
+            "Auto-approve read-only browser_cdp question queries (for example date/time/weather lookups) "
+            "instead of requiring manual approval"
+        ),
+    )
 
     bundled_skill_catalog_dir: Path = Field(
         default=PROJECT_ROOT / "bundled_skills",
@@ -96,6 +103,10 @@ class Settings(BaseSettings):
     server_port: int = Field(default=8000, description="Server port")
 
     default_timeout: float = Field(default=30.0, description="Default timeout for operations in seconds")
+    runtime_decision_timeout: float = Field(
+        default=90.0,
+        description="Timeout in seconds for OpenClaw runtime LLM decision (separate from general default_timeout)",
+    )
     max_retries: int = Field(default=3, description="Maximum retry attempts")
     retry_delay: float = Field(default=1.0, description="Delay between retries in seconds")
 

@@ -151,6 +151,8 @@
         .skill-badges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
         .skill-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
         .skill-meta span { padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #f2f6fb; color: #475467; }
+        .skill-marketplace-stats { display: flex; flex-wrap: wrap; gap: 8px; margin: -2px 0 12px; color: #344054; font-size: 12px; font-weight: 700; }
+        .skill-marketplace-stats span { display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; }
         .skill-tag-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
         .skill-tag { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; background: #eef4ff; color: #1f5eff; font-size: 12px; font-weight: 700; }
         .skill-warning { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: #fff7e8; border: 1px solid #f5df9b; color: #8a5a00; font-size: 13px; line-height: 1.5; }
@@ -1262,40 +1264,22 @@
                     <div class="metric-card">
                         <strong>Installed</strong>
                         <div class="metric-value" x-text="skills.length"></div>
+                        <div class="metric-subtle">Manage enabled, blocked, and marketplace-installed skills from the runtime registry.</div>
                     </div>
                     <div class="metric-card">
                         <strong>Available</strong>
                         <div class="metric-value" x-text="availableSkills.length"></div>
+                        <div class="metric-subtle" x-text="availableSkillsSummaryNote()"></div>
                     </div>
                     <div class="metric-card">
                         <strong>Protection</strong>
                         <div class="metric-value" x-text="formatProtectionMode(config.skill_install_protection_mode)"></div>
+                        <div class="metric-subtle">New marketplace installs inherit the current guardrail policy automatically.</div>
                     </div>
                     <div class="metric-card">
                         <strong>Registry</strong>
                         <div class="metric-value" x-text="config.clawhub_has_token ? 'Private' : 'Public'"></div>
-                    </div>
-                </div>
-
-                <div class="skills-guidance-grid">
-                    <div class="guardrail-card">
-                        <h3>Security Workflow</h3>
-                        <ul class="channel-list">
-                            <li><span>Install Guardrail</span><span x-text="formatProtectionMode(config.skill_install_protection_mode)"></span></li>
-                            <li><span>Approval After Isolation</span><span x-text="config.skill_isolation_require_approval ? 'Required' : 'Optional'"></span></li>
-                            <li><span>Critical Tool Policy</span><span x-text="config.skill_isolation_block_critical ? 'Blocked' : 'Review only'"></span></li>
-                            <li><span>Pending Approvals</span><span x-text="approvals.length"></span></li>
-                        </ul>
-                    </div>
-
-                    <div class="guardrail-card">
-                        <h3>Skill Storage Layout</h3>
-                        <ul class="channel-list">
-                            <li><span>Managed Dir</span><code x-text="config.managed_skills_dir || 'Unknown'"></code></li>
-                            <li><span>Bundled Catalog</span><code x-text="config.bundled_skill_catalog_dir || 'Unknown'"></code></li>
-                            <li><span>Configured Dirs</span><span x-text="(config.configured_skill_dirs || []).length"></span></li>
-                            <li><span>Registry Auth</span><span x-text="config.clawhub_has_token ? 'Token present' : 'Public only'"></span></li>
-                        </ul>
+                        <div class="metric-subtle">Search stays local by default and only calls ClawHub when you click Search.</div>
                     </div>
                 </div>
 
@@ -1400,8 +1384,16 @@
                             <div class="skill-badges">
                                 <span class="pill source-bundled">Bundled</span>
                                 <span class="pill source-remote">ClawHub</span>
+                                <span class="pill source-managed">Upload</span>
                             </div>
                         </div>
+
+                        <input
+                            type="file"
+                            x-ref="skillUploadInput"
+                            @change="handleSkillUploadSelected($event)"
+                            accept=".zip,.tar,.tgz,.tar.gz,.json,.yaml,.yml,.md"
+                            style="display: none;">
 
                         <div class="skill-filter-row">
                             <input type="text" x-model="skillSearchQuery" @keyup.enter="loadAvailableSkills({ manual: true })" placeholder="Search skills, for example weather, summarize, browser">
@@ -1410,10 +1402,11 @@
                                 <option value="bundled">Bundled only</option>
                                 <option value="remote">ClawHub only</option>
                             </select>
+                            <button class="secondary-btn" @click="triggerSkillUploadPicker()" :disabled="uploadScanning" x-text="uploadScanning ? 'Scanning Upload...' : 'Upload Skill File'"></button>
                             <button class="ghost-btn" @click="loadAvailableSkills({ manual: true })" :disabled="availableSkillsLoading" x-text="availableSkillsLoading ? 'Searching...' : 'Search'"></button>
                         </div>
 
-                        <div class="skill-note">ClawHub 远端只在点 Search 时请求。</div>
+                        <div class="skill-note" x-text="uploadSelectedFileName ? ('最近选择：' + uploadSelectedFileName + '。支持 zip / tar.gz / SKILL.md / json / yaml。') : 'ClawHub 远端只在点 Search 时请求。也可以直接上传本地 skill 包安装。'"></div>
 
                         <template x-if="availableSkillsLoadError">
                             <div class="notice">
@@ -1468,6 +1461,14 @@
                                         </template>
                                     </div>
 
+                                    <template x-if="hasMarketplaceStats(skill)">
+                                        <div class="skill-marketplace-stats">
+                                            <template x-for="item in marketplaceStatsParts(skill)" :key="item.label">
+                                                <span x-text="item.label"></span>
+                                            </template>
+                                        </div>
+                                    </template>
+
                                     <template x-if="skill.tags && skill.tags.length">
                                         <div class="skill-tag-list">
                                             <template x-for="tag in skill.tags.slice(0, 6)" :key="tag">
@@ -1489,6 +1490,28 @@
                             </template>
                         </div>
                     </section>
+                </div>
+
+                <div class="skills-guidance-grid">
+                    <div class="guardrail-card">
+                        <h3>Security Workflow</h3>
+                        <ul class="channel-list">
+                            <li><span>Install Guardrail</span><span x-text="formatProtectionMode(config.skill_install_protection_mode)"></span></li>
+                            <li><span>Approval After Isolation</span><span x-text="config.skill_isolation_require_approval ? 'Required' : 'Optional'"></span></li>
+                            <li><span>Critical Tool Policy</span><span x-text="config.skill_isolation_block_critical ? 'Blocked' : 'Review only'"></span></li>
+                            <li><span>Pending Approvals</span><span x-text="approvals.length"></span></li>
+                        </ul>
+                    </div>
+
+                    <div class="guardrail-card">
+                        <h3>Skill Storage Layout</h3>
+                        <ul class="channel-list">
+                            <li><span>Managed Dir</span><code x-text="config.managed_skills_dir || 'Unknown'"></code></li>
+                            <li><span>Bundled Catalog</span><code x-text="config.bundled_skill_catalog_dir || 'Unknown'"></code></li>
+                            <li><span>Configured Dirs</span><span x-text="(config.configured_skill_dirs || []).length"></span></li>
+                            <li><span>Registry Auth</span><span x-text="config.clawhub_has_token ? 'Token present' : 'Public only'"></span></li>
+                        </ul>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1973,15 +1996,21 @@
                             <span class="pill mode" x-text="'建议：' + installActionLabel(installReview.report.recommended_action)"></span>
                         </div>
 
-                        <div class="meta-grid">
-                            <div class="meta-item">
-                                <strong>Skill</strong>
-                                <span x-text="installReview.report.skill_name || installReview.skill.name"></span>
-                            </div>
-                            <div class="meta-item">
-                                <strong>Author</strong>
-                                <span x-text="installReview.report.metadata_snapshot.author || '未提供'"></span>
-                            </div>
+                            <div class="meta-grid">
+                                <div class="meta-item">
+                                    <strong>Skill</strong>
+                                    <span x-text="installReview.report.skill_name || installReview.skill.name"></span>
+                                </div>
+                                <template x-if="installReview && installReview.filename">
+                                    <div class="meta-item">
+                                        <strong>Upload</strong>
+                                        <span x-text="installReview.filename"></span>
+                                    </div>
+                                </template>
+                                <div class="meta-item">
+                                    <strong>Author</strong>
+                                    <span x-text="installReview.report.metadata_snapshot.author || '未提供'"></span>
+                                </div>
                             <div class="meta-item">
                                 <strong>Homepage</strong>
                                 <span x-text="installReview.report.metadata_snapshot.homepage || '未提供'"></span>
@@ -2035,7 +2064,7 @@
                             <button
                                 :class="installProceedButtonClass()"
                                 @click="confirmInstallSkill()"
-                                :disabled="!installReview || installing === installReview.skill.id"
+                                :disabled="!installReview || installing === currentInstallReviewKey()"
                                 x-text="installProceedLabel()">
                             </button>
                         </div>
@@ -2075,6 +2104,7 @@
                 logsLastLoadedAt: '',
                 tasks: [],
                 chatTaskIds: {},
+                chatTaskStates: {},
                 approvals: [],
                 config: {},
                 channels: [],
@@ -2096,6 +2126,8 @@
                 approvingStepKey: '',
                 rejectingStepKey: '',
                 installing: '',
+                uploadScanning: false,
+                uploadSelectedFileName: '',
                 skillStateLoadingKey: '',
                 skillUpgradeLoadingKey: '',
                 uninstallingSkill: '',
@@ -2732,9 +2764,21 @@
                 },
 
                 buildChatMessageFromApi(data) {
+                    const status = String((data && data.status) || '').toLowerCase();
                     let responseText = typeof data.message === 'string' && data.message.trim()
                         ? data.message.trim()
-                        : 'Done';
+                        : '';
+                    if (!responseText) {
+                        if (status === 'failed') {
+                            responseText = 'Task failed.';
+                        } else if (status === 'verifying' || status === 'paused') {
+                            responseText = 'Waiting for approval.';
+                        } else if (status === 'parsed' || status === 'planned' || status === 'running' || status === 'init') {
+                            responseText = 'Processing...';
+                        } else {
+                            responseText = 'Done';
+                        }
+                    }
                     const stepResult = this.extractPrimaryStepResult(data.data);
                     let structured = this.buildStructuredBlocks(stepResult, responseText);
 
@@ -2766,7 +2810,7 @@
 
                 getTaskDisplayText(task) {
                     if (!task || typeof task !== 'object') {
-                        return 'Done';
+                        return 'Processing...';
                     }
                     if (task.error) {
                         return String(task.error);
@@ -2792,7 +2836,22 @@
                         }
                     }
 
-                    return task.state === 'failed' ? 'Task failed.' : 'Done';
+                    const state = String(task.state || '').toLowerCase();
+                    if (state === 'failed') {
+                        return 'Task failed.';
+                    }
+                    if (state === 'verifying' || state === 'paused') {
+                        return 'Waiting for approval.';
+                    }
+                    if (state === 'parsed' || state === 'planned' || state === 'running' || state === 'init') {
+                        return 'Processing...';
+                    }
+                    return 'Done';
+                },
+
+                isTaskTerminalState(state) {
+                    const normalized = String(state || '').toLowerCase();
+                    return normalized === 'completed' || normalized === 'failed';
                 },
 
                 syncChatHistoryFromTasks(tasks) {
@@ -2803,11 +2862,21 @@
                     const historyMessages = [];
 
                     orderedTasks.forEach(task => {
-                        if (!task || !task.id || this.chatTaskIds[task.id]) {
+                        if (!task || !task.id) {
+                            return;
+                        }
+                        const taskState = String(task.state || '').toLowerCase();
+                        const knownState = String(this.chatTaskStates[task.id] || '').toLowerCase();
+                        const alreadyShown = Boolean(this.chatTaskIds[task.id]);
+                        const isTerminal = this.isTaskTerminalState(taskState);
+                        if (!isTerminal) {
+                            return;
+                        }
+                        if (alreadyShown && this.isTaskTerminalState(knownState)) {
                             return;
                         }
 
-                        if (task.message && String(task.message).trim()) {
+                        if (!alreadyShown && task.message && String(task.message).trim()) {
                             historyMessages.push(
                                 this.createChatMessage('user', String(task.message).trim(), {
                                     label: 'You',
@@ -2834,6 +2903,7 @@
                         historyMessages.push(systemMessage);
 
                         this.chatTaskIds[task.id] = true;
+                        this.chatTaskStates[task.id] = taskState;
                     });
 
                     if (historyMessages.length) {
@@ -3225,6 +3295,23 @@
                     return haystack.includes(normalizedQuery);
                 },
 
+                availableCatalogInstalledCount() {
+                    return this.availableSkillsCatalog.filter(skill => this.isSkillInstalled(skill)).length;
+                },
+
+                availableSkillsSummaryNote() {
+                    if (this.availableSkills.length > 0) {
+                        return 'Marketplace results that are not already installed appear here.';
+                    }
+
+                    const installedCatalogCount = this.availableCatalogInstalledCount();
+                    if (installedCatalogCount > 0) {
+                        return 'Bundled results are already installed, so there is nothing new to install right now.';
+                    }
+
+                    return 'Bundled results appear automatically; ClawHub only runs when you click Search.';
+                },
+
                 availableSkillsEmptyStateMessage() {
                     if (this.filteredAvailableSkills().length > 0) {
                         return '';
@@ -3268,6 +3355,12 @@
                     }
 
                     if (this.availableSkills.length === 0) {
+                        const installedCatalogCount = this.availableCatalogInstalledCount();
+                        if (installedCatalogCount > 0) {
+                            return query
+                                ? '这次命中的技能都已经安装过了。左侧 Installed Skills 里可以直接管理它们。'
+                                : 'Bundled 目录里的技能都已经安装过了，所以这里没有新的可安装项。想找更多的话，切到 ClawHub only 后点 Search。';
+                        }
                         return query
                             ? '没有技能匹配这次搜索。试试更宽一点的关键词，或者切换来源。'
                             : '当前没有可安装的技能结果。';
@@ -3388,6 +3481,52 @@
                         return 'Unknown';
                     }
                     return skill.source_label || (String(skill.source || 'remote').toLowerCase() === 'bundled' ? 'Bundled' : 'ClawHub');
+                },
+
+                hasMarketplaceStats(skill) {
+                    return this.marketplaceStatsParts(skill).length > 0;
+                },
+
+                marketplaceStatsParts(skill) {
+                    if (!skill) {
+                        return [];
+                    }
+
+                    const parts = [];
+                    if (skill.stars !== null && skill.stars !== undefined) {
+                        parts.push({ label: '⭐ ' + this.formatCompactCount(skill.stars) });
+                    }
+                    if (skill.downloads !== null && skill.downloads !== undefined) {
+                        parts.push({ label: this.formatCompactCount(skill.downloads) });
+                    }
+                    if (skill.current_installs !== null && skill.current_installs !== undefined) {
+                        parts.push({ label: this.formatCompactCount(skill.current_installs) + ' 当前安装' });
+                    }
+                    if (skill.all_time_installs !== null && skill.all_time_installs !== undefined) {
+                        parts.push({ label: this.formatCompactCount(skill.all_time_installs) + ' 次历史安装' });
+                    }
+                    return parts;
+                },
+
+                formatCompactCount(value) {
+                    if (value === null || value === undefined || value === '') {
+                        return '0';
+                    }
+
+                    const numeric = Number(value);
+                    if (!Number.isFinite(numeric)) {
+                        return String(value);
+                    }
+
+                    if (Math.abs(numeric) < 1000) {
+                        return Math.round(numeric).toString();
+                    }
+
+                    return new Intl.NumberFormat('en', {
+                        notation: 'compact',
+                        compactDisplay: 'short',
+                        maximumFractionDigits: 1
+                    }).format(numeric).toLowerCase();
                 },
 
                 formatProtectionMode(mode) {
@@ -4308,6 +4447,64 @@
                     }
                 },
 
+                currentInstallReviewKey() {
+                    if (!this.installReview) {
+                        return '';
+                    }
+                    return this.installReview.upload_token
+                        || (this.installReview.skill && this.installReview.skill.id)
+                        || '';
+                },
+
+                triggerSkillUploadPicker() {
+                    if (this.uploadScanning || !this.$refs.skillUploadInput) {
+                        return;
+                    }
+                    this.$refs.skillUploadInput.value = '';
+                    this.$refs.skillUploadInput.click();
+                },
+
+                async handleSkillUploadSelected(event) {
+                    const input = event && event.target;
+                    const file = input && input.files && input.files[0];
+                    if (!file) {
+                        return;
+                    }
+
+                    this.uploadSelectedFileName = file.name;
+                    this.uploadScanning = true;
+                    this.installReviewError = '';
+
+                    try {
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        const response = await axios.post('/api/skills/upload/scan', formData, {
+                            headers: { 'Content-Type': 'multipart/form-data' }
+                        });
+                        const payload = response.data || {};
+                        this.installReview = {
+                            skill: payload.skill || {
+                                id: payload.scan && payload.scan.skill_id ? payload.scan.skill_id : file.name,
+                                name: payload.scan && payload.scan.skill_name ? payload.scan.skill_name : file.name
+                            },
+                            report: payload.scan,
+                            upload_token: payload.upload_token,
+                            filename: payload.filename || file.name
+                        };
+                        this.installReviewOpen = true;
+                    } catch (e) {
+                        const detail = e.response && e.response.data
+                            ? (e.response.data.detail || JSON.stringify(e.response.data))
+                            : e.message;
+                        alert('上传 Skill 失败：' + detail);
+                    } finally {
+                        this.uploadScanning = false;
+                        if (input) {
+                            input.value = '';
+                        }
+                    }
+                },
+
                 async openInstallReview(skill) {
                     if (this.reviewLoading === skill.id || this.installing === skill.id) {
                         return;
@@ -4373,6 +4570,7 @@
                         this.messages.push(this.buildChatMessageFromApi(data));
                         if (data.task_id) {
                             this.chatTaskIds[data.task_id] = true;
+                            this.chatTaskStates[data.task_id] = String(data.status || '').toLowerCase();
                         }
                         this.scrollChatToBottom();
 
@@ -4398,13 +4596,21 @@
                     }
 
                     const skillId = this.installReview.skill.id;
-                    this.installing = skillId;
+                    const installKey = this.currentInstallReviewKey();
+                    this.installing = installKey;
                     this.installReviewError = '';
 
                     try {
-                        const response = await axios.post(
-                            '/api/clawhub/install?skill_id=' + encodeURIComponent(skillId) + '&decision=proceed'
-                        );
+                        let response;
+                        if (this.installReview.upload_token) {
+                            response = await axios.post(
+                                '/api/skills/upload/install?upload_token=' + encodeURIComponent(this.installReview.upload_token) + '&decision=proceed'
+                            );
+                        } else {
+                            response = await axios.post(
+                                '/api/clawhub/install?skill_id=' + encodeURIComponent(skillId) + '&decision=proceed'
+                            );
+                        }
 
                         if (response.data.installed) {
                             await this.refreshSkillCatalog();

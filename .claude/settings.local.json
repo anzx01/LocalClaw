@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(find . -iname *openclaw* -o -iname *open_claw*)",
-      "Bash(find g:/aiprj/openclaw -maxdepth 2 -name *.ts -o -name *.js -o -name *.py)"
+      "Bash(find g:/aiprj/openclaw -maxdepth 2 -name *.ts -o -name *.js -o -name *.py)",
+      "Bash(pytest -q tests/test_windows_service.py tests/test_channels_api.py)",
+      "Bash(pytest -q)",
+      "Bash(pytest -q tests/test_engine.py::test_engine_local_model_decision_timeout_falls_back_to_deterministic_parser tests/test_gateway.py::TestSessionManager::test_cleanup_expired -v)",
+      "Bash(pytest -q tests/test_engine.py::test_engine_local_model_decision_timeout_falls_back_to_deterministic_parser -v)",
+      "Bash(pytest -q tests/test_engine.py::test_engine_local_model_decision_timeout_falls_back_to_deterministic_parser tests/test_gateway.py::TestSessionManager::test_cleanup_expired)"
     ]
   }
 }

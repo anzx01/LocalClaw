@@ -8,6 +8,7 @@ import pytest
 
 from localclaw.core.models import AgentDecisionMode, ExecutionResult, Message, RiskLevel
 from localclaw.core.openclaw_runtime import OpenClawRuntime
+from localclaw.skills.base import create_skill_from_dict
 from localclaw.skills.loader import SkillLoader
 from localclaw.skills.registry import SkillRegistry
 from localclaw.tools.base import Tool, ToolRegistry
@@ -53,6 +54,19 @@ class DummyDiskUsageTool(Tool):
         return ExecutionResult.success(data={"path": "C:/", "free_bytes": 1, "total_bytes": 2})
 
 
+class DummyBrowserTool(Tool):
+    """Browser tool placeholder used by web-fallback routing tests."""
+
+    name = "browser_cdp"
+    description = "Browser automation"
+    risk_level = RiskLevel.HIGH
+    inputs = {"request": "string"}
+    outputs = {"message": "string"}
+
+    async def execute(self, **kwargs):
+        return ExecutionResult.success(data={"message": "ok"})
+
+
 @pytest.mark.asyncio
 async def test_openclaw_runtime_can_return_direct_answer(monkeypatch):
     """Plain conversational requests should be answerable without planner fallback."""
@@ -83,6 +97,41 @@ async def test_openclaw_runtime_can_return_direct_answer(monkeypatch):
 
     assert decision.mode == AgentDecisionMode.ANSWER
     assert "skill" in decision.answer
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_extracts_last_json_object_from_reasoning(monkeypatch):
+    """Reasoning-heavy local models should still resolve the final JSON decision."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            del prompt, max_tokens, temperature
+
+            class Response:
+                content = (
+                    'I considered {"mode":"unknown"} first.\n'
+                    "</think>\n"
+                    '{"mode":"intent","intent":"check_weather","params":{"location":"北京","day_offset":1}}'
+                )
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(
+        SkillRegistry(),
+        ToolRegistry(),
+        refine_skill_decision=False,
+        enable_request_guardrails=False,
+    )
+    decision = await runtime.decide(Message(content="明天北京天气怎么样"))
+
+    assert decision.mode == AgentDecisionMode.INTENT
+    assert decision.intent_name == "check_weather"
+    assert decision.params == {"location": "北京", "day_offset": 1}
 
 
 @pytest.mark.asyncio
@@ -459,6 +508,35 @@ async def test_openclaw_runtime_guardrails_weather_hot_bu_question(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_openclaw_runtime_guardrails_weather_day_after_after_tomorrow(monkeypatch):
+    """Queries like '大后天冷不' should be treated as weather intent with day_offset=3."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"unknown","params":{}}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    tool_registry.register(DummyHttpGetTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+    decision = await runtime.decide(Message(content="大后天冷不？"))
+
+    assert decision.mode == AgentDecisionMode.INTENT
+    assert decision.intent_name == "check_weather"
+    assert decision.params["location"] == ""
+    assert decision.params["day_offset"] == 3
+    assert decision.params["day_label"] == "大后天"
+
+
+@pytest.mark.asyncio
 async def test_openclaw_runtime_can_disable_request_guardrails(monkeypatch):
     """When guardrails are disabled, runtime should keep the model decision."""
 
@@ -487,6 +565,250 @@ async def test_openclaw_runtime_can_disable_request_guardrails(monkeypatch):
     assert decision.mode == AgentDecisionMode.ANSWER
     assert decision.answer == "模型直答"
     assert decision.source == "openclaw_runtime"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_fallback_prefers_web_skill_for_unknown_questions(monkeypatch):
+    """Unknown factual questions should prefer web-access before other web-search skills."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return False
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    registry = SkillRegistry()
+    web_access = create_skill_from_dict(
+        {
+            "name": "web-access",
+            "version": "1.0.0",
+            "description": "Browse and fetch live web information",
+            "type": "workflow",
+            "inputs": {"request": "string"},
+            "actions": [{"type": "transform", "template": "browse {{request}}"}],
+        }
+    )
+    web_access.enable()
+    registry.register(web_access)
+
+    skill = create_skill_from_dict(
+        {
+            "name": "tavily-web-search",
+            "version": "1.0.0",
+            "description": "Search the web for current information",
+            "type": "workflow",
+            "inputs": {"query": "string"},
+            "actions": [{"type": "transform", "template": "search {{query}}"}],
+        }
+    )
+    skill.enable()
+    registry.register(skill)
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+
+    runtime = OpenClawRuntime(registry, tool_registry)
+    decision = await runtime.fallback_to_chat_answer(Message(content="量子纠缠是什么意思？"))
+
+    assert decision.mode == AgentDecisionMode.SKILL
+    assert decision.skill_name == "web-access"
+    assert decision.params["request"] == "量子纠缠是什么意思？"
+    assert decision.params["query"] == "量子纠缠是什么意思？"
+    assert decision.source == "openclaw_runtime_web_fallback"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_clock_queries_fallback_to_web_access(monkeypatch):
+    """Date/time questions should use web-access/browser fallback when planning fails."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return False
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    registry = SkillRegistry()
+    web_access = create_skill_from_dict(
+        {
+            "name": "web-access",
+            "version": "1.0.0",
+            "description": "Browse and fetch live web information",
+            "type": "workflow",
+            "inputs": {"request": "string"},
+            "actions": [{"type": "transform", "template": "browse {{request}}"}],
+        }
+    )
+    web_access.enable()
+    registry.register(web_access)
+
+    runtime = OpenClawRuntime(registry, ToolRegistry())
+    date_decision = await runtime.fallback_to_chat_answer(Message(content="今天周几？"))
+    time_decision = await runtime.fallback_to_chat_answer(Message(content="现在几点了？"))
+
+    tomorrow_decision = await runtime.fallback_to_chat_answer(Message(content="\u660e\u5929\u5468\u51e0\uff1f"))
+
+    assert date_decision.mode == AgentDecisionMode.SKILL
+    assert date_decision.skill_name == "web-access"
+    assert date_decision.source == "openclaw_runtime_web_fallback"
+
+    assert time_decision.mode == AgentDecisionMode.SKILL
+    assert time_decision.skill_name == "web-access"
+    assert time_decision.source == "openclaw_runtime_web_fallback"
+
+    assert tomorrow_decision.mode == AgentDecisionMode.SKILL
+    assert tomorrow_decision.skill_name == "web-access"
+    assert tomorrow_decision.source == "openclaw_runtime_web_fallback"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_disabled_guardrails_skip_deterministic_web_fallback(monkeypatch):
+    """When guardrails are disabled, chat fallback should not inject hardcoded web-skill routing."""
+
+    class ChatFallbackProvider:
+        async def is_available(self):
+            return True
+
+        async def chat(self, messages, max_tokens=None, temperature=None):
+            class Response:
+                content = "I cannot verify live information here."
+
+            return Response()
+
+        async def generate(self, prompt, system_prompt=None, max_tokens=None, temperature=None):
+            class Response:
+                content = "I cannot verify live information here."
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: ChatFallbackProvider())
+
+    registry = SkillRegistry()
+    web_access = create_skill_from_dict(
+        {
+            "name": "web-access",
+            "version": "1.0.0",
+            "description": "Browse and fetch live web information",
+            "type": "workflow",
+            "inputs": {"request": "string"},
+            "actions": [{"type": "transform", "template": "browse {{request}}"}],
+        }
+    )
+    web_access.enable()
+    registry.register(web_access)
+
+    runtime = OpenClawRuntime(registry, ToolRegistry(), enable_request_guardrails=False)
+    decision = await runtime.fallback_to_chat_answer(Message(content="今天周几？"))
+
+    assert decision.mode == AgentDecisionMode.ANSWER
+    assert decision.source == "openclaw_runtime_chat_fallback"
+    assert "verify" in decision.answer.lower()
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_clock_queries_override_model_answers(monkeypatch):
+    """Clock-like requests should prefer web-access over direct model answers."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"answer","answer":"今天是周一"}'
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    registry = SkillRegistry()
+    web_access = create_skill_from_dict(
+        {
+            "name": "web-access",
+            "version": "1.0.0",
+            "description": "Browse and fetch live web information",
+            "type": "workflow",
+            "inputs": {"request": "string"},
+            "actions": [{"type": "transform", "template": "browse {{request}}"}],
+        }
+    )
+    web_access.enable()
+    registry.register(web_access)
+
+    runtime = OpenClawRuntime(registry, ToolRegistry())
+    decision = await runtime.decide(Message(content="今天周几？"))
+
+    assert decision.mode == AgentDecisionMode.SKILL
+    assert decision.skill_name == "web-access"
+    assert decision.source == "openclaw_runtime_guardrail"
+    assert decision.rationale == "clock_query_web_guardrail"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_clock_intent_is_upgraded_to_web_skill(monkeypatch):
+    """date_query/time_now intents from the model should still route via web-access."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"date_query","params":{}}'
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    registry = SkillRegistry()
+    web_access = create_skill_from_dict(
+        {
+            "name": "web-access",
+            "version": "1.0.0",
+            "description": "Browse and fetch live web information",
+            "type": "workflow",
+            "inputs": {"request": "string"},
+            "actions": [{"type": "transform", "template": "browse {{request}}"}],
+        }
+    )
+    web_access.enable()
+    registry.register(web_access)
+
+    runtime = OpenClawRuntime(registry, ToolRegistry())
+    decision = await runtime.decide(Message(content="\u4eca\u5929\u5468\u51e0\uff1f"))
+
+    assert decision.mode == AgentDecisionMode.SKILL
+    assert decision.skill_name == "web-access"
+    assert decision.source == "openclaw_runtime_guardrail"
+    assert decision.rationale == "clock_query_web_guardrail"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_non_clock_query_is_not_forced_into_clock_guardrail(monkeypatch):
+    """If the model mislabels a non-clock question as date_query, prefer web fallback routing."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"date_query","params":{}}'
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    tool_registry.register(DummyBrowserTool())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+    decision = await runtime.decide(Message(content="明天北京有马拉松比赛吗？"))
+
+    assert decision.mode == AgentDecisionMode.TOOL
+    assert decision.tool_name == "browser_cdp"
+    assert decision.source == "openclaw_runtime_web_fallback"
+    assert decision.rationale == "unknown_question_web_fallback"
 
 
 @pytest.mark.asyncio
@@ -522,6 +844,51 @@ async def test_openclaw_runtime_weather_location_strips_day_prefix(monkeypatch):
     assert xian.intent_name == "check_weather"
     assert xian.params["location"] == "西安"
     assert xian.params["day_offset"] == 1
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_weather_prefers_installed_weather_skill(monkeypatch):
+    """Weather-like prompts should route to an installed weather skill when available."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"unknown","params":{}}'
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    registry = SkillRegistry()
+    weather_skill = create_skill_from_dict(
+        {
+            "name": "weather",
+            "version": "1.0.0",
+            "description": "weather",
+            "type": "workflow",
+            "inputs": {"location": "string"},
+            "actions": [{"type": "transform", "template": "weather {{location}}"}],
+        }
+    )
+    weather_skill.enable()
+    registry.register(weather_skill)
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    tool_registry.register(DummyHttpGetTool())
+
+    runtime = OpenClawRuntime(registry, tool_registry)
+    decision = await runtime.decide(Message(content="\u660e\u5929\u5317\u4eac\u5929\u6c14\uff1f"))
+
+    assert decision.mode == AgentDecisionMode.SKILL
+    assert decision.skill_name == "weather"
+    assert decision.source == "openclaw_runtime_guardrail"
+    assert decision.rationale == "weather_skill_guardrail"
+    assert decision.params["location"] == "\u5317\u4eac"
+    assert decision.params["day_offset"] == 1
 
 
 @pytest.mark.asyncio
@@ -590,25 +957,43 @@ def test_clawhub_client_preserves_skill_markdown_bundle(tmp_path):
 
 @pytest.mark.asyncio
 async def test_clawhub_client_search_normalizes_real_search_payload():
-    """Real ClawHub search payloads should normalize into marketplace listings."""
+    """Real ClawHub search payloads should normalize and enrich marketplace stats."""
 
     client = ClawHubClient(base_url="https://clawhub.example")
 
     async def fake_get_json(path, params=None):
-        assert path == "/api/v1/search"
-        assert params == {"q": "weather", "limit": "20"}
-        return {
-            "results": [
-                {
+        if path == "/api/v1/search":
+            assert params == {"q": "weather", "limit": "20"}
+            return {
+                "results": [
+                    {
+                        "slug": "weather.forecast",
+                        "displayName": "Weather Forecast",
+                        "summary": "Forecast weather via wttr.in",
+                        "version": "2.1.0",
+                        "updatedAt": 1234567890,
+                        "score": 0.97,
+                    }
+                ]
+            }
+        if path == "/api/v1/skills/weather.forecast":
+            return {
+                "skill": {
                     "slug": "weather.forecast",
                     "displayName": "Weather Forecast",
                     "summary": "Forecast weather via wttr.in",
-                    "version": "2.1.0",
                     "updatedAt": 1234567890,
-                    "score": 0.97,
-                }
-            ]
-        }
+                    "stats": {
+                        "downloads": 20543,
+                        "installsCurrent": 234,
+                        "installsAllTime": 242,
+                        "stars": 46,
+                    },
+                },
+                "owner": {"displayName": "Forecast Team"},
+                "latestVersion": {"version": "2.1.0"},
+            }
+        raise AssertionError(f"Unexpected path: {path}")
 
     client._get_json = fake_get_json
 
@@ -620,7 +1005,7 @@ async def test_clawhub_client_search_normalizes_real_search_payload():
             "name": "Weather Forecast",
             "version": "2.1.0",
             "description": "Forecast weather via wttr.in",
-            "author": "ClawHub",
+            "author": "Forecast Team",
             "homepage": "https://clawhub.example/skills/weather.forecast",
             "repository": "",
             "category": "remote",
@@ -629,10 +1014,47 @@ async def test_clawhub_client_search_normalizes_real_search_payload():
             "source_label": "ClawHub",
             "updated_at": 1234567890,
             "score": 0.97,
+            "stars": 46,
+            "downloads": 20543,
+            "current_installs": 234,
+            "all_time_installs": 242,
         }
     ]
 
     await client.close()
+
+
+def test_clawhub_client_detail_normalizes_marketplace_stats():
+    """Skill detail payloads should expose ClawHub marketplace counters."""
+
+    client = ClawHubClient(base_url="https://clawhub.example")
+
+    detail = client._normalize_skill_detail(
+        {
+            "skill": {
+                "slug": "weather.forecast",
+                "displayName": "Weather Forecast",
+                "summary": "Forecast weather via wttr.in",
+                "createdAt": 1234500000,
+                "updatedAt": 1234567890,
+                "stats": {
+                    "downloads": 20543,
+                    "installsCurrent": 234,
+                    "installsAllTime": 242,
+                    "stars": 46,
+                },
+                "tags": {"weather": True},
+            },
+            "owner": {"displayName": "Forecast Team", "handle": "forecast"},
+            "latestVersion": {"version": "2.1.0"},
+        }
+    )
+
+    assert detail is not None
+    assert detail["stars"] == 46
+    assert detail["downloads"] == 20543
+    assert detail["current_installs"] == 234
+    assert detail["all_time_installs"] == 242
 
 
 @pytest.mark.asyncio

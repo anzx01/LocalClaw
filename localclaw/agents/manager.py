@@ -39,7 +39,7 @@ class AgentManager:
         """Register an agent configuration."""
         self._agents[config.name] = config
         self._router.register_agent(config)
-        self._logger.info(f"Registered agent: {config.name}")
+        self._logger.info("Registered agent: %s", config.name)
     
     def unregister_agent(self, name: str) -> bool:
         """Unregister an agent."""
@@ -50,7 +50,7 @@ class AgentManager:
         if name in self._agents:
             del self._agents[name]
             self._router.unregister_agent(name)
-            self._logger.info(f"Unregistered agent: {name}")
+            self._logger.info("Unregistered agent: %s", name)
             return True
         return False
     
@@ -83,7 +83,7 @@ class AgentManager:
         agent = self._agents.get(name)
         if agent:
             agent.enabled = True
-            self._logger.info(f"Enabled agent: {name}")
+            self._logger.info("Enabled agent: %s", name)
             return True
         return False
     
@@ -96,7 +96,7 @@ class AgentManager:
         agent = self._agents.get(name)
         if agent:
             agent.enabled = False
-            self._logger.info(f"Disabled agent: {name}")
+            self._logger.info("Disabled agent: %s", name)
             return True
         return False
     

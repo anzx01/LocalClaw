@@ -1,6 +1,8 @@
 """Tests for aggregated channel metadata used by the Web UI."""
 
 from datetime import datetime
+import io
+import zipfile
 
 from fastapi.testclient import TestClient
 
@@ -96,6 +98,8 @@ def test_static_ui_contains_channels_tab(monkeypatch):
     assert "/api/approvals" in response.text
     assert "/api/system/service" in response.text
     assert "/api/clawhub/search" in response.text
+    assert "/api/skills/upload/scan" in response.text
+    assert "Upload Skill File" in response.text
     assert "translator" not in response.text.lower()
 
 
@@ -463,3 +467,67 @@ def test_clawhub_search_endpoint_forwards_include_remote_flag(monkeypatch):
     assert captured["tool_name"] == "clawhub_search"
     assert captured["kwargs"]["query"] == "repo"
     assert captured["kwargs"]["include_remote"] is False
+
+
+def test_uploaded_skill_scan_and_install_flow(monkeypatch, tmp_path):
+    """The Skills API should support reviewing and installing a local uploaded skill bundle."""
+
+    from localclaw.channels import web as web_channel
+    from localclaw.skills import registry as skill_registry_module
+    from localclaw.skills.registry import clawhub as clawhub_registry
+
+    managed_dir = tmp_path / "managed"
+    managed_dir.mkdir()
+    settings = Settings(_env_file=None, managed_skills_dir=managed_dir)
+    registry = SkillRegistry()
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as bundle_zip:
+        bundle_zip.writestr(
+            "upload-demo/SKILL.md",
+            """---
+name: upload-demo
+version: 1.2.0
+description: Install me from a local upload.
+type: workflow
+actions:
+  - type: transform
+    template: "hello"
+metadata:
+  author: Upload Tester
+  category: local
+---
+
+# Upload Demo
+
+This skill came from a local archive upload.
+""",
+        )
+
+    monkeypatch.setattr(web_channel, "get_settings", lambda: settings)
+    monkeypatch.setattr(clawhub_registry, "get_settings", lambda: settings)
+    monkeypatch.setattr(web_channel, "get_skill_registry", lambda: registry)
+    monkeypatch.setattr(skill_registry_module, "get_skill_registry", lambda: registry)
+    monkeypatch.setattr(web_channel, "initialize_system", lambda: None)
+
+    app = web_channel.create_app()
+    with TestClient(app) as client:
+        scan_response = client.post(
+            "/api/skills/upload/scan",
+            files={"file": ("upload-demo.zip", archive.getvalue(), "application/zip")},
+        )
+        assert scan_response.status_code == 200
+        scan_payload = scan_response.json()
+        assert scan_payload["skill"]["id"] == "upload-demo"
+        assert scan_payload["scan"]["metadata_snapshot"]["source"] == "upload"
+
+        install_response = client.post(
+            "/api/skills/upload/install",
+            params={"upload_token": scan_payload["upload_token"], "decision": "proceed"},
+        )
+
+    assert install_response.status_code == 200
+    install_payload = install_response.json()
+    assert install_payload["installed"] is True
+    assert (managed_dir / "upload-demo" / "SKILL.md").exists()
+    assert registry.get("upload-demo") is not None

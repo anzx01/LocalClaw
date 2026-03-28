@@ -2,9 +2,11 @@
 
 import json
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
+from localclaw.core.json_utils import extract_last_json_object
 from localclaw.core.interpolation import (
     normalize_condition_expression,
     resolve_interpolated_value,
@@ -74,6 +76,46 @@ class Planner:
             return "- No external skills are currently available for model invocation."
         return "\n".join(lines)
 
+    def _select_available_skill(self, *identifiers: str) -> Optional[str]:
+        """Return the first enabled skill matching a name, key, or alias."""
+        if self._skill_registry is None:
+            return None
+
+        for identifier in identifiers:
+            resolved = (
+                self._skill_registry.resolve_name(identifier)
+                if hasattr(self._skill_registry, "resolve_name")
+                else identifier
+            )
+            if not resolved:
+                continue
+            skill = self._skill_registry.get(resolved)
+            if skill is None:
+                continue
+            if getattr(skill, "state", None) not in (SkillState.ENABLED, SkillState.RUNNING):
+                continue
+            return resolved
+        return None
+
+    def _plan_clock_query_with_web_skill(self, intent: Intent) -> Optional[Plan]:
+        """Prefer web skills for date/time queries when available."""
+        skill_name = self._select_available_skill(
+            "web-access",
+            "tavily-web-search",
+            "agent-browser",
+            "web.fetch",
+        )
+        if not skill_name:
+            return None
+
+        request_text = str(intent.raw_message or "").strip()
+        params = dict(intent.params or {})
+        if request_text:
+            params.setdefault("request", request_text)
+            params.setdefault("query", request_text)
+            params.setdefault("q", request_text)
+        return self._plan_from_skill(skill_name, params, intent)
+
     def _build_understanding_prompt(self, message: Message) -> str:
         """Build the local-model understanding prompt used before planning."""
         skill_catalog = self._build_skill_catalog()
@@ -130,17 +172,8 @@ User: {user_request}
         """Parse a model response into an Intent object."""
         content = content.strip()
 
-        if content.startswith("```json") and "```" in content:
-            content = content.split("```json", 1)[1].split("```", 1)[0].strip()
-        elif content.startswith("```") and "```" in content:
-            content = content.split("```", 1)[1].split("```", 1)[0].strip()
-
-        json_start = content.find("{")
-        json_end = content.rfind("}") + 1
-        if json_start >= 0 and json_end > json_start:
-            content = content[json_start:json_end]
-
-        result = json.loads(content)
+        extracted = extract_last_json_object(content)
+        result = json.loads(extracted or content)
         params = result.get("params", {})
         if not isinstance(params, dict):
             params = {}
@@ -289,12 +322,21 @@ User: {user_request}
             return self._plan_status(intent)
         
         if intent.intent == "date_today":
+            clock_plan = self._plan_clock_query_with_web_skill(intent)
+            if clock_plan is not None:
+                return clock_plan
             return self._plan_date_today(intent)
         
         if intent.intent == "date_query":
+            clock_plan = self._plan_clock_query_with_web_skill(intent)
+            if clock_plan is not None:
+                return clock_plan
             return self._plan_date_today(intent)
         
         if intent.intent == "time_now":
+            clock_plan = self._plan_clock_query_with_web_skill(intent)
+            if clock_plan is not None:
+                return clock_plan
             return self._plan_time_now(intent)
         
         if intent.intent == "get_day_of_week":
@@ -302,6 +344,19 @@ User: {user_request}
         if intent.intent == "get_date":
             return self._plan_from_skill("date", intent.params, intent)
         if intent.intent == "check_weather" or intent.intent == "get_weather":
+            weather_skill = self._select_available_skill(
+                "weather.forecast",
+                "weather",
+                "forecast",
+            )
+            if weather_skill:
+                weather_params = dict(intent.params or {})
+                request_text = str(intent.raw_message or "").strip()
+                if request_text:
+                    weather_params.setdefault("request", request_text)
+                    weather_params.setdefault("query", request_text)
+                return self._plan_from_skill(weather_skill, weather_params, intent)
+
             location = str(intent.params.get("location") or "").strip()
             weather_url = f"https://wttr.in/{quote(location)}?format=j1" if location else "https://wttr.in/?format=j1"
             plan = Plan(intent=intent)
@@ -768,6 +823,43 @@ User: {user_request}
                     type=StepType.TRANSFORM,
                     name="unknown",
                     template=f"Unknown intent: {intent.intent}. Type 'help' for available commands.",
+                )
+            ],
+            intent=intent,
+        )
+
+    def _plan_date_today(self, intent: Intent) -> Plan:
+        """Create a deterministic local date response."""
+
+        now = datetime.now()
+        weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        weekday = weekdays[now.weekday()]
+        date_str = now.strftime("%Y-%m-%d")
+        response = f"今天是{date_str}，{weekday}。"
+        return Plan(
+            steps=[
+                Step(
+                    type=StepType.TRANSFORM,
+                    name="date_today",
+                    template=response,
+                )
+            ],
+            intent=intent,
+        )
+
+    def _plan_time_now(self, intent: Intent) -> Plan:
+        """Create a deterministic local time response."""
+
+        now = datetime.now()
+        time_str = now.strftime("%H:%M:%S")
+        date_str = now.strftime("%Y-%m-%d")
+        response = f"现在时间是{time_str}（本地时间），今天是{date_str}。"
+        return Plan(
+            steps=[
+                Step(
+                    type=StepType.TRANSFORM,
+                    name="time_now",
+                    template=response,
                 )
             ],
             intent=intent,

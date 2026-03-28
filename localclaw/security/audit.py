@@ -2,8 +2,9 @@
 
 import json
 import logging
+from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 class AuditEntry:
     """An audit log entry."""
     id: str = field(default_factory=lambda: str(uuid4())[:8])
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     event_type: str = ""
     user_id: str = "system"
     channel: str = "system"
@@ -85,7 +86,7 @@ class AuditLogger:
     def __init__(self, log_file: Optional[Path] = None, max_entries: int = 10000) -> None:
         self._log_file = log_file
         self._max_entries = max_entries
-        self._entries: List[AuditEntry] = []
+        self._entries: deque = deque(maxlen=max_entries)
         self._file_handle: Optional[Any] = None
         self._logger = logging.getLogger("localclaw.audit")
     
@@ -142,7 +143,7 @@ class AuditLogger:
         
         self._write_entry(entry)
         
-        self._logger.info(f"Audit: {event_type} - {action} [{status}]")
+        self._logger.info("Audit: %s - %s [%s]", event_type, action, status)
         
         return entry
     

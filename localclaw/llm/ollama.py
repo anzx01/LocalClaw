@@ -2,6 +2,7 @@
 
 import logging
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -134,6 +135,56 @@ class OllamaClient(LLMProvider):
         self._availability_cached_value = value
         self._availability_cache_until = time.monotonic() + self._availability_cache_seconds
         return value
+
+    def _build_options(
+        self,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Build Ollama generation options."""
+
+        return {
+            "num_predict": max_tokens or self._ollama_config.max_tokens,
+            "temperature": self._ollama_config.temperature if temperature is None else temperature,
+            "top_p": self._ollama_config.top_p,
+            "top_k": self._ollama_config.top_k,
+            "repeat_penalty": self._ollama_config.repeat_penalty,
+            "num_ctx": self._ollama_config.context_window,
+        }
+
+    def _build_request_variants(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Return payload variants with and without the think flag for compatibility."""
+
+        variants = [payload]
+        if "think" in payload:
+            fallback_payload = deepcopy(payload)
+            fallback_payload.pop("think", None)
+            variants.append(fallback_payload)
+        return variants
+
+    @staticmethod
+    def _think_flag_rejected(status: int, error_text: str) -> bool:
+        """Detect servers that reject the optional think flag."""
+
+        lowered = error_text.lower()
+        return status in {400, 404, 422} and "think" in lowered
+
+    @staticmethod
+    def _wants_json_output(*parts: Optional[str]) -> bool:
+        """Detect prompts that explicitly request JSON-only output."""
+
+        combined = "\n".join(str(part or "") for part in parts).lower()
+        return any(
+            marker in combined
+            for marker in (
+                "return json only",
+                "reply json only",
+                "output one json object",
+                "respond with one json object",
+                '"mode":"',
+                '"intent":"',
+            )
+        )
     
     async def generate(
         self,
@@ -146,49 +197,66 @@ class OllamaClient(LLMProvider):
         session = await self._get_session()
         
         url = f"{self._ollama_config.base_url}/api/generate"
-        
-        payload = {
+
+        base_payload = {
             "model": self._ollama_config.model,
             "prompt": prompt,
             "stream": False,
-            "options": {
-                "num_predict": max_tokens or self._ollama_config.max_tokens,
-                "temperature": temperature or self._ollama_config.temperature,
-                "top_p": self._ollama_config.top_p,
-                "top_k": self._ollama_config.top_k,
-                "repeat_penalty": self._ollama_config.repeat_penalty,
-                "num_ctx": self._ollama_config.context_window,
-            },
+            "think": False,
+            "options": self._build_options(max_tokens=max_tokens, temperature=temperature),
         }
-        
+
         if system_prompt:
-            payload["system"] = system_prompt
-        
+            base_payload["system"] = system_prompt
+        if self._wants_json_output(system_prompt, prompt):
+            base_payload["format"] = "json"
+
         try:
-            for attempt in range(2):
-                payload["model"] = self._ollama_config.model
-                async with session.post(url, json=payload) as response:
-                    if response.status == 200:
-                        data = await response.json()
+            for payload in self._build_request_variants(base_payload):
+                for attempt in range(2):
+                    payload["model"] = self._ollama_config.model
+                    async with session.post(url, json=payload) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            content = str(data.get("response", "") or "")
+                            thinking = str(data.get("thinking", "") or "")
 
-                        return LLMResponse(
-                            content=data.get("response", ""),
-                            model=self._ollama_config.model,
-                            provider="ollama",
-                            tokens_used=data.get("eval_count", 0) + data.get("prompt_eval_count", 0),
-                            metadata={
-                                "total_duration": data.get("total_duration"),
-                                "load_duration": data.get("load_duration"),
-                                "prompt_eval_count": data.get("prompt_eval_count"),
-                                "eval_count": data.get("eval_count"),
-                            },
-                        )
+                            if not content.strip() and thinking.strip():
+                                fallback_messages: List[Dict[str, str]] = []
+                                if system_prompt:
+                                    fallback_messages.append({"role": "system", "content": system_prompt})
+                                fallback_messages.append({"role": "user", "content": prompt})
+                                fallback = await self.chat(
+                                    fallback_messages,
+                                    max_tokens=max_tokens,
+                                    temperature=temperature,
+                                )
+                                if thinking and not fallback.metadata.get("thinking"):
+                                    fallback.metadata["thinking"] = thinking
+                                fallback.metadata.setdefault("generate_fallback", "chat_from_thinking")
+                                return fallback
 
-                    error_text = await response.text()
-                    if response.status == 404 and attempt == 0:
-                        if await self._maybe_fallback_to_installed_model(error_text):
-                            continue
-                    raise RuntimeError(f"Ollama error: {response.status} - {error_text}")
+                            return LLMResponse(
+                                content=content,
+                                model=self._ollama_config.model,
+                                provider="ollama",
+                                tokens_used=data.get("eval_count", 0) + data.get("prompt_eval_count", 0),
+                                metadata={
+                                    "total_duration": data.get("total_duration"),
+                                    "load_duration": data.get("load_duration"),
+                                    "prompt_eval_count": data.get("prompt_eval_count"),
+                                    "eval_count": data.get("eval_count"),
+                                    "thinking": thinking,
+                                },
+                            )
+
+                        error_text = await response.text()
+                        if response.status == 404 and attempt == 0:
+                            if await self._maybe_fallback_to_installed_model(error_text):
+                                continue
+                        if self._think_flag_rejected(response.status, error_text) and "think" in payload:
+                            break
+                        raise RuntimeError(f"Ollama error: {response.status} - {error_text}")
         except aiohttp.ClientError as e:
             self._logger.error(f"Ollama connection error: {e}")
             raise RuntimeError(f"Ollama connection error: {e}")
@@ -203,46 +271,47 @@ class OllamaClient(LLMProvider):
         session = await self._get_session()
         
         url = f"{self._ollama_config.base_url}/api/chat"
-        
-        payload = {
+
+        base_payload = {
             "model": self._ollama_config.model,
             "messages": messages,
             "stream": False,
-            "options": {
-                "num_predict": max_tokens or self._ollama_config.max_tokens,
-                "temperature": temperature or self._ollama_config.temperature,
-                "top_p": self._ollama_config.top_p,
-                "top_k": self._ollama_config.top_k,
-                "repeat_penalty": self._ollama_config.repeat_penalty,
-                "num_ctx": self._ollama_config.context_window,
-            },
+            "think": False,
+            "options": self._build_options(max_tokens=max_tokens, temperature=temperature),
         }
-        
+        if self._wants_json_output(*(message.get("content", "") for message in messages)):
+            base_payload["format"] = "json"
+
         try:
-            for attempt in range(2):
-                payload["model"] = self._ollama_config.model
-                async with session.post(url, json=payload) as response:
-                    if response.status == 200:
-                        data = await response.json()
+            for payload in self._build_request_variants(base_payload):
+                for attempt in range(2):
+                    payload["model"] = self._ollama_config.model
+                    async with session.post(url, json=payload) as response:
+                        if response.status == 200:
+                            data = await response.json()
 
-                        message = data.get("message", {})
+                            message = data.get("message", {})
+                            thinking = str(message.get("thinking", "") or data.get("thinking", "") or "")
 
-                        return LLMResponse(
-                            content=message.get("content", ""),
-                            model=self._ollama_config.model,
-                            provider="ollama",
-                            tokens_used=data.get("eval_count", 0) + data.get("prompt_eval_count", 0),
-                            metadata={
-                                "total_duration": data.get("total_duration"),
-                                "role": message.get("role", "assistant"),
-                            },
-                        )
+                            return LLMResponse(
+                                content=str(message.get("content", "") or ""),
+                                model=self._ollama_config.model,
+                                provider="ollama",
+                                tokens_used=data.get("eval_count", 0) + data.get("prompt_eval_count", 0),
+                                metadata={
+                                    "total_duration": data.get("total_duration"),
+                                    "role": message.get("role", "assistant"),
+                                    "thinking": thinking,
+                                },
+                            )
 
-                    error_text = await response.text()
-                    if response.status == 404 and attempt == 0:
-                        if await self._maybe_fallback_to_installed_model(error_text):
-                            continue
-                    raise RuntimeError(f"Ollama error: {response.status} - {error_text}")
+                        error_text = await response.text()
+                        if response.status == 404 and attempt == 0:
+                            if await self._maybe_fallback_to_installed_model(error_text):
+                                continue
+                        if self._think_flag_rejected(response.status, error_text) and "think" in payload:
+                            break
+                        raise RuntimeError(f"Ollama error: {response.status} - {error_text}")
         except aiohttp.ClientError as e:
             self._logger.error(f"Ollama connection error: {e}")
             raise RuntimeError(f"Ollama connection error: {e}")
