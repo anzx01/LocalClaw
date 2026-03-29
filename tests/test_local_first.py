@@ -163,7 +163,7 @@ jobs:
 
 
 def test_skill_loader_marks_missing_requirements_as_blocked(tmp_path):
-    """Missing env vars should keep a skill installed but blocked."""
+    """Missing env vars should keep availability blocked but not auto-disable the skill."""
     skill_dir = tmp_path / "blocked_skill"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text(
@@ -196,7 +196,38 @@ This one requires a missing environment variable.
     assert info is not None
     assert info["availability"] == "blocked"
     assert "LOCALCLAW_TEST_MISSING_ENV" in info["availability_details"]["missing_env"]
-    assert info["state"] == "stopped"
+    assert info["state"] == "enabled"
+
+
+def test_skill_loader_load_from_file_defaults_to_enabled_even_when_blocked(tmp_path):
+    """Directly loaded skills should default to enabled state."""
+
+    skill_dir = tmp_path / "blocked_skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: blocked_skill
+version: 1.0.0
+description: Blocked markdown skill
+type: atomic
+requires:
+  env:
+    - LOCALCLAW_TEST_MISSING_ENV
+actions:
+  - type: transform
+    template: "blocked"
+---
+# Blocked Skill
+""",
+        encoding="utf-8",
+    )
+
+    loader = SkillLoader(SkillRegistry())
+    skill = loader.load_from_file(skill_dir)
+
+    assert skill is not None
+    assert skill.state.value == "enabled"
+    assert skill.get_definition().metadata["availability"]["status"] == "blocked"
 
 
 def test_settings_skill_search_paths_use_configured_dirs_then_managed(tmp_path):

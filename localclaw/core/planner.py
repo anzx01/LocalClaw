@@ -392,6 +392,18 @@ User: {user_request}
             import os
             desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
             path = self._normalize_filesystem_path(intent.params.get("path") or desktop_path)
+            workspace_fs_skill = self._select_available_skill("repo.fs", "workspace-files", "fs-workspace")
+            if workspace_fs_skill:
+                return self._plan_from_skill(
+                    workspace_fs_skill,
+                    {
+                        "action": "list",
+                        "path": path,
+                        "all": intent.params.get("all", False),
+                        "long": intent.params.get("long", False),
+                    },
+                    intent,
+                )
             plan = Plan(intent=intent)
             plan.steps.append(
                 Step(
@@ -422,6 +434,18 @@ User: {user_request}
                     path = os.path.join(os.path.expanduser("~"), "Desktop", path)
                 elif os.path.exists(os.path.join(os.getcwd(), path)):
                     path = os.path.join(os.getcwd(), path)
+            workspace_fs_skill = self._select_available_skill("repo.fs", "workspace-files", "fs-workspace")
+            if workspace_fs_skill:
+                return self._plan_from_skill(
+                    workspace_fs_skill,
+                    {
+                        "action": "list",
+                        "path": path,
+                        "all": intent.params.get("all", False),
+                        "long": intent.params.get("long", False),
+                    },
+                    intent,
+                )
             plan = Plan(intent=intent)
             plan.steps.append(
                 Step(
@@ -433,6 +457,17 @@ User: {user_request}
             )
             return plan
         if intent.intent == "create_directory" or intent.intent == "mkdir":
+            workspace_fs_skill = self._select_available_skill("repo.fs", "workspace-files", "fs-workspace")
+            if workspace_fs_skill:
+                return self._plan_from_skill(
+                    workspace_fs_skill,
+                    {
+                        "action": "mkdir",
+                        "path": intent.params.get("path", intent.params.get("dir_name", intent.params.get("directory", ""))),
+                        "parents": intent.params.get("parents", True),
+                    },
+                    intent,
+                )
             # Create plan to create directory
             plan = Plan(intent=intent)
             plan.steps.append(
@@ -445,6 +480,17 @@ User: {user_request}
             )
             return plan
         if intent.intent == "append_file" or intent.intent == "fs_append":
+            workspace_fs_skill = self._select_available_skill("repo.fs", "workspace-files", "fs-workspace")
+            if workspace_fs_skill:
+                return self._plan_from_skill(
+                    workspace_fs_skill,
+                    {
+                        "action": "append",
+                        "path": intent.params.get("path", intent.params.get("file", "")),
+                        "content": intent.params.get("content", ""),
+                    },
+                    intent,
+                )
             # Create plan to append file content
             plan = Plan(intent=intent)
             plan.steps.append(
@@ -458,7 +504,6 @@ User: {user_request}
             return plan
         if intent.intent == "delete_file" or intent.intent == "delete":
             # Create plan to delete file or directory
-            plan = Plan(intent=intent)
             # Try to get path from different parameter names
             path = intent.params.get("path", intent.params.get("file", intent.params.get("file_path", "")))
             # If path is not provided, try to build it from directory and filename
@@ -468,6 +513,18 @@ User: {user_request}
                 if directory and filename:
                     import os
                     path = os.path.join(directory, filename)
+            workspace_fs_skill = self._select_available_skill("repo.fs", "workspace-files", "fs-workspace")
+            if workspace_fs_skill:
+                return self._plan_from_skill(
+                    workspace_fs_skill,
+                    {
+                        "action": "delete",
+                        "path": path,
+                        "recursive": intent.params.get("recursive", True),
+                    },
+                    intent,
+                )
+            plan = Plan(intent=intent)
             plan.steps.append(
                 Step(
                     type=StepType.TOOL_CALL,
@@ -478,6 +535,18 @@ User: {user_request}
             )
             return plan
         if intent.intent == "write_file" or intent.intent == "fs.write":
+            workspace_fs_skill = self._select_available_skill("repo.fs", "workspace-files", "fs-workspace")
+            if workspace_fs_skill:
+                return self._plan_from_skill(
+                    workspace_fs_skill,
+                    {
+                        "action": "write",
+                        "path": intent.params.get("path", ""),
+                        "content": intent.params.get("content", ""),
+                        "mode": intent.params.get("mode", "write"),
+                    },
+                    intent,
+                )
             # Create plan to write file content
             plan = Plan(intent=intent)
             plan.steps.append(
@@ -490,6 +559,13 @@ User: {user_request}
             )
             return plan
         if intent.intent == "read_file" or intent.intent == "fs.read":
+            workspace_fs_skill = self._select_available_skill("repo.fs", "workspace-files", "fs-workspace")
+            if workspace_fs_skill:
+                return self._plan_from_skill(
+                    workspace_fs_skill,
+                    {"action": "read", "path": intent.params.get("path", intent.params.get("file_path", ""))},
+                    intent,
+                )
             # Create plan to read file content
             plan = Plan(intent=intent)
             plan.steps.append(

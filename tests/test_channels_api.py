@@ -290,6 +290,48 @@ def test_skill_state_endpoint(monkeypatch):
     assert enable_response.json()["state"] == "enabled"
 
 
+def test_skill_approval_endpoint(monkeypatch):
+    """The UI should be able to toggle forced approval per skill."""
+
+    from localclaw.channels import web as web_channel
+    from localclaw.skills import registry as skill_registry_module
+
+    registry = SkillRegistry()
+    sample_skill = create_skill_from_dict(
+        {
+            "name": "approval-demo",
+            "version": "1.0.0",
+            "description": "Approval policy demo",
+            "type": "workflow",
+            "metadata": {"skill_key": "approval-demo"},
+        }
+    )
+    registry.register(sample_skill, enable=True)
+
+    monkeypatch.setattr(web_channel, "get_settings", lambda: Settings())
+    monkeypatch.setattr(skill_registry_module, "get_skill_registry", lambda: registry)
+    monkeypatch.setattr(web_channel, "initialize_system", lambda: None)
+
+    app = web_channel.create_app()
+    with TestClient(app) as client:
+        enable_response = client.post(
+            "/api/skills/approval-demo/approval",
+            json={"require_approval": True},
+        )
+        disable_response = client.post(
+            "/api/skills/approval-demo/approval",
+            json={"require_approval": False},
+        )
+
+    assert enable_response.status_code == 200
+    assert enable_response.json()["updated"] is True
+    assert enable_response.json()["require_approval"] is True
+
+    assert disable_response.status_code == 200
+    assert disable_response.json()["updated"] is True
+    assert disable_response.json()["require_approval"] is False
+
+
 def test_skills_endpoint_marks_managed_skills_as_removable(monkeypatch, tmp_path):
     """The Skills API should distinguish managed installs from configured and runtime skills."""
 
@@ -338,6 +380,7 @@ def test_skills_endpoint_marks_managed_skills_as_removable(monkeypatch, tmp_path
     registry.register(managed_skill)
     registry.register(configured_skill)
     registry.register(runtime_skill)
+    registry.set_skill_approval_required("managed-demo", True)
 
     settings = Settings(
         _env_file=None,
@@ -363,12 +406,15 @@ def test_skills_endpoint_marks_managed_skills_as_removable(monkeypatch, tmp_path
     assert managed["source_scope"] == "managed"
     assert managed["skill_key"] == "managed-demo"
     assert "managed" in managed["aliases"]
+    assert managed["require_approval"] is True
 
     assert configured["removable"] is False
     assert configured["source_scope"] == "configured"
+    assert configured["require_approval"] is False
 
     assert runtime["removable"] is False
     assert runtime["source_scope"] == "runtime"
+    assert runtime["require_approval"] is False
 
 
 def test_background_service_endpoints(monkeypatch):

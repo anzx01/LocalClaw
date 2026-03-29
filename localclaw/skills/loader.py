@@ -73,8 +73,7 @@ class SkillLoader:
             prepared = self._prepare_skill_data(data, resolved_path)
             skill = create_skill_from_dict(prepared)
             availability = prepared.get("metadata", {}).get("availability", {})
-            if availability.get("status") == "blocked":
-                skill.disable()
+            skill.enable()
 
             self._logger.info(
                 "Loaded skill from %s: %s (%s)",
@@ -113,8 +112,7 @@ class SkillLoader:
         """Load and register a skill from a file."""
         skill = self.load_from_file(file_path)
         if skill:
-            availability = skill.get_definition().metadata.get("availability", {})
-            self._registry.register(skill, enable=availability.get("status") != "blocked")
+            self._registry.register(skill, enable=True)
             return True
         return False
 
@@ -123,8 +121,7 @@ class SkillLoader:
         skills = self.load_from_directory(dir_path, recursive)
         count = 0
         for skill in skills:
-            availability = skill.get_definition().metadata.get("availability", {})
-            self._registry.register(skill, enable=availability.get("status") != "blocked")
+            self._registry.register(skill, enable=True)
             count += 1
         return count
 

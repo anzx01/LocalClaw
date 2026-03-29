@@ -616,6 +616,33 @@ async def test_engine_process_openclaw_skill_key():
 
 
 @pytest.mark.asyncio
+async def test_planner_prefers_repo_fs_skill_for_read_file_intent():
+    """File read intents should prefer repo.fs over direct file_read when available."""
+
+    registry = SkillRegistry()
+    skill = create_skill_from_dict(
+        {
+            "name": "workspace_fs",
+            "description": "Read workspace files",
+            "inputs": {"action": "string", "path": "string"},
+            "actions": [{"type": "transform", "template": "reading {{path}}"}],
+            "metadata": {"skill_key": "repo.fs"},
+        }
+    )
+    skill.enable()
+    registry.register(skill)
+
+    planner = create_default_planner()
+    planner.set_skill_registry(registry)
+
+    intent = Intent(intent="read_file", params={"path": "~/Desktop/AI量化工具.txt"})
+    plan = await planner.plan(intent)
+
+    assert plan.skill_name == "workspace_fs"
+    assert plan.steps[0].type == StepType.TRANSFORM
+
+
+@pytest.mark.asyncio
 async def test_engine_executes_openclaw_style_fs_skill(tmp_path):
     """OpenClaw-style file workflow skills should execute with inputs, conditions, and tool names."""
 
@@ -1093,3 +1120,110 @@ async def test_planner_prefers_weather_skill_for_weather_intent_when_available()
     assert plan.skill_name == "weather"
     assert len(plan.steps) == 1
     assert plan.steps[0].type == StepType.TRANSFORM
+
+
+@pytest.mark.asyncio
+async def test_engine_instruction_skill_loop_executes_tool_then_answers():
+    """Instruction-only skills should run a bounded local-model action loop."""
+
+    class WeekdayTool(Tool):
+        name = "weekday_lookup"
+        description = "Lookup current weekday"
+        inputs = {"question": "string"}
+        outputs = {"weekday": "string"}
+
+        async def execute(self, question: str, **kwargs):
+            return ExecutionResult.success(
+                data={
+                    "message": "Today is Sunday.",
+                    "weekday": "Sunday",
+                    "question": question,
+                }
+            )
+
+    class InstructionRuntime(OpenClawRuntime):
+        def __init__(self):
+            self.turns = 0
+
+        async def decide(self, message, context=None):
+            return AgentDecision(
+                mode=AgentDecisionMode.SKILL,
+                skill_name="calendar-guide",
+                params={"request": message.content},
+                confidence=0.9,
+                source="openclaw_runtime",
+                raw_message=message.content,
+            )
+
+        def is_instruction_skill(self, skill_name: str) -> bool:
+            return skill_name == "calendar-guide"
+
+        async def decide_instruction_skill_next_action(
+            self,
+            skill_identifier,
+            message,
+            context=None,
+            observations=None,
+        ):
+            self.turns += 1
+            if self.turns == 1:
+                return AgentDecision(
+                    mode=AgentDecisionMode.TOOL,
+                    tool_name="weekday_lookup",
+                    params={"question": message.content},
+                    confidence=0.9,
+                    source="openclaw_runtime_instruction_skill",
+                    raw_message=message.content,
+                )
+
+            observed_weekday = ""
+            if observations:
+                last_steps = observations[-1].get("steps", [])
+                if last_steps:
+                    output = last_steps[0].get("output", {})
+                    observed_weekday = str(output.get("weekday") or "").strip()
+
+            return AgentDecision(
+                mode=AgentDecisionMode.ANSWER,
+                answer=f"Today is {observed_weekday or 'Sunday'}.",
+                confidence=0.9,
+                source="openclaw_runtime_instruction_skill",
+                raw_message=message.content,
+            )
+
+    registry = SkillRegistry()
+    instruction_skill = create_skill_from_dict(
+        {
+            "name": "calendar-guide",
+            "version": "1.0.0",
+            "description": "Answer weekday questions with a tool-backed lookup",
+            "type": "workflow",
+            "inputs": {"request": "string"},
+            "metadata": {"documentation": "Use weekday_lookup when you need the current weekday."},
+        }
+    )
+    instruction_skill.enable()
+    registry.register(instruction_skill)
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(WeekdayTool())
+
+    runtime = InstructionRuntime()
+    engine = ExecutionEngine(
+        settings=Settings(_env_file=None, llm_enabled=True, llm_parse_only=True),
+        planner=create_default_planner(),
+        verifier=create_default_verifier(),
+        tool_registry=tool_registry,
+        skill_registry=registry,
+        openclaw_runtime=runtime,
+    )
+
+    task = await engine.process_message(Message(content="What day is today?", user_id="u1", channel="test"))
+
+    assert task.state == TaskState.COMPLETED
+    assert task.intent is not None
+    assert task.intent.intent == "skill.calendar-guide"
+    assert runtime.turns == 2
+    assert len(task.plan.steps) == 1
+    assert task.plan.steps[0].tool_name == "weekday_lookup"
+    assert task.result.data["result"] == "Today is Sunday."

@@ -1,4 +1,4 @@
-"""Verifier module for validation and security checks."""
+﻿"""Verifier module for validation and security checks."""
 
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -71,21 +71,41 @@ class PermissionVerifier(VerifierBackend):
     HIGH_RISK_TOOLS = {"shell", "http_post", "browser_cdp"}
     CRITICAL_TOOLS = {"shell"}
     LOW_RISK_BROWSER_PATTERNS = (
-        r"(?:今天|今日|明天|后天|周几|星期|几号|日期|时间|几点|天气|气温|温度|下雨|下雪)",
+        r"(?:浠婂ぉ|浠婃棩|鏄庡ぉ|鍚庡ぉ|鍛ㄥ嚑|鏄熸湡|鍑犲彿|鏃ユ湡|鏃堕棿|鍑犵偣|澶╂皵|姘旀俯|娓╁害|涓嬮洦|涓嬮洩)",
         r"\b(?:today|tomorrow|yesterday|date|day|time|weekday|weather|forecast|temperature|rain|snow|hot|cold)\b",
     )
+    INFO_LOOKUP_MARKERS = (
+        "查询",
+        "查一下",
+        "查下",
+        "查查",
+        "搜索",
+        "搜一下",
+        "搜下",
+        "看看",
+        "看下",
+        "了解",
+        "告诉我",
+        "帮我查",
+        "help me check",
+        "look up",
+        "search",
+        "find",
+        "tell me",
+        "check",
+    )
     BROWSER_MUTATION_MARKERS = (
-        "登录",
-        "注册",
-        "支付",
-        "购买",
-        "下单",
-        "上传",
-        "下载",
-        "删除",
-        "提交",
-        "填写",
-        "点击",
+        "鐧诲綍",
+        "娉ㄥ唽",
+        "鏀粯",
+        "璐拱",
+        "涓嬪崟",
+        "涓婁紶",
+        "涓嬭浇",
+        "鍒犻櫎",
+        "鎻愪氦",
+        "濉啓",
+        "鐐瑰嚮",
         "click",
         "submit",
         "login",
@@ -125,10 +145,24 @@ class PermissionVerifier(VerifierBackend):
 
         if not text:
             return False
-        if "?" in text or "？" in text:
+        stripped = text.strip()
+        if "?" in text or "？" in text or "锛?" in text:
             return True
-        lowered = text.lower()
-        return any(token in lowered for token in ("what", "when", "how", "which", "who", "where", "是不是", "吗"))
+        lowered = stripped.lower()
+        if any(token in lowered for token in ("what", "when", "how", "which", "who", "where", "is it", "can i")):
+            return True
+        return any(token in stripped for token in ("吗", "么", "嘛", "呢", "是否", "是不是", "可否"))
+
+    def _is_information_lookup_like(self, text: str) -> bool:
+        """Detect non-question lookup phrasing like '查下明天天气'."""
+
+        stripped = (text or "").strip()
+        if not stripped:
+            return False
+        lowered = stripped.lower()
+        if any(marker in stripped for marker in self.INFO_LOOKUP_MARKERS):
+            return True
+        return any(marker in lowered for marker in self.INFO_LOOKUP_MARKERS)
 
     def _is_low_risk_browser_cdp_request(self, step: Step) -> bool:
         """Classify read-only browser queries that can skip confirmation prompts."""
@@ -155,10 +189,33 @@ class PermissionVerifier(VerifierBackend):
         if url_text and not re.match(r"^https?://", url_text, re.IGNORECASE):
             return False
 
-        if not self._is_question_like(request_text):
+        if not (self._is_question_like(request_text) or self._is_information_lookup_like(request_text)):
             return False
 
-        return any(re.search(pattern, combined, re.IGNORECASE) for pattern in self.LOW_RISK_BROWSER_PATTERNS)
+        # Fast-path: common low-risk "clock/weather" questions.
+        chinese_low_risk_markers = (
+            "今天",
+            "明天",
+            "后天",
+            "周几",
+            "星期",
+            "日期",
+            "时间",
+            "几点",
+            "天气",
+            "气温",
+            "温度",
+            "下雨",
+            "下雪",
+        )
+        if any(marker in request_text for marker in chinese_low_risk_markers):
+            return True
+        if any(re.search(pattern, combined, re.IGNORECASE) for pattern in self.LOW_RISK_BROWSER_PATTERNS):
+            return True
+
+        # General policy: informational lookups should not require approval.
+        # High-risk/interactive intents are screened out earlier by mutation markers and URL validation.
+        return True
 
     def _get_skill_guard(self, step: Step) -> Dict[str, Any]:
         """Return post-install guard metadata for the source skill if present."""
@@ -177,6 +234,14 @@ class PermissionVerifier(VerifierBackend):
             return {}
         guard = metadata.get("localclaw_guard", {})
         return dict(guard) if isinstance(guard, dict) else {}
+
+    def _skill_requires_human_approval(self, step: Step) -> bool:
+        """Return whether the source skill is configured to always ask for approval."""
+
+        skill_name = (step.source_skill_name or "").strip()
+        if not skill_name:
+            return False
+        return self._skill_registry.get_skill_approval_required(skill_name)
     
     def get_risk_level(self, step: Step) -> RiskLevel:
         """Determine the risk level of a step."""
@@ -224,6 +289,20 @@ class PermissionVerifier(VerifierBackend):
                         "guard_mode": guard.get("mode", "isolate"),
                     },
                 )
+
+        if (
+            step.type.value == "tool_call"
+            and self._skill_requires_human_approval(step)
+            and not self.is_approved(step.id)
+        ):
+            return VerificationResult.ask_human_result(
+                f"Skill '{step.source_skill_name}' is configured to require approval before running tools",
+                {
+                    "tool_name": step.tool_name,
+                    "source_skill_name": step.source_skill_name,
+                    "approval_policy": "per_skill",
+                },
+            )
 
         risk_level = self.get_risk_level(step)
 
@@ -378,3 +457,4 @@ def create_default_verifier(
 ) -> Verifier:
     """Create a verifier with default configuration."""
     return Verifier(settings=settings, skill_registry=skill_registry)
+

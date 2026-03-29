@@ -1,6 +1,8 @@
 """Skill registry for managing skills."""
 
+import json
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
 from localclaw.skills.base import Skill, SkillState
@@ -12,11 +14,14 @@ logger = logging.getLogger(__name__)
 class SkillRegistry:
     """Registry for managing skills."""
     
-    def __init__(self) -> None:
+    def __init__(self, policy_store_path: Optional[Path] = None) -> None:
         self._skills: Dict[str, Skill] = {}
         self._triggers: Dict[str, List[str]] = {}
         self._skill_aliases: Dict[str, str] = {}
+        self._skill_approval_required: Dict[str, bool] = {}
+        self._policy_store_path = Path(policy_store_path) if policy_store_path else None
         self._logger = logging.getLogger("localclaw.skills.registry")
+        self._load_approval_policies()
     
     def register(self, skill: Skill, enable: bool = True) -> None:
         """Register a skill."""
@@ -53,6 +58,8 @@ class SkillRegistry:
                         self._triggers[trigger.pattern].remove(name)
             
             del self._skills[name]
+            self._skill_approval_required.pop(name, None)
+            self._persist_approval_policies()
             self._rebuild_alias_index()
             self._logger.info(f"Unregistered skill: {name}")
             return True
@@ -99,6 +106,7 @@ class SkillRegistry:
             if str(alias).strip() and str(alias).strip().lower() != skill.name.lower()
         ]
         invocation_names = self._build_invocation_names(skill.name, skill_key, aliases)
+        require_approval = self.get_skill_approval_required(skill.name)
         return {
             "name": skill.name,
             "version": skill.version,
@@ -119,6 +127,7 @@ class SkillRegistry:
             "source_format": definition.metadata.get("source_format"),
             "documentation": definition.metadata.get("documentation"),
             "metadata": definition.metadata,
+            "require_approval": require_approval,
         }
     
     def get_all_info(self) -> List[Dict[str, Any]]:
@@ -174,6 +183,27 @@ class SkillRegistry:
             self._logger.info(f"Disabled skill: {name}")
             return True
         return False
+
+    def get_skill_approval_required(self, name: str) -> bool:
+        """Return whether a skill should always require human approval."""
+        resolved = self.resolve_name(name)
+        if resolved is None:
+            return False
+        return bool(self._skill_approval_required.get(resolved, False))
+
+    def set_skill_approval_required(self, name: str, required: bool) -> bool:
+        """Set whether a skill should always require human approval."""
+        resolved = self.resolve_name(name)
+        if resolved is None or resolved not in self._skills:
+            return False
+        self._skill_approval_required[resolved] = bool(required)
+        self._persist_approval_policies()
+        self._logger.info(
+            "Updated skill approval policy: %s require_approval=%s",
+            resolved,
+            bool(required),
+        )
+        return True
     
     def match_trigger(self, text: str) -> List[str]:
         """Find skills that match a trigger pattern."""
@@ -225,6 +255,41 @@ class SkillRegistry:
             ordered.append(normalized)
         return ordered
 
+    def _load_approval_policies(self) -> None:
+        """Load persisted per-skill approval policies when configured."""
+        if self._policy_store_path is None or not self._policy_store_path.exists():
+            return
+        try:
+            payload = json.loads(self._policy_store_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self._logger.warning("Failed to load skill approval policies: %s", exc)
+            return
+
+        policies = payload.get("require_approval", payload) if isinstance(payload, dict) else {}
+        if not isinstance(policies, dict):
+            return
+        self._skill_approval_required = {
+            str(name): bool(value)
+            for name, value in policies.items()
+            if str(name).strip()
+        }
+
+    def _persist_approval_policies(self) -> None:
+        """Persist per-skill approval policies when configured."""
+        if self._policy_store_path is None:
+            return
+        try:
+            self._policy_store_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "require_approval": dict(sorted(self._skill_approval_required.items())),
+            }
+            self._policy_store_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            self._logger.warning("Failed to persist skill approval policies: %s", exc)
+
 
 _registry: Optional[SkillRegistry] = None
 
@@ -233,7 +298,10 @@ def get_skill_registry() -> SkillRegistry:
     """Get the global skill registry."""
     global _registry
     if _registry is None:
-        _registry = SkillRegistry()
+        from localclaw.config.settings import get_settings
+
+        settings = get_settings()
+        _registry = SkillRegistry(policy_store_path=settings.data_dir / "skill_policies.json")
     return _registry
 
 

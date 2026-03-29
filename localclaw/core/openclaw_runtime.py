@@ -8,7 +8,7 @@ import re
 import unicodedata
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
 from localclaw.core.json_utils import extract_last_json_object
@@ -462,6 +462,16 @@ User: {user_request}
             return decision
 
         llm_provider = get_llm_provider()
+        if self.is_instruction_skill(skill_identifier):
+            refined = await self._refine_instruction_skill_decision(
+                skill_identifier=skill_identifier,
+                message=message,
+                initial_params=decision.params or {},
+            )
+            if refined.mode != AgentDecisionMode.UNKNOWN:
+                return refined
+            return decision
+
         skill_doc = self._build_skill_detail(skill_identifier)
         user_request = json.dumps(message.content, ensure_ascii=False)
         params_snapshot = json.dumps(decision.params or {}, ensure_ascii=False)
@@ -499,6 +509,212 @@ User: {user_request}
         if refined.mode == AgentDecisionMode.SKILL and not refined.skill_name:
             refined.skill_name = skill_identifier
         return refined
+
+    def is_instruction_skill(self, skill_identifier: str) -> bool:
+        """Return True when a skill relies on SKILL.md guidance instead of declarative actions."""
+
+        registry = self._get_skill_registry()
+        if registry is None:
+            return False
+
+        skill = registry.get(skill_identifier)
+        if skill is None:
+            return False
+
+        definition = skill.get_definition() if hasattr(skill, "get_definition") else None
+        if definition is None:
+            return False
+
+        actions = list(getattr(definition, "actions", []) or [])
+        if actions:
+            return False
+
+        metadata = getattr(definition, "metadata", {}) or {}
+        source_path = str(metadata.get("source_path", "")).strip() or "(built-in)"
+        documentation = self._load_skill_documentation(source_path, metadata)
+        return bool(str(documentation).strip())
+
+    async def decide_instruction_skill_next_action(
+        self,
+        skill_identifier: str,
+        message: Message,
+        context: Optional[Context] = None,
+        observations: Optional[List[Dict[str, Any]]] = None,
+    ) -> AgentDecision:
+        """Ask the local model for the next executable action for an instruction-only skill."""
+
+        if not self.is_instruction_skill(skill_identifier):
+            return AgentDecision(
+                mode=AgentDecisionMode.UNKNOWN,
+                confidence=0.0,
+                source="openclaw_runtime_instruction_skill",
+                raw_message=message.content,
+            )
+
+        llm_provider = get_llm_provider()
+        if not await llm_provider.is_available():
+            return AgentDecision(
+                mode=AgentDecisionMode.UNKNOWN,
+                confidence=0.0,
+                source="openclaw_runtime_instruction_skill",
+                raw_message=message.content,
+            )
+
+        prompt = self._build_instruction_skill_action_prompt(
+            skill_identifier=skill_identifier,
+            message=message,
+            context=context,
+            observations=observations or [],
+        )
+        try:
+            response = await llm_provider.generate(
+                prompt,
+                max_tokens=384,
+                temperature=0.0,
+            )
+        except Exception as exc:
+            logger.debug("Instruction skill prompt failed for %s: %s", skill_identifier, exc)
+            return AgentDecision(
+                mode=AgentDecisionMode.UNKNOWN,
+                confidence=0.0,
+                source="openclaw_runtime_instruction_skill",
+                raw_message=message.content,
+            )
+
+        decision = self._decision_from_model_output(response.content, message.content)
+        if decision.mode == AgentDecisionMode.SKILL and decision.skill_name == skill_identifier:
+            return AgentDecision(
+                mode=AgentDecisionMode.UNKNOWN,
+                confidence=decision.confidence,
+                source="openclaw_runtime_instruction_skill",
+                raw_message=message.content,
+                rationale="instruction_skill_reselected_itself",
+            )
+
+        decision.source = "openclaw_runtime_instruction_skill"
+        decision.raw_message = message.content
+        return decision
+
+    async def _refine_instruction_skill_decision(
+        self,
+        *,
+        skill_identifier: str,
+        message: Message,
+        initial_params: Dict[str, Any],
+    ) -> AgentDecision:
+        """Second-pass refinement for skills that are driven mainly by SKILL.md instructions."""
+
+        llm_provider = get_llm_provider()
+        skill_doc = self._build_skill_detail(skill_identifier)
+        user_request = json.dumps(message.content, ensure_ascii=False)
+        params_snapshot = json.dumps(initial_params or {}, ensure_ascii=False)
+        prompt = f"""Return JSON only.
+You already selected a LocalClaw instruction skill. Read the selected skill details and return the best executable JSON.
+
+Allowed outputs:
+- {{"mode":"skill","skill":"{self._json_escape(skill_identifier)}","params":{{...}}}}
+- {{"mode":"tool","tool":"<exact available tool name>","params":{{...}}}}
+- {{"mode":"intent","intent":"<built-in intent>","params":{{...}}}}
+- {{"mode":"answer","answer":"..."}}
+
+Rules:
+- Prefer mode="skill" when the skill will likely need follow-up after seeing tool results.
+- You may return mode="tool" or mode="intent" only when one concrete next action is clearly enough.
+- If you return mode="skill", keep skill="{self._json_escape(skill_identifier)}".
+- Use exact tool names from <available_tools>.
+- Do not invent missing file paths, URLs, browser target ids, or secrets.
+- Keep the same reply language as the user.
+
+<selected_skill>
+{skill_doc}
+</selected_skill>
+
+<available_tools>
+{self._build_tool_catalog(compact=False)}
+</available_tools>
+
+Initial params guess: {params_snapshot}
+User: {user_request}
+"""
+
+        try:
+            response = await llm_provider.generate(
+                prompt,
+                max_tokens=320,
+                temperature=0.0,
+            )
+        except Exception as exc:
+            logger.debug("Instruction skill refinement prompt failed for %s: %s", skill_identifier, exc)
+            return AgentDecision(
+                mode=AgentDecisionMode.UNKNOWN,
+                confidence=0.0,
+                source="openclaw_runtime",
+                raw_message=message.content,
+            )
+
+        refined = self._decision_from_model_output(response.content, message.content)
+        if refined.mode == AgentDecisionMode.UNKNOWN:
+            return refined
+        if refined.mode == AgentDecisionMode.SKILL and not refined.skill_name:
+            refined.skill_name = skill_identifier
+        return refined
+
+    def _build_instruction_skill_action_prompt(
+        self,
+        *,
+        skill_identifier: str,
+        message: Message,
+        context: Optional[Context],
+        observations: List[Dict[str, Any]],
+    ) -> str:
+        """Build the execution prompt for an instruction-only skill turn."""
+
+        user_request = json.dumps(message.content, ensure_ascii=False)
+        context_payload = {
+            "inputs": self._trim_prompt_value((context.inputs if context is not None else {})),
+            "variables": self._trim_prompt_value((context.variables if context is not None else {})),
+        }
+        observation_payload = self._trim_prompt_value(observations[-6:])
+        return f"""Return JSON only.
+You are executing exactly one selected LocalClaw skill.
+Read the selected skill and recent observations, then choose the next best executable action.
+
+Allowed outputs:
+- {{"mode":"answer","answer":"final reply in the user's language"}}
+- {{"mode":"tool","tool":"<exact available tool name>","params":{{...}}}}
+- {{"mode":"intent","intent":"<built-in intent>","params":{{...}}}}
+- {{"mode":"skill","skill":"<different installed skill name>","params":{{...}}}}
+
+Rules:
+- Prefer a concrete tool or built-in intent when action is still needed.
+- Do not return the selected skill itself again.
+- Use exact names from <available_tools> and <available_skills>.
+- Use only information supported by the selected skill instructions and observations.
+- Do not invent file paths, URLs, browser target ids, or secrets.
+- If the task is complete, return mode="answer" in the user's language.
+
+<selected_skill>
+{self._build_skill_detail(skill_identifier)}
+</selected_skill>
+
+<available_skills>
+{self._build_skill_catalog(compact=False)}
+</available_skills>
+
+<available_tools>
+{self._build_tool_catalog(compact=False)}
+</available_tools>
+
+<task_context>
+{self._xml_escape(json.dumps(context_payload, ensure_ascii=False))}
+</task_context>
+
+<recent_observations>
+{self._xml_escape(json.dumps(observation_payload, ensure_ascii=False))}
+</recent_observations>
+
+User: {user_request}
+"""
 
     def _build_skill_detail(self, skill_identifier: str) -> str:
         """Build a prompt block for a selected skill, including SKILL.md docs when available."""
@@ -571,6 +787,42 @@ User: {user_request}
             else:
                 parts.append(str(action_type))
         return "; ".join(parts)
+
+    def _trim_prompt_value(
+        self,
+        value: Any,
+        *,
+        max_string: int = 800,
+        max_items: int = 12,
+    ) -> Any:
+        """Trim nested values before placing them into an LLM prompt."""
+
+        if isinstance(value, str):
+            compact = re.sub(r"\s+", " ", value).strip()
+            if len(compact) <= max_string:
+                return compact
+            return compact[: max_string - 3].rstrip() + "..."
+        if isinstance(value, dict):
+            trimmed: Dict[str, Any] = {}
+            for index, (key, item) in enumerate(value.items()):
+                if index >= max_items:
+                    trimmed["..."] = f"+{len(value) - max_items} more fields"
+                    break
+                trimmed[str(key)] = self._trim_prompt_value(
+                    item,
+                    max_string=max_string,
+                    max_items=max_items,
+                )
+            return trimmed
+        if isinstance(value, list):
+            trimmed_list = [
+                self._trim_prompt_value(item, max_string=max_string, max_items=max_items)
+                for item in value[:max_items]
+            ]
+            if len(value) > max_items:
+                trimmed_list.append(f"... +{len(value) - max_items} more items")
+            return trimmed_list
+        return value
 
     def _decision_from_model_output(self, content: str, raw_message: str) -> AgentDecision:
         """Parse model output into an AgentDecision."""
@@ -689,6 +941,40 @@ User: {user_request}
                 source="openclaw_runtime_guardrail",
                 raw_message=message.content,
                 rationale="basic_intent_guardrail",
+            )
+
+        file_read_params = self._build_file_read_intent_params(request)
+        if file_read_params:
+            current_mode = decision.mode
+            current_params = dict(decision.params or {})
+            if current_mode == AgentDecisionMode.INTENT:
+                if str(decision.intent_name or "").strip().lower() == "read_file" and str(current_params.get("path") or "").strip():
+                    return decision
+            if current_mode == AgentDecisionMode.SKILL:
+                resolved_skill = self._resolve_skill_name(decision.skill_name or "")
+                resolved_repo_skill = self._resolve_skill_name("repo.fs")
+                if resolved_skill and resolved_repo_skill and resolved_skill == resolved_repo_skill:
+                    return decision
+
+            repo_fs_skill = self._select_available_skill("repo.fs", "workspace-files", "fs-workspace")
+            if repo_fs_skill:
+                return AgentDecision(
+                    mode=AgentDecisionMode.SKILL,
+                    skill_name=repo_fs_skill,
+                    params={"action": "read", **file_read_params},
+                    confidence=max(decision.confidence, 0.97),
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="filesystem_read_skill_guardrail",
+                )
+            return AgentDecision(
+                mode=AgentDecisionMode.INTENT,
+                intent_name="read_file",
+                params=file_read_params,
+                confidence=max(decision.confidence, 0.97),
+                source="openclaw_runtime_guardrail",
+                raw_message=message.content,
+                rationale="filesystem_read_guardrail",
             )
 
         if (
@@ -984,6 +1270,9 @@ User: {user_request}
         if not normalized or normalized.startswith("/"):
             return False
 
+        if self._build_file_read_intent_params(request):
+            return False
+
         clock_markers = (
             "\u4eca\u5929\u5468\u51e0",
             "\u4eca\u5929\u661f\u671f\u51e0",
@@ -1174,6 +1463,8 @@ User: {user_request}
             return False
         if self._build_desktop_listing_intent_params(request):
             return False
+        if self._build_file_read_intent_params(request):
+            return False
         if self._build_disk_space_intent_params(request):
             return False
 
@@ -1283,6 +1574,41 @@ User: {user_request}
                 "folders_only": True,
                 "error": "请指定盘符，例如：D盘有哪些文件夹？",
             }
+
+        return None
+
+    def _build_file_read_intent_params(self, request: str) -> Optional[Dict[str, Any]]:
+        """Detect direct file-opening requests that should read local text files."""
+
+        normalized = self._normalize_request_text(request)
+        if not normalized or normalized.startswith("/"):
+            return None
+
+        if self._extract_first_url(request):
+            return None
+
+        if not any(token in normalized for token in ("打开", "查看", "读取", "读一下", "看看")):
+            return None
+
+        file_match = re.search(
+            r"(?:桌面|desktop)(?:上|里的|中的|的)?\s*(?P<filename>[^\\/:*?\"<>|\r\n]+?\.[A-Za-z0-9]+)(?:文件)?\s*$",
+            request,
+            re.IGNORECASE,
+        )
+        if file_match:
+            filename = str(file_match.group("filename") or "").strip()
+            if filename:
+                return {"path": f"~/Desktop/{filename}"}
+
+        generic_match = re.search(
+            r"(?P<path>(?:[A-Za-z]:[/\\][^\\/:*?\"<>|\r\n]+|~?/[^\\:*?\"<>|\r\n]+|[^\\/:*?\"<>|\r\n]+\.[A-Za-z0-9]+))(?:文件)?\s*$",
+            request,
+            re.IGNORECASE,
+        )
+        if generic_match:
+            path = str(generic_match.group("path") or "").strip()
+            if path:
+                return {"path": path}
 
         return None
 

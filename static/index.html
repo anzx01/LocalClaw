@@ -1324,6 +1324,7 @@
                                     <div class="skill-meta">
                                         <span x-text="'Type: ' + (skill.type || 'unknown')"></span>
                                         <span x-text="'Source: ' + formatInstalledSource(skill)"></span>
+                                        <span x-text="'Approval: ' + (skill.require_approval ? 'required' : 'normal')"></span>
                                         <template x-if="skill.skill_key">
                                             <span x-text="'Key: ' + skill.skill_key"></span>
                                         </template>
@@ -1348,6 +1349,12 @@
                                             @click="setSkillState(skill, skillToggleTarget(skill))"
                                             :disabled="skillStateLoadingKey === normalizeSkillId(skill)"
                                             x-text="skillStateLoadingKey === normalizeSkillId(skill) ? 'Updating...' : skillToggleLabel(skill)">
+                                        </button>
+                                        <button
+                                            class="secondary-btn"
+                                            @click="setSkillApproval(skill, !skill.require_approval)"
+                                            :disabled="skillApprovalLoadingKey === normalizeSkillId(skill)"
+                                            x-text="skillApprovalLoadingKey === normalizeSkillId(skill) ? 'Updating...' : skillApprovalLabel(skill)">
                                         </button>
                                         <button
                                             class="ghost-btn"
@@ -2129,6 +2136,7 @@
                 uploadScanning: false,
                 uploadSelectedFileName: '',
                 skillStateLoadingKey: '',
+                skillApprovalLoadingKey: '',
                 skillUpgradeLoadingKey: '',
                 uninstallingSkill: '',
                 reviewLoading: '',
@@ -3178,6 +3186,10 @@
                 skillToggleLabel(skill) {
                     const target = this.skillToggleTarget(skill);
                     return target === 'enabled' ? 'Enable' : 'Disable';
+                },
+
+                skillApprovalLabel(skill) {
+                    return skill && skill.require_approval ? 'Approval On' : 'Approval Off';
                 },
 
                 findMarketplaceSkill(skill) {
@@ -4414,6 +4426,25 @@
                         alert('Failed to update skill state: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message));
                     } finally {
                         this.skillStateLoadingKey = '';
+                    }
+                },
+
+                async setSkillApproval(skill, requireApproval) {
+                    const normalizedId = this.normalizeSkillId(skill);
+                    if (!normalizedId) {
+                        return;
+                    }
+
+                    this.skillApprovalLoadingKey = normalizedId;
+                    try {
+                        await axios.post('/api/skills/' + encodeURIComponent(skill.skill_key || skill.name) + '/approval', {
+                            require_approval: !!requireApproval
+                        });
+                        await this.loadSkills({ showLoading: false });
+                    } catch (e) {
+                        alert('Failed to update skill approval policy: ' + (e.response && e.response.data ? JSON.stringify(e.response.data) : e.message));
+                    } finally {
+                        this.skillApprovalLoadingKey = '';
                     }
                 },
 

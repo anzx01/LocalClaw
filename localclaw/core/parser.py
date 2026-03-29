@@ -36,9 +36,14 @@ class ParseRule:
 
         params: Dict[str, Any] = {}
         for key, value_pattern in self.params_template.items():
-            if value_pattern.startswith("$"):
-                group_name = value_pattern[1:]
-                params[key] = match.group(group_name) if group_name in match.groupdict() else ""
+            if "$" in value_pattern:
+                def _replace_group(token_match: re.Match[str]) -> str:
+                    group_name = token_match.group(1)
+                    if group_name in match.groupdict() and match.group(group_name) is not None:
+                        return str(match.group(group_name))
+                    return ""
+
+                params[key] = re.sub(r"\$([A-Za-z_][A-Za-z0-9_]*)", _replace_group, value_pattern)
             else:
                 params[key] = value_pattern
 
@@ -424,6 +429,18 @@ def create_default_parser(llm_enabled: bool = False, llm_parse_only: bool = Fals
             intent="file_list",
             params_template={"path": "~/Desktop"},
             priority=15,
+        ),
+        ParseRule(
+            pattern=r"^(?:打开|查看|读取|读一下|看看)\s*(?:桌面|desktop)(?:上|里的|中的|的)?\s*(?P<filename>.+?\.[A-Za-z0-9]+)(?:文件)?[\s\?\!？。！]*$",
+            intent="read_file",
+            params_template={"path": "~/Desktop/$filename"},
+            priority=27,
+        ),
+        ParseRule(
+            pattern=r"^(?:打开|查看|读取|读一下|看看)\s*(?P<path>.+?\.[A-Za-z0-9]+)(?:文件)?[\s\?\!？。！]*$",
+            intent="read_file",
+            params_template={"path": "$path"},
+            priority=23,
         ),
         ParseRule(
             pattern=r"^(?:查看|列出)?(?:文件夹|目录)\s*(?P<path>.+?)\s*(?:中的|里的)?(?:文件|内容)?$",

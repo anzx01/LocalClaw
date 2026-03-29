@@ -26,6 +26,41 @@ def _humanize_bytes(size_bytes: int) -> str:
     return f"{size_bytes} B"
 
 
+def _resolve_local_path(base_dir: Path, raw_path: str) -> Path:
+    """Resolve user paths with Desktop shorthand compatibility on Windows."""
+
+    text = str(raw_path or "").strip()
+    if not text:
+        return base_dir
+
+    desktop_dir = Path.home() / "Desktop"
+    normalized = text.replace("\\", "/")
+    normalized_lower = normalized.lower()
+
+    desktop_aliases = {
+        "desktop",
+        "/desktop",
+        "~/desktop",
+        "桌面",
+        "/桌面",
+        "~/桌面",
+    }
+    if normalized_lower in desktop_aliases:
+        return desktop_dir
+
+    if normalized_lower.startswith("/desktop/"):
+        suffix = normalized[len("/Desktop/") :]
+        return desktop_dir / Path(suffix)
+    if normalized.startswith("/桌面/"):
+        suffix = normalized[len("/桌面/") :]
+        return desktop_dir / Path(suffix)
+
+    path = Path(text).expanduser()
+    if path.is_absolute():
+        return path
+    return base_dir / path
+
+
 class FileReadTool(Tool):
     """Tool for reading file contents."""
     
@@ -74,10 +109,7 @@ class FileReadTool(Tool):
     
     def _resolve_path(self, path: str) -> Path:
         """Resolve path relative to base directory."""
-        p = Path(path)
-        if p.is_absolute():
-            return p
-        return self._base_dir / p
+        return _resolve_local_path(self._base_dir, path)
 
 
 class FileWriteTool(Tool):
@@ -120,10 +152,7 @@ class FileWriteTool(Tool):
     
     def _resolve_path(self, path: str) -> Path:
         """Resolve path relative to base directory."""
-        p = Path(path)
-        if p.is_absolute():
-            return p
-        return self._base_dir / p
+        return _resolve_local_path(self._base_dir, path)
 
 
 class FileListTool(Tool):
@@ -207,10 +236,7 @@ class FileListTool(Tool):
     
     def _resolve_path(self, path: str) -> Path:
         """Resolve path relative to base directory."""
-        p = Path(path)
-        if p.is_absolute():
-            return p
-        return self._base_dir / p
+        return _resolve_local_path(self._base_dir, path)
 
 
 class FileDeleteTool(Tool):
@@ -267,10 +293,7 @@ class FileDeleteTool(Tool):
     
     def _resolve_path(self, path: str) -> Path:
         """Resolve path relative to base directory."""
-        p = Path(path)
-        if p.is_absolute():
-            return p
-        return self._base_dir / p
+        return _resolve_local_path(self._base_dir, path)
 
 
 class FileMkdirTool(Tool):
@@ -308,10 +331,7 @@ class FileMkdirTool(Tool):
     
     def _resolve_path(self, path: str) -> Path:
         """Resolve path relative to base directory."""
-        p = Path(path)
-        if p.is_absolute():
-            return p
-        return self._base_dir / p
+        return _resolve_local_path(self._base_dir, path)
 
 
 class FileAppendTool(Tool):
@@ -352,10 +372,7 @@ class FileAppendTool(Tool):
     
     def _resolve_path(self, path: str) -> Path:
         """Resolve path relative to base directory."""
-        p = Path(path)
-        if p.is_absolute():
-            return p
-        return self._base_dir / p
+        return _resolve_local_path(self._base_dir, path)
 
 
 class DiskUsageTool(Tool):
@@ -422,11 +439,7 @@ class DiskUsageTool(Tool):
 
     def _resolve_path(self, path: str) -> Path:
         """Resolve path relative to base directory."""
-
-        p = Path(path)
-        if p.is_absolute():
-            return p
-        return self._base_dir / p
+        return _resolve_local_path(self._base_dir, path)
 
 
 def register_file_tools(base_dir: Optional[Path] = None) -> None:

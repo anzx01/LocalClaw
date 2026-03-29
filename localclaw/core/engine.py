@@ -253,7 +253,11 @@ class ExecutionEngine:
                     )
 
                 self._advance_task_state(task, TaskState.RUNNING, event="task_running")
-                await self._execute_plan(task)
+                instruction_skill = self._should_run_instruction_skill(task)
+                if instruction_skill:
+                    await self._execute_instruction_skill(task, instruction_skill)
+                else:
+                    await self._execute_plan(task)
             
         except Exception as e:
             self._logger.error(f"Task {task.id} failed: {e}")
@@ -304,6 +308,28 @@ class ExecutionEngine:
         )
         self._advance_task_state(task, TaskState.COMPLETED, event="task_completed")
 
+    def _complete_with_text_result(self, task: Task, message: str) -> None:
+        """Finish a task with a plain text reply while preserving executed steps."""
+
+        answer = str(message or "").strip()
+        if not answer:
+            raise EngineError("Instruction skill returned an empty answer", ErrorType.PARSE_ERROR)
+
+        payload: Dict[str, Any] = {
+            "result": answer,
+            "message": answer,
+        }
+        if task.plan is not None and task.plan.steps:
+            payload["steps"] = self._collect_results(task)
+
+        task.result = ExecutionResult.success(
+            message=answer,
+            data=payload,
+        )
+        task.error = None
+        task.error_type = None
+        self._advance_task_state(task, TaskState.COMPLETED, event="task_completed")
+
     @staticmethod
     def _is_unknown_plan(plan: Optional[Plan]) -> bool:
         """Return True when planner output is effectively an unknown-intent fallback."""
@@ -326,6 +352,133 @@ class ExecutionEngine:
 
         template = str(step.template or "").strip().lower()
         return template.startswith("unknown intent:")
+
+    def _should_run_instruction_skill(self, task: Task) -> Optional[str]:
+        """Return the selected instruction-only skill when the task should enter a model loop."""
+
+        if task.intent is None or task.plan is None:
+            return None
+        if not str(task.intent.intent or "").startswith("skill."):
+            return None
+        if task.plan.steps:
+            return None
+
+        skill_name = str(task.plan.skill_name or task.intent.intent[6:] or "").strip()
+        if not skill_name:
+            return None
+
+        runtime = getattr(self, "_openclaw_runtime", None)
+        checker = getattr(runtime, "is_instruction_skill", None)
+        if callable(checker):
+            try:
+                return skill_name if checker(skill_name) else None
+            except Exception as exc:
+                self._logger.debug("Instruction-skill eligibility check failed for %s: %s", skill_name, exc)
+        return None
+
+    async def _execute_instruction_skill(self, task: Task, skill_name: str) -> None:
+        """Run a bounded OpenClaw-style skill loop for instruction-only skills."""
+
+        if task.message is None:
+            raise EngineError("Instruction skill execution requires the original message", ErrorType.PLAN_ERROR)
+
+        runtime = getattr(self, "_openclaw_runtime", None)
+        if runtime is None:
+            raise EngineError("Instruction skill execution requires an OpenClaw runtime", ErrorType.PLAN_ERROR)
+
+        observations: List[Dict[str, Any]] = []
+        max_turns = 4
+        for turn in range(max_turns):
+            decision = await runtime.decide_instruction_skill_next_action(
+                skill_name,
+                task.message,
+                task.context,
+                observations,
+            )
+            self._record_progress(
+                task,
+                event="instruction_skill_turn",
+                details={
+                    "skill_name": skill_name,
+                    "turn": turn + 1,
+                    "decision_mode": decision.mode.value,
+                },
+            )
+
+            if decision.mode == AgentDecisionMode.ANSWER and decision.answer:
+                self._complete_with_text_result(task, decision.answer)
+                return
+
+            if decision.mode == AgentDecisionMode.UNKNOWN:
+                observations.append({"kind": "unknown_decision", "turn": turn + 1})
+                continue
+
+            if decision.mode == AgentDecisionMode.SKILL and decision.skill_name == skill_name:
+                observations.append(
+                    {
+                        "kind": "invalid_decision",
+                        "turn": turn + 1,
+                        "reason": "instruction_skill_reselected_itself",
+                    }
+                )
+                continue
+
+            next_intent = decision.to_intent()
+            if next_intent is None:
+                observations.append(
+                    {
+                        "kind": "invalid_decision",
+                        "turn": turn + 1,
+                        "reason": "decision_not_executable",
+                    }
+                )
+                continue
+
+            task.context.inputs.update(next_intent.params)
+            subplan = await self._planner.plan(next_intent, task.context)
+            if subplan.intent is None:
+                subplan.intent = next_intent
+
+            if not subplan.steps:
+                observations.append(
+                    {
+                        "kind": "empty_subplan",
+                        "turn": turn + 1,
+                        "intent": next_intent.intent,
+                        "params": self._trim_observation_value(next_intent.params),
+                    }
+                )
+                continue
+
+            start_index = len(task.plan.steps) if task.plan is not None else 0
+            task.plan.steps.extend(subplan.steps)
+            execution_outcome = await self._execute_step_range(
+                task,
+                start_index=start_index,
+                end_index=len(task.plan.steps),
+            )
+            if execution_outcome != "completed":
+                return
+
+            executed_steps = task.plan.steps[start_index:]
+            observations.append(
+                self._build_instruction_skill_observation(
+                    intent=next_intent,
+                    steps=executed_steps,
+                    turn=turn + 1,
+                    task=task,
+                )
+            )
+
+        if task.plan is not None and any(step.status == StepStatus.COMPLETED for step in task.plan.steps):
+            fallback_answer = f"Skill '{skill_name}' completed its executable steps, but did not produce a final reply."
+            self._complete_with_text_result(task, fallback_answer)
+            return
+
+        raise EngineError(
+            f"Instruction skill '{skill_name}' did not produce an executable action or final answer",
+            ErrorType.PLAN_ERROR,
+        )
 
     def _advance_task_state(
         self,
@@ -456,18 +609,26 @@ class ExecutionEngine:
                 json.dump(state, handle, default=str, indent=2)
         except Exception as exc:
             self._logger.error("Failed to save state: %s", exc)
-    
-    async def _execute_plan(self, task: Task, start_index: int = 0) -> None:
-        """Execute all steps in a plan."""
+
+    async def _execute_step_range(
+        self,
+        task: Task,
+        *,
+        start_index: int = 0,
+        end_index: Optional[int] = None,
+    ) -> str:
+        """Execute a contiguous step range without auto-finalizing the task."""
+
         if not task.plan:
             task.result = ExecutionResult.from_error("No plan to execute")
             self._advance_task_state(task, TaskState.FAILED, event="task_failed")
-            return
-        
-        for step_index in range(start_index, len(task.plan.steps)):
+            return "failed"
+
+        stop_index = len(task.plan.steps) if end_index is None else min(end_index, len(task.plan.steps))
+        for step_index in range(start_index, stop_index):
             task.current_step_index = step_index
             step = task.plan.steps[step_index]
-            
+
             try:
                 result = await self._execute_step(step, task)
 
@@ -481,8 +642,8 @@ class ExecutionEngine:
                         event="task_waiting_approval",
                         step=step,
                     )
-                    return
-                
+                    return "waiting_approval"
+
                 if result.status == "error":
                     if step.error_policy.on_failure == "abort":
                         task.result = result
@@ -495,23 +656,24 @@ class ExecutionEngine:
                             step=step,
                             details={"error_policy": "abort"},
                         )
-                        return
-                    elif step.error_policy.on_failure == "skip":
+                        return "failed"
+                    if step.error_policy.on_failure == "skip":
                         step.status = StepStatus.SKIPPED
                         self._record_progress(task, event="step_skipped", step=step)
                         continue
-                
+
                 task.context.set_step_output(step.id, result.data)
-                
+
             except Exception as e:
                 self._logger.error(f"Step {step.id} failed: {e}")
                 step.status = StepStatus.FAILED
                 step.error = str(e)
                 self._record_progress(task, event="step_failed", step=step)
-                
+
                 if step.error_policy.on_failure == "abort":
                     task.result = ExecutionResult.from_error(str(e), ErrorType.SYSTEM_ERROR)
                     task.error = str(e)
+                    task.error_type = ErrorType.SYSTEM_ERROR
                     self._advance_task_state(
                         task,
                         TaskState.FAILED,
@@ -519,8 +681,85 @@ class ExecutionEngine:
                         step=step,
                         details={"error_policy": "abort"},
                     )
-                    return
-        
+                    return "failed"
+
+        return "completed"
+
+    def _build_instruction_skill_observation(
+        self,
+        *,
+        intent: Intent,
+        steps: List[Step],
+        turn: int,
+        task: Task,
+    ) -> Dict[str, Any]:
+        """Summarize one executed instruction-skill turn for the next runtime prompt."""
+
+        return {
+            "kind": "executed_subplan",
+            "turn": turn,
+            "intent": intent.intent,
+            "params": self._trim_observation_value(intent.params),
+            "steps": [
+                {
+                    "id": step.id,
+                    "name": step.name,
+                    "type": step.type.value if hasattr(step.type, "value") else str(step.type),
+                    "tool_name": step.tool_name,
+                    "skill_name": step.skill_name,
+                    "status": step.status.value if hasattr(step.status, "value") else str(step.status),
+                    "output": self._trim_observation_value(task.context.get_step_output(step.id)),
+                }
+                for step in steps
+            ],
+        }
+
+    def _trim_observation_value(
+        self,
+        value: Any,
+        *,
+        max_string: int = 800,
+        max_items: int = 10,
+    ) -> Any:
+        """Trim nested values before feeding them back into the local model."""
+
+        if isinstance(value, str):
+            compact = " ".join(value.split())
+            if len(compact) <= max_string:
+                return compact
+            return compact[: max_string - 3].rstrip() + "..."
+        if isinstance(value, dict):
+            trimmed: Dict[str, Any] = {}
+            for index, (key, item) in enumerate(value.items()):
+                if index >= max_items:
+                    trimmed["..."] = f"+{len(value) - max_items} more fields"
+                    break
+                trimmed[str(key)] = self._trim_observation_value(
+                    item,
+                    max_string=max_string,
+                    max_items=max_items,
+                )
+            return trimmed
+        if isinstance(value, list):
+            trimmed = [
+                self._trim_observation_value(item, max_string=max_string, max_items=max_items)
+                for item in value[:max_items]
+            ]
+            if len(value) > max_items:
+                trimmed.append(f"... +{len(value) - max_items} more items")
+            return trimmed
+        return value
+    
+    async def _execute_plan(self, task: Task, start_index: int = 0) -> None:
+        """Execute all steps in a plan."""
+        if not task.plan:
+            task.result = ExecutionResult.from_error("No plan to execute")
+            self._advance_task_state(task, TaskState.FAILED, event="task_failed")
+            return
+        execution_outcome = await self._execute_step_range(task, start_index=start_index)
+        if execution_outcome != "completed":
+            return
+
         task.result = ExecutionResult.success(
             message="Task completed successfully",
             data=self._collect_results(task),

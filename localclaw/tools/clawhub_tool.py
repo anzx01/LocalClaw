@@ -220,8 +220,7 @@ class ClawHubInstallTool(Tool):
             skills = loader.load_from_directory(skill_path, recursive=True)
             if skills:
                 for skill in skills:
-                    availability = skill.get_definition().metadata.get("availability", {})
-                    get_skill_registry().register(skill, enable=availability.get("status") != "blocked")
+                    get_skill_registry().register(skill, enable=True)
                 return ExecutionResult.success(
                     message=f"Skill {skill_id} installed successfully",
                     data={"installed": True, "skill_path": str(skill_path), "scan": scan, "guard": guard},

@@ -67,6 +67,19 @@ class DummyBrowserTool(Tool):
         return ExecutionResult.success(data={"message": "ok"})
 
 
+class DummyLaunchAppTool(Tool):
+    """Desktop launcher placeholder used by instruction-skill tests."""
+
+    name = "launch_app"
+    description = "Launch a desktop app"
+    risk_level = RiskLevel.LOW
+    inputs = {"target": "string"}
+    outputs = {"message": "string"}
+
+    async def execute(self, **kwargs):
+        return ExecutionResult.success(data={"message": "ok"})
+
+
 @pytest.mark.asyncio
 async def test_openclaw_runtime_can_return_direct_answer(monkeypatch):
     """Plain conversational requests should be answerable without planner fallback."""
@@ -240,6 +253,69 @@ Use this skill for reading or listing files inside the current workspace.
     assert decision.params == {"action": "read", "path": "README.md"}
     assert captured["calls"] == 2
     assert "Use this skill for reading or listing files inside the current workspace." in captured["refine_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_instruction_skill_next_action_uses_skill_markdown(monkeypatch, tmp_path):
+    """Instruction-only skills should expose SKILL.md guidance to the next-action prompt."""
+
+    skill_dir = tmp_path / "app_launcher"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: app-launcher
+version: 1.0.0
+description: Open a desktop application
+type: workflow
+inputs:
+  target: string
+tools:
+  - launch_app
+---
+
+# App Launcher
+
+Use the launch_app tool to open a requested desktop application.
+""",
+        encoding="utf-8",
+    )
+
+    registry = SkillRegistry()
+    loader = SkillLoader(registry)
+    skill = loader.load_from_file(skill_dir)
+    assert skill is not None
+    registry.register(skill)
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyLaunchAppTool())
+
+    captured = {"prompt": ""}
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            captured["prompt"] = prompt
+
+            class Response:
+                content = '{"mode":"tool","tool":"launch_app","params":{"target":"vscode"}}'
+
+            return Response()
+
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(registry, tool_registry)
+    decision = await runtime.decide_instruction_skill_next_action(
+        "app-launcher",
+        Message(content="打开 VS Code"),
+    )
+
+    assert runtime.is_instruction_skill("app-launcher") is True
+    assert decision.mode == AgentDecisionMode.TOOL
+    assert decision.tool_name == "launch_app"
+    assert decision.params == {"target": "vscode"}
+    assert "Use the launch_app tool to open a requested desktop application." in captured["prompt"]
 
 
 @pytest.mark.asyncio
@@ -418,6 +494,185 @@ async def test_openclaw_runtime_guardrails_desktop_file_listing(monkeypatch):
     assert decision.params["path"] == "~/Desktop"
     assert decision.params["folders_only"] is False
     assert decision.source == "openclaw_runtime_guardrail"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_guardrails_desktop_file_read(monkeypatch):
+    """Desktop file open requests should route to read_file."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"unknown","params":{}}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+    decision = await runtime.decide(Message(content="打开桌面的AI量化工具.txt文件"))
+
+    assert decision.mode == AgentDecisionMode.INTENT
+    assert decision.intent_name == "read_file"
+    assert decision.params["path"] == "~/Desktop/AI量化工具.txt"
+    assert decision.source == "openclaw_runtime_guardrail"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_guardrails_desktop_file_read_prefers_repo_fs_skill(monkeypatch):
+    """Desktop file open requests should prefer repo.fs when the skill is available."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"unknown","params":{}}'
+
+            return Response()
+
+    registry = SkillRegistry()
+    skill = create_skill_from_dict(
+        {
+            "name": "workspace_fs",
+            "description": "Read workspace files",
+            "inputs": {"action": "string", "path": "string"},
+            "actions": [{"type": "transform", "template": "reading {{path}}"}],
+            "metadata": {"skill_key": "repo.fs"},
+        }
+    )
+    skill.enable()
+    registry.register(skill)
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(registry, tool_registry)
+    decision = await runtime.decide(Message(content="打开桌面的AI量化工具.txt文件"))
+
+    assert decision.mode == AgentDecisionMode.SKILL
+    assert decision.skill_name == "workspace_fs"
+    assert decision.params == {"action": "read", "path": "~/Desktop/AI量化工具.txt"}
+    assert decision.source == "openclaw_runtime_guardrail"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_file_request_overrides_model_date_query(monkeypatch):
+    """File-opening requests should override an incorrect date_query model decision."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"intent","intent":"date_query","params":{}}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+    decision = await runtime.decide(Message(content="打开桌面的 AI量化工具.txt"))
+
+    assert decision.mode == AgentDecisionMode.INTENT
+    assert decision.intent_name == "read_file"
+    assert decision.params["path"] == "~/Desktop/AI量化工具.txt"
+    assert decision.rationale == "filesystem_read_guardrail"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_file_request_overrides_browser_tool(monkeypatch):
+    """File-opening requests should override an incorrect browser_cdp tool decision."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"tool","tool":"browser_cdp","params":{"request":"打开桌面的 AI量化工具.txt"}}'
+
+            return Response()
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(SkillRegistry(), tool_registry)
+    decision = await runtime.decide(Message(content="打开桌面的 AI量化工具.txt"))
+
+    assert decision.mode == AgentDecisionMode.INTENT
+    assert decision.intent_name == "read_file"
+    assert decision.params["path"] == "~/Desktop/AI量化工具.txt"
+    assert decision.rationale == "filesystem_read_guardrail"
+
+
+@pytest.mark.asyncio
+async def test_openclaw_runtime_file_request_overrides_web_skill_with_repo_fs(monkeypatch):
+    """File-opening requests should prefer repo.fs over an incorrect web-access skill decision."""
+
+    class FakeProvider:
+        async def is_available(self):
+            return True
+
+        async def generate(self, prompt, max_tokens=None, temperature=0.0):
+            class Response:
+                content = '{"mode":"skill","skill":"web-access","params":{"request":"打开桌面的 AI量化工具.txt"}}'
+
+            return Response()
+
+    registry = SkillRegistry()
+    web_access = create_skill_from_dict(
+        {
+            "name": "web-access",
+            "description": "Browser skill",
+            "inputs": {"request": "string"},
+            "actions": [{"type": "transform", "template": "web {{request}}"}],
+        }
+    )
+    web_access.enable()
+    registry.register(web_access)
+    repo_fs = create_skill_from_dict(
+        {
+            "name": "workspace_fs",
+            "description": "Read workspace files",
+            "inputs": {"action": "string", "path": "string"},
+            "actions": [{"type": "transform", "template": "reading {{path}}"}],
+            "metadata": {"skill_key": "repo.fs"},
+        }
+    )
+    repo_fs.enable()
+    registry.register(repo_fs)
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(DummyTool())
+    monkeypatch.setattr("localclaw.core.openclaw_runtime.get_llm_provider", lambda: FakeProvider())
+
+    runtime = OpenClawRuntime(registry, tool_registry)
+    decision = await runtime.decide(Message(content="打开桌面的 AI量化工具.txt"))
+
+    assert decision.mode == AgentDecisionMode.SKILL
+    assert decision.skill_name == "workspace_fs"
+    assert decision.params == {"action": "read", "path": "~/Desktop/AI量化工具.txt"}
+    assert decision.rationale == "filesystem_read_skill_guardrail"
+
+
+def test_openclaw_runtime_clock_guardrail_rejects_desktop_file_request():
+    """File-opening requests should never be treated as clock queries."""
+
+    runtime = OpenClawRuntime(SkillRegistry(), ToolRegistry())
+
+    assert runtime._looks_like_clock_query("打开桌面的 AI量化工具.txt") is False
 
 
 @pytest.mark.asyncio

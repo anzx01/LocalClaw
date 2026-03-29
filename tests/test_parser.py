@@ -186,6 +186,32 @@ async def test_default_parser_desktop_folders_request():
 
 
 @pytest.mark.asyncio
+async def test_default_parser_desktop_file_read_request():
+    """Desktop file open requests should map to read_file."""
+
+    parser = create_default_parser()
+
+    message = Message(content="打开桌面的AI量化工具.txt文件")
+    intent = await parser.parse(message)
+
+    assert intent.intent == "read_file"
+    assert intent.params["path"] == "~/Desktop/AI量化工具.txt"
+
+
+@pytest.mark.asyncio
+async def test_default_parser_desktop_file_read_request_with_space():
+    """Desktop file open requests should allow a space before the filename."""
+
+    parser = create_default_parser()
+
+    message = Message(content="打开桌面的 AI量化工具.txt")
+    intent = await parser.parse(message)
+
+    assert intent.intent == "read_file"
+    assert intent.params["path"] == "~/Desktop/AI量化工具.txt"
+
+
+@pytest.mark.asyncio
 async def test_llm_parse_only_uses_local_model(monkeypatch):
     """When enabled, the local model should be the primary parser for all input."""
 

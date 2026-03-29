@@ -31,6 +31,7 @@ from localclaw.system.windows_service import (
 from localclaw.tools.base import Tool, get_tool_registry
 from localclaw.tools.file_tool import register_file_tools
 from localclaw.tools.http_tool import register_http_tools
+from localclaw.tools.launch_app_tool import register_launch_app_tools
 from localclaw.tools.local_model_tool import register_local_model_tools
 from localclaw.tools.shell_tool import register_shell_tools
 from localclaw.tools.browser_cdp_tool import register_browser_cdp_tools
@@ -166,6 +167,7 @@ class SkillResponse(BaseModel):
     source_format: Optional[str] = None
     source_scope: str = "runtime"
     removable: bool = False
+    require_approval: bool = False
 
 
 class SkillSecurityReviewResponse(BaseModel):
@@ -358,12 +360,27 @@ class SkillStateRequest(BaseModel):
     state: str
 
 
+class SkillApprovalRequest(BaseModel):
+    """Approval policy update request for one installed skill."""
+
+    require_approval: bool
+
+
 class SkillStateActionResponse(BaseModel):
     """Response for skill state actions."""
 
     updated: bool
     name: str
     state: str
+    message: str
+
+
+class SkillApprovalActionResponse(BaseModel):
+    """Response for per-skill approval policy updates."""
+
+    updated: bool
+    name: str
+    require_approval: bool
     message: str
 
 
@@ -1183,6 +1200,7 @@ def initialize_system() -> ExecutionEngine:
     tool_registry.register(ListSkillsTool())
     register_file_tools()
     register_http_tools()
+    register_launch_app_tools()
     register_local_model_tools()
     register_shell_tools()
     register_browser_cdp_tools()
@@ -1437,6 +1455,7 @@ def create_app() -> FastAPI:
                 source_format=s.get("source_format"),
                 source_scope=_classify_skill_source(s.get("source_path"), managed_dir, configured_dirs)[0],
                 removable=_classify_skill_source(s.get("source_path"), managed_dir, configured_dirs)[1],
+                require_approval=bool(s.get("require_approval", False)),
             )
             for s in skills
         ]
@@ -1467,6 +1486,32 @@ def create_app() -> FastAPI:
                 f"Skill '{info['name']}' enabled."
                 if target == "enabled"
                 else f"Skill '{info['name']}' disabled."
+            ),
+        )
+
+    @app.post("/api/skills/{skill_id}/approval", response_model=SkillApprovalActionResponse)
+    async def update_skill_approval(skill_id: str, request: SkillApprovalRequest):
+        """Enable or disable forced human approval for one skill."""
+        from localclaw.skills.registry import get_skill_registry
+
+        registry = get_skill_registry()
+        updated = registry.set_skill_approval_required(skill_id, request.require_approval)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Skill not found")
+
+        info = registry.get_skill_info(skill_id)
+        if not info:
+            raise HTTPException(status_code=404, detail="Skill not found after update")
+
+        require_approval = bool(info.get("require_approval", False))
+        return SkillApprovalActionResponse(
+            updated=True,
+            name=info["name"],
+            require_approval=require_approval,
+            message=(
+                f"Skill '{info['name']}' now requires approval before running tools."
+                if require_approval
+                else f"Skill '{info['name']}' now follows the normal runtime approval policy."
             ),
         )
 
@@ -1699,8 +1744,7 @@ def create_app() -> FastAPI:
             }
 
         for skill in skills:
-            availability = skill.get_definition().metadata.get("availability", {})
-            registry.register(skill, enable=availability.get("status") != "blocked")
+            registry.register(skill, enable=True)
 
         _clear_uploaded_skill_stage(upload_token)
         return {

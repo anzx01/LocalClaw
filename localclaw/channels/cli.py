@@ -19,6 +19,7 @@ from localclaw.tools.browser_cdp_tool import register_browser_cdp_tools
 from localclaw.tools.clawhub_tool import register_clawhub_tools
 from localclaw.tools.file_tool import register_file_tools
 from localclaw.tools.http_tool import register_http_tools
+from localclaw.tools.launch_app_tool import register_launch_app_tools
 from localclaw.tools.local_model_tool import register_local_model_tools
 from localclaw.tools.shell_tool import register_shell_tools
 
@@ -107,6 +108,7 @@ def initialize_system() -> ExecutionEngine:
     tool_registry.register(ListSkillsTool())
     register_file_tools()
     register_http_tools()
+    register_launch_app_tools()
     register_local_model_tools()
     register_shell_tools()
     register_browser_cdp_tools()
