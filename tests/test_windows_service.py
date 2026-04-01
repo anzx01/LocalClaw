@@ -3,6 +3,23 @@
 from localclaw.system import windows_service
 
 
+def test_decode_stream_uses_gbk_fallback(monkeypatch):
+    """GBK output should still decode when UTF-8 is not the active locale."""
+
+    monkeypatch.setattr(windows_service, "_DECODE_CANDIDATES", ["utf-8", "gbk"])
+
+    expected = "\u4e2d\u6587"
+    assert windows_service._decode_stream(expected.encode("gbk")) == expected
+
+
+def test_decode_stream_falls_back_to_utf8_replace(monkeypatch):
+    """Invalid bytes should still produce a readable string via replacement."""
+
+    monkeypatch.setattr(windows_service, "_DECODE_CANDIDATES", ["definitely-not-a-codec"])
+
+    assert windows_service._decode_stream(b"\xff") == "\ufffd"
+
+
 def test_status_reports_not_installed_when_task_and_service_are_missing(monkeypatch):
     """Missing scheduled task and legacy service should map to NOT_INSTALLED."""
 
@@ -176,4 +193,3 @@ def test_start_legacy_service_1053_returns_migration_hint(monkeypatch):
 
     assert result["ok"] is False
     assert "1053" in result["message"] or "Task Scheduler" in result["message"]
-

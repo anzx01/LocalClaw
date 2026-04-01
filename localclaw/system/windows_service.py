@@ -10,11 +10,14 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _PREFERRED_ENCODING: str = locale.getpreferredencoding(False) or ""
+_DECODE_CANDIDATES: List[str] = list(
+    dict.fromkeys(([_PREFERRED_ENCODING] if _PREFERRED_ENCODING else []) + ["mbcs", "utf-8", "cp936", "gbk"])
+)
 DEFAULT_SERVICE_NAME = os.getenv("LOCALCLAW_WINDOWS_SERVICE_NAME", "LocalClaw")
 DEFAULT_DISPLAY_NAME = "LocalClaw Runtime"
 _LEGACY_SERVICE_HINT = (
@@ -43,17 +46,7 @@ def _decode_stream(payload: bytes) -> str:
     if not payload:
         return ""
 
-    candidates = []
-    if _PREFERRED_ENCODING:
-        candidates.append(_PREFERRED_ENCODING)
-    candidates.extend(["mbcs", "utf-8", "cp936", "gbk"])
-
-    used = set()
-    for encoding_name in candidates:
-        lowered = encoding_name.lower()
-        if lowered in used:
-            continue
-        used.add(lowered)
+    for encoding_name in _DECODE_CANDIDATES:
         try:
             return payload.decode(encoding_name)
         except (UnicodeDecodeError, LookupError):
@@ -125,7 +118,7 @@ def _scheduled_task_not_found(output: str) -> bool:
         "cannot find" in lowered
         or "no msft_scheduledtask" in lowered
         or "not found" in lowered
-        or "找不到" in output
+        or "\u627e\u4e0d\u5230" in output
         or ("msft_scheduledtask" in lowered and "taskname" in lowered)
     )
 
@@ -704,4 +697,3 @@ def uninstall_background_service(service_name: str = DEFAULT_SERVICE_NAME) -> Di
         ),
         service_name=service_name,
     )
-
