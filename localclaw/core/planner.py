@@ -577,7 +577,11 @@ User: {user_request}
                 )
             )
             return plan
-        
+
+        if intent.intent == "summarize_file":
+            # OpenClaw-style: delegate to a skill instead of hardcoding
+            return self._plan_from_skill("summarize-file", intent.params, intent)
+
         return self._plan_unknown(intent)
     
     def _plan_tool_call(self, tool_name: str, params: Dict[str, Any], intent: Intent) -> Plan:
@@ -670,58 +674,64 @@ User: {user_request}
             actions = []
         
         for i, action in enumerate(actions):
-            action_type = action.get("type", "transform")
-            action_condition = normalize_condition_expression(action.get("condition"))
-            step_name = action.get("name")
-            
+            # Support both dict and object (SkillAction) formats
+            def get_action_attr(obj, key, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(key, default)
+                return getattr(obj, key, default)
+
+            action_type = get_action_attr(action, "type", "transform")
+            action_condition = normalize_condition_expression(get_action_attr(action, "condition"))
+            step_name = get_action_attr(action, "name")
+
             if action_type == "tool_call":
-                tool_name = action.get("tool") or action.get("name")
+                tool_name = get_action_attr(action, "tool") or get_action_attr(action, "name")
                 step = Step(
                     type=StepType.TOOL_CALL,
                     name=step_name or f"step_{i}_{tool_name or 'unknown'}",
                     tool_name=tool_name,
                     source_skill_name=source_skill_name,
-                    input=self._resolve_params(action.get("params", {}), params),
-                    timeout=action.get("timeout", 30.0),
+                    input=self._resolve_params(get_action_attr(action, "params", {}), params),
+                    timeout=get_action_attr(action, "timeout", 30.0),
                 )
             elif action_type == "skill_call":
-                nested_skill_name = action.get("skill") or action.get("name")
+                nested_skill_name = get_action_attr(action, "skill") or get_action_attr(action, "name")
                 step = Step(
                     type=StepType.SKILL_CALL,
                     name=step_name or f"step_{i}_{nested_skill_name or 'unknown'}",
                     skill_name=nested_skill_name,
                     source_skill_name=source_skill_name,
-                    input=self._resolve_params(action.get("params", {}), params),
+                    input=self._resolve_params(get_action_attr(action, "params", {}), params),
                 )
             elif action_type == "condition":
                 step = Step(
                     type=StepType.CONDITION,
                     name=f"step_{i}_condition",
-                    condition=action.get("condition"),
+                    condition=get_action_attr(action, "condition"),
                     source_skill_name=source_skill_name,
-                    sub_steps=self._convert_actions_to_steps(action.get("then", []), params, source_skill_name),
+                    sub_steps=self._convert_actions_to_steps(get_action_attr(action, "then", []), params, source_skill_name),
                 )
             elif action_type == "loop":
                 step = Step(
                     type=StepType.LOOP,
                     name=f"step_{i}_loop",
-                    loop_var=action.get("var", "item"),
-                    loop_over=action.get("over"),
+                    loop_var=get_action_attr(action, "var", "item"),
+                    loop_over=get_action_attr(action, "over"),
                     source_skill_name=source_skill_name,
-                    sub_steps=self._convert_actions_to_steps(action.get("actions", []), params, source_skill_name),
+                    sub_steps=self._convert_actions_to_steps(get_action_attr(action, "actions", []), params, source_skill_name),
                 )
             elif action_type == "parallel":
                 step = Step(
                     type=StepType.PARALLEL,
                     name=f"step_{i}_parallel",
                     source_skill_name=source_skill_name,
-                    parallel_steps=self._convert_actions_to_steps(action.get("actions", []), params, source_skill_name),
+                    parallel_steps=self._convert_actions_to_steps(get_action_attr(action, "actions", []), params, source_skill_name),
                 )
             else:
                 step = Step(
                     type=StepType.TRANSFORM,
                     name=f"step_{i}_transform",
-                    template=action.get("template", ""),
+                    template=get_action_attr(action, "template", ""),
                     source_skill_name=source_skill_name,
                     input=params,
                 )
@@ -735,23 +745,25 @@ User: {user_request}
                     input=dict(params),
                     sub_steps=[step],
                 )
-            
-            if action.get("retry_policy"):
-                rp = action.get("retry_policy")
+
+            retry_policy_data = get_action_attr(action, "retry_policy")
+            if retry_policy_data:
+                rp = retry_policy_data
                 step.retry_policy = RetryPolicy(
-                    max_retries=rp.get("max_retries", 3) if isinstance(rp, dict) else 3,
-                    delay=rp.get("delay", 1.0) if isinstance(rp, dict) else 1.0,
-                    backoff=rp.get("backoff", 2.0) if isinstance(rp, dict) else 2.0,
+                    max_retries=get_action_attr(rp, "max_retries", 3) if isinstance(rp, dict) or hasattr(rp, "max_retries") else 3,
+                    delay=get_action_attr(rp, "delay", 1.0) if isinstance(rp, dict) or hasattr(rp, "delay") else 1.0,
+                    backoff=get_action_attr(rp, "backoff", 2.0) if isinstance(rp, dict) or hasattr(rp, "backoff") else 2.0,
                 )
-            
-            if action.get("error_policy"):
-                ep = action.get("error_policy")
+
+            error_policy_data = get_action_attr(action, "error_policy")
+            if error_policy_data:
+                ep = error_policy_data
                 step.error_policy = ErrorPolicy(
-                    on_failure=ep.get("on_failure", "abort") if isinstance(ep, dict) else "abort",
-                    fallback_step=ep.get("fallback_step") if isinstance(ep, dict) else None,
-                    fallback_message=ep.get("fallback_message") if isinstance(ep, dict) else None,
+                    on_failure=get_action_attr(ep, "on_failure", "abort") if isinstance(ep, dict) or hasattr(ep, "on_failure") else "abort",
+                    fallback_step=get_action_attr(ep, "fallback_step") if isinstance(ep, dict) or hasattr(ep, "fallback_step") else None,
+                    fallback_message=get_action_attr(ep, "fallback_message") if isinstance(ep, dict) or hasattr(ep, "fallback_message") else None,
                 )
-            
+
             steps.append(step)
         
         return steps
@@ -766,11 +778,26 @@ User: {user_request}
         return self._convert_skill_to_steps({"actions": actions}, params, source_skill_name=source_skill_name)
     
     def _resolve_params(self, template_params: Dict[str, Any], input_params: Dict[str, Any]) -> Dict[str, Any]:
-        """Resolve parameter templates with actual values."""
-        return {
-            key: resolve_interpolated_value(value, input_params)
-            for key, value in template_params.items()
-        }
+        """Resolve parameter templates with actual values.
+
+        Templates referencing other steps (e.g., {{step_name.field}}) are kept as-is
+        for runtime resolution by the engine.
+        """
+        import re
+        resolved = {}
+        for key, value in template_params.items():
+            if isinstance(value, str) and "{{" in value:
+                # Check if template references another step (e.g., {{read_file.content}})
+                # Pattern: {{word.word}} where first word is likely a step name
+                if re.search(r'\{\{\s*\w+\.\w+', value):
+                    # Keep template as-is for runtime resolution
+                    resolved[key] = value
+                else:
+                    # Resolve with current input params
+                    resolved[key] = resolve_interpolated_value(value, input_params)
+            else:
+                resolved[key] = resolve_interpolated_value(value, input_params)
+        return resolved
 
     def _normalize_filesystem_path(self, value: Any) -> Any:
         """Normalize user-facing path shorthands into executable local paths."""

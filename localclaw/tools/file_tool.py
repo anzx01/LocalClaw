@@ -78,27 +78,40 @@ class FileReadTool(Tool):
         """Execute file read operation."""
         try:
             file_path = self._resolve_path(path)
-            
+
             if not file_path.exists():
                 return ExecutionResult.from_error(
                     f"File not found: {path}",
                     ErrorType.VALIDATION_ERROR,
                 )
-            
+
             if not file_path.is_file():
                 return ExecutionResult.from_error(
                     f"Not a file: {path}",
                     ErrorType.VALIDATION_ERROR,
                 )
-            
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            
+
+            # Try UTF-8 first, fallback to GBK for Windows Chinese files
+            content = None
+            for encoding in ["utf-8", "gbk", "gb2312", "latin-1"]:
+                try:
+                    with open(file_path, "r", encoding=encoding) as f:
+                        content = f.read()
+                    break
+                except (UnicodeDecodeError, LookupError):
+                    continue
+
+            if content is None:
+                return ExecutionResult.from_error(
+                    f"Unable to decode file with supported encodings: {path}",
+                    ErrorType.SYSTEM_ERROR,
+                )
+
             return ExecutionResult.success(
                 message=f"Read file: {path}",
                 data={"content": content, "path": str(file_path)},
             )
-            
+
         except PermissionError:
             return ExecutionResult.from_error(
                 f"Permission denied: {path}",

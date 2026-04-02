@@ -679,6 +679,9 @@ class ExecutionEngine:
                         continue
 
                 task.context.set_step_output(step.id, result.data)
+                # Also expose step outputs by name for template interpolation
+                if step.name:
+                    task.context.variables[step.name] = result.data
 
             except Exception as e:
                 self._logger.error(f"Step {step.id} failed: {e}")

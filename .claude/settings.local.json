@@ -17,7 +17,30 @@
       "Bash(python main.py run \"总结一下中文绝缘.doc这个文件的内容\")",
       "Skill(update-config)",
       "Skill(update-config:*)",
-      "Bash(python -c \"import json; json.load\\(open\\('C:/Users/admin/.claude/settings.json', encoding='utf-8'\\)\\); print\\('JSON valid'\\)\")"
+      "Bash(python -c \"import json; json.load\\(open\\('C:/Users/admin/.claude/settings.json', encoding='utf-8'\\)\\); print\\('JSON valid'\\)\")",
+      "Bash(git --no-pager log --oneline -10)",
+      "Bash(git --no-pager diff HEAD~1 HEAD -- localclaw/channels/web.py)",
+      "Bash(git --no-pager show HEAD:localclaw/channels/web.py)",
+      "Bash(git --no-pager log --oneline --format='%h %ai %s' -10)",
+      "Bash(git --no-pager diff 28facbe 154ac27 -- localclaw/channels/web.py)",
+      "Bash(git --no-pager show 28facbe:localclaw/channels/web.py)",
+      "Bash(git --no-pager show 154ac27:localclaw/channels/web.py)",
+      "Bash(git --no-pager branch -a)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('g:/myaist/LocalClaw/localclaw/core/planner.py', doraise=True\\); py_compile.compile\\('g:/myaist/LocalClaw/localclaw/core/parser.py', doraise=True\\); py_compile.compile\\('g:/myaist/LocalClaw/localclaw/core/engine.py', doraise=True\\); print\\('OK'\\)\")",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :8000)",
+      "Bash(curl -s http://127.0.0.1:8000/api/config)",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s -X POST http://127.0.0.1:8000/api/message -H 'Content-Type: application/json' -d @/tmp/req.json)",
+      "Bash(curl -s http://127.0.0.1:8000/api/skills)",
+      "Bash(python -c \"import sys, json; skills = json.load\\(sys.stdin\\); print\\('\\\\n'.join\\([s['name'] for s in skills if 'summar' in s['name'].lower\\(\\)]\\)\\)\")",
+      "Read(//g/myaist/LocalClaw/**)",
+      "Bash(xargs -I {} taskkill /PID {} /F)",
+      "Bash(python main.py serve)",
+      "Bash(python -c \"import sys, json; skills = json.load\\(sys.stdin\\); summ = [s['name'] for s in skills if 'summar' in s['name'].lower\\(\\)]; print\\('Summarize skills:', summ\\)\")",
+      "Read(//c/Users/DELL/Desktop/**)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('g:/myaist/LocalClaw/localclaw/core/openclaw_runtime.py', doraise=True\\); print\\('OK'\\)\")"
     ]
   }
 }

@@ -246,8 +246,13 @@ class Settings(BaseSettings):
         self.memory_db.parent.mkdir(parents=True, exist_ok=True)
 
     def get_skill_search_paths(self) -> list[Path]:
-        """Return active skill directories in precedence order from low to high."""
-        ordered_paths = [*self.extra_skill_dirs, self.managed_skills_dir]
+        """Return active skill directories in precedence order from low to high.
+
+        Precedence (lowest to highest):
+          bundled_skill_catalog_dir -> extra_skill_dirs -> managed_skills_dir
+        Skills loaded later override earlier ones with the same name.
+        """
+        ordered_paths = [self.bundled_skill_catalog_dir, *self.extra_skill_dirs, self.managed_skills_dir]
 
         unique_paths: list[Path] = []
         seen: set[Path] = set()

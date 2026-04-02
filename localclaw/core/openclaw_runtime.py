@@ -956,6 +956,25 @@ User: {user_request}
                 if resolved_skill and resolved_repo_skill and resolved_skill == resolved_repo_skill:
                     return decision
 
+            # Route summarize requests to summarize-file skill instead of read_file
+            _summarize_tokens = ("总结", "摘要", "概括", "summarize", "summarise", "summary")
+            normalized_req = self._normalize_request_text(request)
+            is_summarize_request = any(t in normalized_req for t in _summarize_tokens)
+            summarize_file_skill = self._select_available_skill("summarize-file")
+            if is_summarize_request and summarize_file_skill:
+                # Use the deterministic path extraction (more reliable than LLM)
+                # file_read_params already has normalized 'path' key
+                path_value = file_read_params.get("path", "")
+                return AgentDecision(
+                    mode=AgentDecisionMode.SKILL,
+                    skill_name=summarize_file_skill,
+                    params={"path": path_value},
+                    confidence=max(decision.confidence, 0.97),
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="summarize_file_skill_guardrail",
+                )
+
             repo_fs_skill = self._select_available_skill("repo.fs", "workspace-files", "fs-workspace")
             if repo_fs_skill:
                 return AgentDecision(

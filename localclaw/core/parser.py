@@ -191,7 +191,7 @@ class LLMParser(ParserBackend):
 Classify the user request for LocalClaw.
 
 Allowed intents:
-greeting, help, echo, list_skills, status, date_query, run_command, run_shell_command, list_folders, file_list, read_file, write_file, append_file, delete_file, create_directory, check_weather, check_disk_space, unknown
+greeting, help, echo, list_skills, status, date_query, run_command, run_shell_command, list_folders, file_list, read_file, write_file, append_file, delete_file, create_directory, check_weather, check_disk_space, summarize_file, unknown
 
 Rules:
 - "/cmd <command>" -> {{"intent":"run_command","params":{{"command":"<command>"}}}}
@@ -205,6 +205,8 @@ Rules:
 - Requests like "列出桌面文件" or "查看 Desktop" -> {{"intent":"file_list","params":{{"path":"~/Desktop"}}}}
 - Requests like "我D盘有哪些目录" or "查看 D 盘文件夹" -> {{"intent":"list_folders","params":{{"path":"D:/","folders_only":true}}}}
 - Requests like "列出 D 盘文件" -> {{"intent":"file_list","params":{{"path":"D:/"}}}}
+- Requests like "总结我桌面的 xxx.txt", "帮我总结 xxx 文件", "summarize file xxx", "summarise xxx.txt" -> {{"intent":"summarize_file","params":{{"path":"<resolved_path>"}}}}
+  Path resolution: "桌面" or "Desktop" -> "~/Desktop"; keep absolute paths as-is; prepend "~/Desktop/" for bare filenames on Desktop context.
 - Current news, latest headlines, today's events, or recent web information must not map to help. If a listed web skill fits better, return "skill.<invocation_name>"; otherwise return unknown.
 - If a listed skill is clearly a better match than a built-in intent, return "skill.<invocation_name>" using the catalog's "invoke as" field
 - If nothing fits, return {{"intent":"unknown","params":{{}}}}
@@ -230,6 +232,7 @@ Drive file listing requests like "列出 D 盘文件" map to {{"intent":"file_li
 News / latest headlines / today's events / recent web info map to an installed web skill or unknown, never help.
 "/cmd <command>" maps to run_command.
 "/shell <command>" maps to run_shell_command.
+Requests to summarize/总结 a file like "总结我桌面的 xxx.txt" map to {{"intent":"summarize_file","params":{{"path":"~/Desktop/xxx.txt"}}}}.
 For installed skills, return "skill.<invocation_name>" using the catalog's "invoke as" field.
 If unsure, return {{"intent":"unknown","params":{{}}}}.
 User: {user_request}
