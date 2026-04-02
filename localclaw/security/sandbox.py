@@ -1,6 +1,7 @@
 """Sandbox execution for isolated skill/tool execution."""
 
 import asyncio
+import base64
 import json
 import logging
 import subprocess
@@ -76,21 +77,24 @@ class SandboxExecutor:
     ) -> ExecutionResult:
         """Execute code in a subprocess for isolation."""
         context_json = json.dumps(context)
-        
+        code_b64 = base64.b64encode(code.encode("utf-8")).decode("ascii")
+
         sandbox_script = f'''
 import sys
 import json
-import resource
+import base64
 
 def limit_memory():
     try:
+        import resource
         resource.setrlimit(resource.RLIMIT_AS, ({self._config.max_memory_mb * 1024 * 1024}, {self._config.max_memory_mb * 1024 * 1024}))
-    except:
+    except Exception:
         pass
 
 limit_memory()
 
 context = json.loads(sys.argv[1])
+code = base64.b64decode(sys.argv[2]).decode("utf-8")
 result = {{}}
 
 try:
@@ -102,9 +106,9 @@ try:
     }}
     exec_globals.update(context)
     exec_locals = {{}}
-    
-    exec("""{code}""", exec_globals, exec_locals)
-    
+
+    exec(code, exec_globals, exec_locals)
+
     result = {{
         "status": "success",
         "data": exec_locals.get("result", exec_locals),
@@ -132,6 +136,7 @@ print(json.dumps(result))
                 sys.executable,
                 script_path,
                 context_json,
+                code_b64,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

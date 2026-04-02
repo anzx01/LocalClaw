@@ -2,6 +2,7 @@
 
 import asyncio
 import platform
+import re
 import shlex
 from typing import Any, ClassVar, List, Optional
 
@@ -28,6 +29,19 @@ class ShellTool(Tool):
         "> /dev/sda",
         "mv /* /dev/null",
     }
+
+    DANGEROUS_PATTERNS = [
+        r"rm\s+(-[a-z]*r[a-z]*\s+)?/(\s|$)",
+        r"rm\s+(-[a-z]*r[a-z]*\s+)?/\*",
+        r">\s*/dev/sd[a-z]",
+        r"mkfs\.",
+        r"dd\s+.*of=/dev/",
+        r":\(\)\s*\{.*:\|:&\s*\}\s*;:",
+        r"chmod\s+(-R\s+)?777\s+/",
+        r"\|\s*(sh|bash|zsh|cmd)\b",
+        r"&&\s*rm\s+-[a-z]*r",
+        r";\s*rm\s+-[a-z]*r",
+    ]
     
     def __init__(
         self,
@@ -42,6 +56,13 @@ class ShellTool(Tool):
     
     def _validate_command(self, command: str) -> None:
         """Validate the command for security."""
+        for pattern in self.DANGEROUS_PATTERNS:
+            if re.search(pattern, command, re.IGNORECASE):
+                raise ToolError(
+                    f"Dangerous command pattern detected",
+                    ErrorType.PERMISSION_ERROR,
+                )
+
         try:
             cmd_parts = shlex.split(command, posix=platform.system() != "Windows")
         except ValueError:

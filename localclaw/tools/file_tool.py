@@ -244,7 +244,7 @@ class FileDeleteTool(Tool):
     
     name = "file_delete"
     description = "Delete a file or directory"
-    risk_level = RiskLevel.LOW
+    risk_level = RiskLevel.HIGH
     inputs = {"path": "string", "recursive": "boolean"}
     outputs = {"deleted": "boolean"}
     

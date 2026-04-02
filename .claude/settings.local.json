@@ -7,7 +7,17 @@
       "Bash(pytest -q)",
       "Bash(pytest -q tests/test_engine.py::test_engine_local_model_decision_timeout_falls_back_to_deterministic_parser tests/test_gateway.py::TestSessionManager::test_cleanup_expired -v)",
       "Bash(pytest -q tests/test_engine.py::test_engine_local_model_decision_timeout_falls_back_to_deterministic_parser -v)",
-      "Bash(pytest -q tests/test_engine.py::test_engine_local_model_decision_timeout_falls_back_to_deterministic_parser tests/test_gateway.py::TestSessionManager::test_cleanup_expired)"
+      "Bash(pytest -q tests/test_engine.py::test_engine_local_model_decision_timeout_falls_back_to_deterministic_parser tests/test_gateway.py::TestSessionManager::test_cleanup_expired)",
+      "Bash(python -c ':*)",
+      "Bash(python -m pytest tests/ -x -v)",
+      "Bash(python main.py run \"我桌面儿有哪些目录啊\")",
+      "Read(//c/Users/admin/.localclaw/skills/repo.fs/**)",
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(python main.py run \"总结一下桌面上中文绝缘.doc这个文件的内容\")",
+      "Bash(python main.py run \"总结一下中文绝缘.doc这个文件的内容\")",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Bash(python -c \"import json; json.load\\(open\\('C:/Users/admin/.claude/settings.json', encoding='utf-8'\\)\\); print\\('JSON valid'\\)\")"
     ]
   }
 }

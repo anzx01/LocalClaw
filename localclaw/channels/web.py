@@ -16,11 +16,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from localclaw.config.settings import get_settings
+from localclaw.core.bootstrap import initialize_system as _bootstrap_initialize_system
 from localclaw.core.engine import ExecutionEngine, get_engine
 from localclaw.core.models import ExecutionResult, Message, Step, Task, TaskState
 from localclaw.llm.provider import initialize_llm_provider
 from localclaw.security.audit import configure_audit_logger
-from localclaw.skills.loader import load_skills_from_settings
 from localclaw.system.windows_service import (
     get_background_service_status,
     install_background_service,
@@ -29,13 +29,6 @@ from localclaw.system.windows_service import (
     uninstall_background_service,
 )
 from localclaw.tools.base import Tool, get_tool_registry
-from localclaw.tools.file_tool import register_file_tools
-from localclaw.tools.http_tool import register_http_tools
-from localclaw.tools.launch_app_tool import register_launch_app_tools
-from localclaw.tools.local_model_tool import register_local_model_tools
-from localclaw.tools.shell_tool import register_shell_tools
-from localclaw.tools.browser_cdp_tool import register_browser_cdp_tools
-from localclaw.tools.clawhub_tool import register_clawhub_tools
 from localclaw.channels.wechat_personal import (
     PersonalWeChatEnvelope,
     build_personal_wechat_message,
@@ -1124,101 +1117,10 @@ def _serialize_approval(task: Task) -> Optional[ApprovalItemResponse]:
     )
 
 
-class SystemStatusTool(Tool):
-    """Tool for getting system status."""
-    
-    name = "system_status"
-    description = "Get system status information"
-    inputs = {}
-    outputs = {"status": "string", "version": "string"}
-    
-    async def execute(self, **kwargs) -> ExecutionResult:
-        from localclaw import __version__
-        return ExecutionResult.success(
-            message="System status",
-            data={
-                "status": "running",
-                "version": __version__,
-                "mode": get_settings().mode.value,
-            },
-        )
-
-
-class ListSkillsTool(Tool):
-    """Tool for listing skills."""
-    
-    name = "list_skills"
-    description = "List all available skills"
-    inputs = {}
-    outputs = {"skills": "list"}
-    
-    async def execute(self, **kwargs) -> ExecutionResult:
-        from localclaw.skills.registry import get_skill_registry
-        skills = get_skill_registry().list_skills()
-        
-        # Generate a more natural response
-        response = "我是一个智能助手，可以帮助你做以下事情：\n\n"
-        response += "1. 提供信息：\n"
-        response += "   - 查询日期和时间（今天几号？明天星期几？）\n"
-        response += "   - 查询天气信息（今天天气如何？）\n"
-        response += "2. 系统功能：\n"
-        response += "   - 查看系统状态\n"
-        response += "   - 列出所有可用技能\n"
-        response += "3. 其他功能：\n"
-        response += "   - 执行各种工具操作\n"
-        response += "   - 处理用户的各种查询\n"
-        
-        return ExecutionResult.success(
-            message="系统功能介绍",
-            data={"skills": skills, "result": response},
-        )
-
-
 def initialize_system() -> ExecutionEngine:
-    """Initialize the LocalClaw system."""
-    settings = get_settings()
-    settings.ensure_directories()
-    
-    configure_audit_logger(settings.audit_log)
-    
-    # Initialize LLM provider if enabled
-    if settings.llm_enabled:
-        try:
-            provider = initialize_llm_provider(settings)
-            logger.info(
-                "LLM provider initialized: %s (%s)",
-                provider.get_config().provider_type.value,
-                provider.get_config().model,
-            )
-        except Exception as e:
-            logger.error(f"Failed to initialize LLM provider: {e}")
-    else:
-        logger.info("LLM is disabled")
-    
-    tool_registry = get_tool_registry()
-    tool_registry.register(SystemStatusTool())
-    tool_registry.register(ListSkillsTool())
-    register_file_tools()
-    register_http_tools()
-    register_launch_app_tools()
-    register_local_model_tools()
-    register_shell_tools()
-    register_browser_cdp_tools()
-    register_clawhub_tools()
-    
-    load_skills_from_settings(settings)
-    
-    from localclaw.core.verifier import create_default_verifier
-    from localclaw.skills.registry import get_skill_registry
-    verifier = create_default_verifier(settings=settings, skill_registry=get_skill_registry())
-    verifier.set_auto_approve_low(True)
-    verifier.set_require_confirmation_high(True)
+    """Initialize the LocalClaw system with web-specific callbacks."""
+    engine = _bootstrap_initialize_system()
 
-    engine = ExecutionEngine(
-        settings=settings,
-        verifier=verifier,
-    )
-    
     def on_step_start(step, task):
         asyncio.create_task(_manager.broadcast({
             "type": "step_start",
@@ -1226,7 +1128,7 @@ def initialize_system() -> ExecutionEngine:
             "step_id": step.id,
             "step_name": step.name,
         }))
-    
+
     def on_step_complete(step, task):
         asyncio.create_task(_manager.broadcast({
             "type": "step_complete",
@@ -1234,7 +1136,7 @@ def initialize_system() -> ExecutionEngine:
             "step_id": step.id,
             "status": step.status.value,
         }))
-    
+
     def on_task_complete(task):
         asyncio.create_task(_manager.broadcast({
             "type": "task_complete",
@@ -1250,19 +1152,14 @@ def initialize_system() -> ExecutionEngine:
             "step_name": step.name,
             "tool_name": step.tool_name,
         }))
-    
+
     engine.set_callbacks(
         on_step_start=on_step_start,
         on_step_complete=on_step_complete,
         on_task_complete=on_task_complete,
         on_approval_required=on_approval_required,
     )
-    
-    # Set the global engine instance
-    from localclaw.core.engine import _engine
-    import localclaw.core.engine as engine_module
-    engine_module._engine = engine
-    
+
     return engine
 
 

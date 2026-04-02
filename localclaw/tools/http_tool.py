@@ -1,7 +1,10 @@
 """HTTP request tool."""
 
+import ipaddress
 import logging
+import socket
 from typing import Any, ClassVar, Dict, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -14,17 +17,38 @@ logger = logging.getLogger(__name__)
 
 class HttpTool(Tool):
     """Tool for making HTTP requests."""
-    
+
     name = "http"
     description = "Make HTTP requests"
     risk_level = RiskLevel.MEDIUM
     inputs = {"url": "string", "method": "string"}
     outputs = {"status_code": "integer", "body": "string"}
-    
+
     def __init__(self, timeout: float = 30.0) -> None:
         super().__init__()
         self._timeout = timeout
-    
+
+    @staticmethod
+    def _validate_url(url: str) -> None:
+        """Validate URL to prevent SSRF attacks."""
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"Invalid URL scheme: {parsed.scheme}")
+
+        hostname = parsed.hostname
+        if not hostname:
+            raise ValueError("Invalid URL: no hostname")
+
+        try:
+            ip_str = socket.gethostbyname(hostname)
+            ip = ipaddress.ip_address(ip_str)
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                raise ValueError(f"Access to private/internal addresses is blocked: {hostname}")
+            if ip_str in ("169.254.169.254", "169.254.169.253"):
+                raise ValueError("Access to cloud metadata endpoints is blocked")
+        except socket.gaierror:
+            pass
+
     async def execute(
         self,
         url: str,
@@ -36,6 +60,8 @@ class HttpTool(Tool):
     ) -> ExecutionResult:
         """Execute HTTP request."""
         try:
+            self._validate_url(url)
+
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.request(
                     method=method.upper(),

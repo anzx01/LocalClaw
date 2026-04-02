@@ -3,13 +3,14 @@
 import re
 from typing import Any, Dict
 
-from jinja2 import Template
+from jinja2.sandbox import SandboxedEnvironment
 
 
 _SIMPLE_JINJA_VAR = re.compile(r"^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}$")
 _SIMPLE_DOLLAR_VAR = re.compile(r"^\$([A-Za-z_][A-Za-z0-9_]*)$")
 _SIMPLE_DOLLAR_BRACE_VAR = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 _DOLLAR_BRACE_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_JINJA_SANDBOX = SandboxedEnvironment()
 
 
 def normalize_condition_expression(expression: Any) -> Any:
@@ -53,7 +54,7 @@ def resolve_interpolated_value(value: Any, variables: Dict[str, Any]) -> Any:
 
     rendered = value
     if "{{" in rendered:
-        rendered = Template(rendered).render(**variables)
+        rendered = _JINJA_SANDBOX.from_string(rendered).render(**variables)
     if "${" in rendered:
         rendered = _DOLLAR_BRACE_VAR.sub(
             lambda match: str(variables.get(match.group(1), "")),

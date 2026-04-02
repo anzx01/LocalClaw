@@ -1,10 +1,12 @@
 """Cache memory for storing computed results."""
 
+import asyncio
+import functools
 import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 @dataclass
@@ -118,20 +120,30 @@ class CacheMemory:
         }
     
     def cache_result(self, ttl_seconds: Optional[int] = None):
-        """Decorator to cache function results."""
-        def decorator(func):
-            def wrapper(*args, **kwargs):
-                key = self._generate_key(func.__name__, *args, **kwargs)
-                
-                cached = self.get(key)
-                if cached is not None:
-                    return cached
-                
-                result = func(*args, **kwargs)
-                self.set(key, result, ttl_seconds)
-                return result
-            
-            return wrapper
+        """Decorator to cache function results (supports both sync and async)."""
+        def decorator(func: Callable):
+            if asyncio.iscoroutinefunction(func):
+                @functools.wraps(func)
+                async def async_wrapper(*args, **kwargs):
+                    key = self._generate_key(func.__name__, *args, **kwargs)
+                    cached = self.get(key)
+                    if cached is not None:
+                        return cached
+                    result = await func(*args, **kwargs)
+                    self.set(key, result, ttl_seconds)
+                    return result
+                return async_wrapper
+            else:
+                @functools.wraps(func)
+                def sync_wrapper(*args, **kwargs):
+                    key = self._generate_key(func.__name__, *args, **kwargs)
+                    cached = self.get(key)
+                    if cached is not None:
+                        return cached
+                    result = func(*args, **kwargs)
+                    self.set(key, result, ttl_seconds)
+                    return result
+                return sync_wrapper
         return decorator
 
 

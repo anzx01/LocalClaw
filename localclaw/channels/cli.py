@@ -9,74 +9,12 @@ import click
 
 from localclaw.channels.result_formatter import format_task_for_chat
 from localclaw.config.settings import get_settings
-from localclaw.core.engine import ExecutionEngine, get_engine
+from localclaw.core.bootstrap import initialize_system
+from localclaw.core.engine import get_engine
 from localclaw.core.models import ExecutionResult, Message, Task, TaskState
-from localclaw.llm.provider import initialize_llm_provider
-from localclaw.security.audit import configure_audit_logger
-from localclaw.skills.loader import load_skills_from_settings
-from localclaw.tools.base import Tool, get_tool_registry
-from localclaw.tools.browser_cdp_tool import register_browser_cdp_tools
-from localclaw.tools.clawhub_tool import register_clawhub_tools
-from localclaw.tools.file_tool import register_file_tools
-from localclaw.tools.http_tool import register_http_tools
-from localclaw.tools.launch_app_tool import register_launch_app_tools
-from localclaw.tools.local_model_tool import register_local_model_tools
-from localclaw.tools.shell_tool import register_shell_tools
 
 
 logger = logging.getLogger(__name__)
-
-
-class SystemStatusTool(Tool):
-    """Tool for getting system status."""
-
-    name = "system_status"
-    description = "Get system status information"
-    inputs = {}
-    outputs = {"status": "string", "version": "string"}
-
-    async def execute(self, **kwargs) -> ExecutionResult:
-        from localclaw import __version__
-
-        settings = get_settings()
-        return ExecutionResult.success(
-            message="System status",
-            data={
-                "status": "running",
-                "version": __version__,
-                "mode": settings.mode.value,
-                "model_provider": settings.model_provider.value,
-                "model_name": settings.model_name,
-            },
-        )
-
-
-class ListSkillsTool(Tool):
-    """Tool for listing skills."""
-
-    name = "list_skills"
-    description = "List all available skills"
-    inputs = {}
-    outputs = {"skills": "list"}
-
-    async def execute(self, **kwargs) -> ExecutionResult:
-        from localclaw.skills.registry import get_skill_registry
-
-        skill_info = get_skill_registry().get_all_info()
-        available = [skill["name"] for skill in skill_info if skill.get("availability") == "available"]
-        blocked = [skill["name"] for skill in skill_info if skill.get("availability") == "blocked"]
-
-        response = "当前可用能力：\n"
-        response += "- 问候、回显、日期和天气查询\n"
-        response += "- 文件、HTTP 和命令行工具（高风险操作需要审批）\n"
-        response += f"- 已加载技能 {len(skill_info)} 个，可用 {len(available)} 个"
-        if blocked:
-            response += f"，受限 {len(blocked)} 个"
-
-        return ExecutionResult.success(
-            message="已列出技能",
-            data={"skills": skill_info, "result": response},
-        )
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -86,52 +24,6 @@ def setup_logging(level: str = "INFO") -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
-
-
-def initialize_system() -> ExecutionEngine:
-    """Initialize the LocalClaw system."""
-    settings = get_settings()
-    settings.ensure_directories()
-
-    configure_audit_logger(settings.audit_log)
-
-    if settings.llm_enabled:
-        provider = initialize_llm_provider(settings)
-        logger.info(
-            "LLM provider initialized: %s (%s)",
-            provider.get_config().provider_type.value,
-            provider.get_config().model,
-        )
-
-    tool_registry = get_tool_registry()
-    tool_registry.register(SystemStatusTool())
-    tool_registry.register(ListSkillsTool())
-    register_file_tools()
-    register_http_tools()
-    register_launch_app_tools()
-    register_local_model_tools()
-    register_shell_tools()
-    register_browser_cdp_tools()
-    register_clawhub_tools()
-
-    load_skills_from_settings(settings)
-
-    from localclaw.core.verifier import create_default_verifier
-    from localclaw.skills.registry import get_skill_registry
-    verifier = create_default_verifier(settings=settings, skill_registry=get_skill_registry())
-    verifier.set_auto_approve_low(True)
-    verifier.set_require_confirmation_high(True)
-
-    engine = ExecutionEngine(
-        settings=settings,
-        verifier=verifier,
-    )
-
-    from localclaw.core.engine import _engine
-    import localclaw.core.engine as engine_module
-
-    engine_module._engine = engine
-    return engine
 
 
 def format_task_result(task: Task) -> str:

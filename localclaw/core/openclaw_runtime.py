@@ -1587,26 +1587,54 @@ User: {user_request}
         if self._extract_first_url(request):
             return None
 
-        if not any(token in normalized for token in ("打开", "查看", "读取", "读一下", "看看")):
+        if not any(token in normalized for token in ("打开", "查看", "读取", "读一下", "看看", "总结", "翻译", "分析", "解释", "摘要")):
             return None
 
-        file_match = re.search(
-            r"(?:桌面|desktop)(?:上|里的|中的|的)?\s*(?P<filename>[^\\/:*?\"<>|\r\n]+?\.[A-Za-z0-9]+)(?:文件)?\s*$",
-            request,
+        # Strip trailing context suffixes (loop to handle stacked suffixes like "这个文件的内容")
+        _suffix_pattern = re.compile(
+            r"(?:这个文件|那个文件|这份文件|那份文件|这个|那个|这份|那份|的内容|的信息|内容|信息|文件)\s*$"
+        )
+        stripped_request = request
+        for _ in range(4):
+            new_stripped = _suffix_pattern.sub("", stripped_request).strip()
+            if new_stripped == stripped_request:
+                break
+            stripped_request = new_stripped
+
+        _desktop_re = re.compile(
+            r"(?:桌面|desktop)(?:上|里的|中的|的|上的)?\s*(?:的\s*)?(?P<filename>[^\\/:*?\"<>|\r\n\s]+?\.[A-Za-z0-9]+)\s*$",
             re.IGNORECASE,
         )
+        file_match = _desktop_re.search(stripped_request)
         if file_match:
             filename = str(file_match.group("filename") or "").strip()
             if filename:
                 return {"path": f"~/Desktop/{filename}"}
 
-        generic_match = re.search(
-            r"(?P<path>(?:[A-Za-z]:[/\\][^\\/:*?\"<>|\r\n]+|~?/[^\\:*?\"<>|\r\n]+|[^\\/:*?\"<>|\r\n]+\.[A-Za-z0-9]+))(?:文件)?\s*$",
-            request,
+        # For generic (non-desktop, non-absolute) filenames, find all tokens with an extension
+        # and take the rightmost one to avoid greedily capturing leading verbs.
+        abs_path_match = re.search(
+            r"(?P<path>[A-Za-z]:[/\\].+?|~?/[^/:*?\"<>|\r\n]+)\s*$",
+            stripped_request,
             re.IGNORECASE,
         )
-        if generic_match:
-            path = str(generic_match.group("path") or "").strip()
+        if abs_path_match:
+            path = str(abs_path_match.group("path") or "").strip()
+            if path:
+                return {"path": path}
+
+        # Collect all tokens that look like filenames (contain a dot with extension).
+        # First strip known action verb prefixes so they don't get included in the filename token.
+        _verb_prefix_pattern = re.compile(
+            r"^(?:帮我|给我|请|总结一下|翻译一下|分析一下|解释一下|摘要一下|总结|翻译|分析|解释|摘要|打开|查看|读取|读一下|看看)\s*"
+        )
+        stripped_for_tokens = _verb_prefix_pattern.sub("", stripped_request)
+        filename_tokens = re.findall(
+            r"[^\s\\/:*?\"<>|\r\n]+\.[A-Za-z0-9]+",
+            stripped_for_tokens,
+        )
+        if filename_tokens:
+            path = str(filename_tokens[-1]).strip()
             if path:
                 return {"path": path}
 

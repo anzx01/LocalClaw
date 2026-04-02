@@ -71,7 +71,7 @@ class PermissionVerifier(VerifierBackend):
     HIGH_RISK_TOOLS = {"shell", "http_post", "browser_cdp"}
     CRITICAL_TOOLS = {"shell"}
     LOW_RISK_BROWSER_PATTERNS = (
-        r"(?:浠婂ぉ|浠婃棩|鏄庡ぉ|鍚庡ぉ|鍛ㄥ嚑|鏄熸湡|鍑犲彿|鏃ユ湡|鏃堕棿|鍑犵偣|澶╂皵|姘旀俯|娓╁害|涓嬮洦|涓嬮洩)",
+        r"(?:今天|今日|明天|后天|周几|星期|几号|日期|时间|几点|天气|气温|温度|下雨|下雪)",
         r"\b(?:today|tomorrow|yesterday|date|day|time|weekday|weather|forecast|temperature|rain|snow|hot|cold)\b",
     )
     INFO_LOOKUP_MARKERS = (
@@ -95,17 +95,17 @@ class PermissionVerifier(VerifierBackend):
         "check",
     )
     BROWSER_MUTATION_MARKERS = (
-        "鐧诲綍",
-        "娉ㄥ唽",
-        "鏀粯",
-        "璐拱",
-        "涓嬪崟",
-        "涓婁紶",
-        "涓嬭浇",
-        "鍒犻櫎",
-        "鎻愪氦",
-        "濉啓",
-        "鐐瑰嚮",
+        "登录",
+        "注册",
+        "支付",
+        "购买",
+        "下单",
+        "上传",
+        "下载",
+        "删除",
+        "提交",
+        "填写",
+        "点击",
         "click",
         "submit",
         "login",

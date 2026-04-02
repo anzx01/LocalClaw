@@ -8,10 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from jinja2 import Template
+from jinja2.sandbox import SandboxedEnvironment
 
 from localclaw.config.settings import Settings, get_settings
 from localclaw.core.interpolation import resolve_interpolated_value
+from localclaw.security.audit import get_audit_logger
 from localclaw.core.models import (
     AgentDecision,
     AgentDecisionMode,
@@ -94,6 +95,8 @@ class ExecutionEngine:
         self._on_task_complete: Optional[Callable[[Task], None]] = None
         self._on_approval_required: Optional[Callable[[Step, Task], None]] = None
         
+        self._audit_logger = get_audit_logger()
+        self._jinja_sandbox = SandboxedEnvironment()
         self._state_file = self._settings.data_dir / "task_state.json"
         self._progress_file = self._settings.progress_log
 
@@ -128,6 +131,12 @@ class ExecutionEngine:
         
         self._tasks[task.id] = task
         self._record_progress(task, event="task_created")
+        self._audit_logger.log_task_start(
+            task_id=task.id,
+            user_id=task.user_id,
+            channel=task.channel,
+            message=message.content,
+        )
         
         try:
             self._advance_task_state(task, TaskState.PARSED, event="task_parsed")
@@ -282,7 +291,14 @@ class ExecutionEngine:
 
         if self._on_task_complete and task.state not in (TaskState.VERIFYING, TaskState.PAUSED):
             self._on_task_complete(task)
-        
+
+        self._audit_logger.log_task_complete(
+            task_id=task.id,
+            user_id=task.user_id,
+            status=task.state.value,
+            result={"state": task.state.value, "error": task.error},
+        )
+
         return task
 
     def _complete_with_direct_answer(self, task: Task, decision: AgentDecision) -> None:
@@ -819,6 +835,23 @@ class ExecutionEngine:
                 if result.status == "success":
                     step.status = StepStatus.COMPLETED
                     self._record_progress(task, event="step_completed", step=step)
+                    duration_ms = (
+                        (datetime.now() - step.started_at).total_seconds() * 1000
+                        if step.started_at else 0
+                    )
+                    self._audit_logger.log_step_execution(
+                        task_id=task.id,
+                        step_id=step.id,
+                        step_type=step.type.value,
+                        tool_name=step.tool_name,
+                        skill_name=step.skill_name,
+                        input_data=step.input or {},
+                        output_data=result.data or {},
+                        status="success",
+                        error=None,
+                        risk_level="low",
+                        duration_ms=duration_ms,
+                    )
                     return result
                 
                 if result.error_type not in step.retry_policy.retry_on:
@@ -943,7 +976,7 @@ class ExecutionEngine:
         template_vars.update(step.input)
         
         try:
-            template = Template(step.template)
+            template = self._jinja_sandbox.from_string(step.template)
             result = template.render(**template_vars)
             return ExecutionResult.success(data={"result": result, "message": result})
         except Exception as e:
@@ -953,11 +986,14 @@ class ExecutionEngine:
         """Execute a conditional step."""
         if not step.condition:
             return ExecutionResult.from_error("No condition specified", ErrorType.VALIDATION_ERROR)
-        
+
         template_vars = self._get_template_vars(task.context)
-        
+        template_vars.update(step.input or {})
+
         try:
-            condition_result = bool(eval(step.condition, {"__builtins__": {}}, template_vars))
+            expr_template = self._jinja_sandbox.from_string("{{ " + step.condition + " }}")
+            rendered = expr_template.render(**template_vars).strip()
+            condition_result = rendered.lower() not in ("false", "0", "", "none", "null")
         except Exception as e:
             return ExecutionResult.from_error(f"Condition evaluation error: {e}", ErrorType.SYSTEM_ERROR)
         
@@ -989,7 +1025,14 @@ class ExecutionEngine:
         template_vars = self._get_template_vars(task.context)
         
         try:
-            items = eval(step.loop_over, {"__builtins__": {}}, template_vars)
+            expr_template = self._jinja_sandbox.from_string("{{ " + step.loop_over + " }}")
+            items = expr_template.render(**template_vars)
+            if isinstance(items, str):
+                import json as _json
+                try:
+                    items = _json.loads(items)
+                except (ValueError, TypeError):
+                    items = [item.strip() for item in items.split(",") if item.strip()]
         except Exception as e:
             return ExecutionResult.from_error(f"Loop target evaluation error: {e}", ErrorType.SYSTEM_ERROR)
         

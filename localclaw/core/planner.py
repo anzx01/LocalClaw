@@ -3,7 +3,7 @@
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import quote
 
 from localclaw.core.json_utils import extract_last_json_object
@@ -33,14 +33,14 @@ class Planner:
     
     def __init__(self) -> None:
         self._skill_registry: Optional[Any] = None
-        self._intent_handlers: Dict[str, callable] = {}
+        self._intent_handlers: Dict[str, Callable] = {}
         self._fallback_parser: Optional[Any] = None
     
     def set_skill_registry(self, registry: Any) -> None:
         """Set the skill registry for skill lookups."""
         self._skill_registry = registry
     
-    def register_intent_handler(self, intent: str, handler: callable) -> None:
+    def register_intent_handler(self, intent: str, handler: Callable) -> None:
         """Register a handler for a specific intent."""
         self._intent_handlers[intent] = handler
 
@@ -732,6 +732,7 @@ User: {user_request}
                     name=step_name or f"step_{i}_condition",
                     condition=action_condition,
                     source_skill_name=source_skill_name,
+                    input=dict(params),
                     sub_steps=[step],
                 )
             
