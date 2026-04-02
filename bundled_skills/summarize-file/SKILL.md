@@ -25,12 +25,12 @@ actions:
       prompt: >-
         请用中文简洁地总结以下文件内容。
         文件路径: {{path or file}}
-        总结长度: {{length or '中等'}}
+        总结长度: {{length or '简短'}}
         关注重点: {{focus or '关键信息和要点'}}
 
-        文件内容:
-        {{read_file.content}}
-      max_tokens: 768
+        文件内容（如内容过长已截取前2000字）:
+        {{(read_file.content or '')[:2000]}}
+      max_tokens: 512
       temperature: 0.2
     depends_on:
       - read_file

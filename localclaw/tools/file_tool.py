@@ -26,6 +26,47 @@ def _humanize_bytes(size_bytes: int) -> str:
     return f"{size_bytes} B"
 
 
+def _extract_office_text(file_path: Path) -> Optional[str]:
+    """Extract plain text from .doc or .docx files.
+
+    Tries python-docx for .docx, then Word COM automation for .doc (Windows only).
+    Returns None if extraction fails.
+    """
+    suffix = file_path.suffix.lower()
+
+    # .docx: use python-docx (ZIP-based Open XML)
+    if suffix == ".docx":
+        try:
+            import docx  # python-docx
+            doc = docx.Document(str(file_path))
+            lines = [para.text for para in doc.paragraphs if para.text.strip()]
+            return "\n".join(lines) or ""
+        except Exception as exc:
+            logger.debug("python-docx failed for %s: %s", file_path, exc)
+
+    # .doc (OLE binary) or .docx fallback: try Word COM on Windows
+    try:
+        import win32com.client  # pywin32
+        word = win32com.client.Dispatch("Word.Application")
+        word.Visible = False
+        extracted: Optional[str] = None
+        try:
+            doc = word.Documents.Open(str(file_path.resolve()))
+            extracted = doc.Content.Text
+            doc.Close(False)
+        finally:
+            try:
+                word.Quit()
+            except Exception:
+                pass
+        if extracted is not None:
+            return extracted
+    except Exception as exc:
+        logger.debug("Word COM failed for %s: %s", file_path, exc)
+
+    return None
+
+
 def _resolve_local_path(base_dir: Path, raw_path: str) -> Path:
     """Resolve user paths with Desktop shorthand compatibility on Windows."""
 
@@ -91,21 +132,32 @@ class FileReadTool(Tool):
                     ErrorType.VALIDATION_ERROR,
                 )
 
-            # Try UTF-8 first, fallback to GBK for Windows Chinese files
-            content = None
-            for encoding in ["utf-8", "gbk", "gb2312", "latin-1"]:
-                try:
-                    with open(file_path, "r", encoding=encoding) as f:
-                        content = f.read()
-                    break
-                except (UnicodeDecodeError, LookupError):
-                    continue
+            suffix = file_path.suffix.lower()
 
-            if content is None:
-                return ExecutionResult.from_error(
-                    f"Unable to decode file with supported encodings: {path}",
-                    ErrorType.SYSTEM_ERROR,
-                )
+            # Office document extraction (.doc via Word COM, .docx via python-docx)
+            if suffix in (".doc", ".docx"):
+                content = _extract_office_text(file_path)
+                if content is None:
+                    return ExecutionResult.from_error(
+                        f"Unable to extract text from Office document: {path}",
+                        ErrorType.SYSTEM_ERROR,
+                    )
+            else:
+                # Try UTF-8 first, fallback to GBK for Windows Chinese files
+                content = None
+                for encoding in ["utf-8", "gbk", "gb2312", "latin-1"]:
+                    try:
+                        with open(file_path, "r", encoding=encoding) as f:
+                            content = f.read()
+                        break
+                    except (UnicodeDecodeError, LookupError):
+                        continue
+
+                if content is None:
+                    return ExecutionResult.from_error(
+                        f"Unable to decode file with supported encodings: {path}",
+                        ErrorType.SYSTEM_ERROR,
+                    )
 
             return ExecutionResult.success(
                 message=f"Read file: {path}",

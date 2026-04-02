@@ -48,7 +48,8 @@ class LocalModelPromptTool(Tool):
             )
         except Exception as exc:
             logger.error("Local model prompt execution failed: %s", exc)
-            return ExecutionResult.from_error(str(exc), ErrorType.SYSTEM_ERROR)
+            error_msg = str(exc) or "Local model request timed out or failed to respond"
+            return ExecutionResult.from_error(error_msg, ErrorType.SYSTEM_ERROR)
 
         content = response.content.strip()
         return ExecutionResult.success(

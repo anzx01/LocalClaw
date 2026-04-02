@@ -787,9 +787,10 @@ User: {user_request}
         resolved = {}
         for key, value in template_params.items():
             if isinstance(value, str) and "{{" in value:
-                # Check if template references another step (e.g., {{read_file.content}})
-                # Pattern: {{word.word}} where first word is likely a step name
-                if re.search(r'\{\{\s*\w+\.\w+', value):
+                # Check if template references another step anywhere in the expression
+                # Pattern: step_name.field (with optional parens, slices, filters)
+                # Examples: {{read_file.content}}, {{(read_file.content or '')[:2000]}}
+                if re.search(r'\w+\.\w+', value):
                     # Keep template as-is for runtime resolution
                     resolved[key] = value
                 else:

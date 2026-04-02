@@ -94,6 +94,12 @@ class OpenClawRuntime:
                     rationale="basic_intent_guardrail",
                 )
 
+            # Fast-path: detect file-read/summarize patterns before calling the LLM.
+            # This avoids a slow or timing-out model call for deterministic filesystem requests.
+            fast_skill_decision = self._build_fast_skill_guardrail(str(message.content or "").strip(), message)
+            if fast_skill_decision is not None:
+                return fast_skill_decision
+
         llm_provider = get_llm_provider()
         if not await llm_provider.is_available():
             return decision
@@ -1225,6 +1231,102 @@ User: {user_request}
             )
 
         return decision
+
+    def _build_fast_skill_guardrail(self, request: str, message: Message) -> Optional[AgentDecision]:
+        """Fast-path pre-LLM guardrail for deterministic skill routing.
+
+        Handles patterns that would normally require an LLM call to route, but
+        can be resolved deterministically — primarily file-read and summarize-file requests.
+        Returns None to fall through to the LLM when no fast path applies.
+        """
+        # Summarize-file: user wants to summarize a local file
+        _summarize_tokens = ("总结", "摘要", "概括", "summarize", "summarise", "summary")
+        normalized_req = self._normalize_request_text(request)
+        is_summarize_request = any(t in normalized_req for t in _summarize_tokens)
+        if is_summarize_request:
+            file_read_params = self._build_file_read_intent_params(request)
+            if file_read_params:
+                summarize_file_skill = self._select_available_skill("summarize-file")
+                if summarize_file_skill:
+                    return AgentDecision(
+                        mode=AgentDecisionMode.SKILL,
+                        skill_name=summarize_file_skill,
+                        params={"path": file_read_params.get("path", "")},
+                        confidence=0.99,
+                        source="openclaw_runtime_guardrail",
+                        raw_message=message.content,
+                        rationale="fast_summarize_file_guardrail",
+                    )
+
+        # File-read: user wants to open/read a local file
+        file_read_params = self._build_file_read_intent_params(request)
+        if file_read_params and not is_summarize_request:
+            repo_fs_skill = self._select_available_skill("repo.fs", "workspace-files", "fs-workspace")
+            if repo_fs_skill:
+                return AgentDecision(
+                    mode=AgentDecisionMode.SKILL,
+                    skill_name=repo_fs_skill,
+                    params={"action": "read", **file_read_params},
+                    confidence=0.97,
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="fast_file_read_guardrail",
+                )
+            return AgentDecision(
+                mode=AgentDecisionMode.INTENT,
+                intent_name="read_file",
+                params=file_read_params,
+                confidence=0.97,
+                source="openclaw_runtime_guardrail",
+                raw_message=message.content,
+                rationale="fast_file_read_guardrail",
+            )
+
+        # Desktop/drive listing
+        desktop_listing_params = self._build_desktop_listing_intent_params(request)
+        if desktop_listing_params:
+            if desktop_listing_params.get("error"):
+                return AgentDecision(
+                    mode=AgentDecisionMode.ANSWER,
+                    answer=desktop_listing_params["error"],
+                    confidence=0.99,
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="fast_listing_guardrail",
+                )
+            return AgentDecision(
+                mode=AgentDecisionMode.INTENT,
+                intent_name="list_folders" if desktop_listing_params.get("folders_only") else "file_list",
+                params=desktop_listing_params,
+                confidence=0.97,
+                source="openclaw_runtime_guardrail",
+                raw_message=message.content,
+                rationale="fast_listing_guardrail",
+            )
+
+        # Disk space
+        disk_space_params = self._build_disk_space_intent_params(request)
+        if disk_space_params:
+            if disk_space_params.get("error"):
+                return AgentDecision(
+                    mode=AgentDecisionMode.ANSWER,
+                    answer=disk_space_params["error"],
+                    confidence=0.99,
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="fast_disk_space_guardrail",
+                )
+            return AgentDecision(
+                mode=AgentDecisionMode.INTENT,
+                intent_name="check_disk_space",
+                params=disk_space_params,
+                confidence=0.97,
+                source="openclaw_runtime_guardrail",
+                raw_message=message.content,
+                rationale="fast_disk_space_guardrail",
+            )
+
+        return None
 
     def _build_basic_intent_guardrail(self, request: str) -> Optional[str]:
         """Detect obvious greeting/help requests without invoking the model."""
