@@ -12,3 +12,5 @@ pyyaml>=6.0
 jinja2>=3.1
 apscheduler>=3.10
 aiohttp>=3.9
+pypdf>=4.2
+

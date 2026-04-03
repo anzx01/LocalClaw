@@ -67,6 +67,25 @@ def _extract_office_text(file_path: Path) -> Optional[str]:
     return None
 
 
+def _extract_pdf_text(file_path: Path) -> str:
+    """Extract text from a PDF file using pypdf."""
+
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise RuntimeError("pypdf is required to read PDF files. Install it with `pip install pypdf`.") from exc
+
+    reader = PdfReader(str(file_path))
+    parts: List[str] = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        if text.strip():
+            parts.append(text.strip())
+    return "\n".join(parts).strip()
+
+
+
+
 def _resolve_local_path(base_dir: Path, raw_path: str) -> Path:
     """Resolve user paths with Desktop shorthand compatibility on Windows."""
 
@@ -82,9 +101,9 @@ def _resolve_local_path(base_dir: Path, raw_path: str) -> Path:
         "desktop",
         "/desktop",
         "~/desktop",
-        "桌面",
-        "/桌面",
-        "~/桌面",
+        "妗岄潰",
+        "/妗岄潰",
+        "~/妗岄潰",
     }
     if normalized_lower in desktop_aliases:
         return desktop_dir
@@ -92,8 +111,8 @@ def _resolve_local_path(base_dir: Path, raw_path: str) -> Path:
     if normalized_lower.startswith("/desktop/"):
         suffix = normalized[len("/Desktop/") :]
         return desktop_dir / Path(suffix)
-    if normalized.startswith("/桌面/"):
-        suffix = normalized[len("/桌面/") :]
+    if normalized.startswith("/妗岄潰/"):
+        suffix = normalized[len("/妗岄潰/") :]
         return desktop_dir / Path(suffix)
 
     path = Path(text).expanduser()
@@ -361,6 +380,118 @@ class FileDeleteTool(Tool):
         return _resolve_local_path(self._base_dir, path)
 
 
+class PdfExtractTool(Tool):
+    """Tool for extracting text from PDF files or directories of PDFs."""
+
+    name = "pdf_extract"
+    description = "Extract text from a PDF file or all PDF files in a directory"
+    risk_level = RiskLevel.LOW
+    inputs = {"path": "string"}
+    outputs = {
+        "content": "string",
+        "output": "string",
+        "count": "integer",
+        "files": "list",
+    }
+
+    def __init__(self, base_dir: Optional[Path] = None) -> None:
+        super().__init__()
+        self._base_dir = base_dir or Path.cwd()
+
+    async def execute(
+        self,
+        path: str,
+        recursive: bool = False,
+        max_chars_per_file: int = 2000,
+        **kwargs,
+    ) -> ExecutionResult:
+        """Extract text from one PDF or all PDFs inside a directory."""
+
+        del kwargs
+
+        try:
+            target_path = self._resolve_path(path)
+
+            if not target_path.exists():
+                return ExecutionResult.from_error(
+                    f"Path not found: {path}",
+                    ErrorType.VALIDATION_ERROR,
+                )
+
+            if target_path.is_dir():
+                globber = target_path.rglob("*.pdf") if recursive else target_path.glob("*.pdf")
+                pdf_paths = sorted(globber, key=lambda item: item.name.lower())
+                label_prefix = target_path.name or str(target_path)
+            else:
+                if target_path.suffix.lower() != ".pdf":
+                    return ExecutionResult.from_error(
+                        f"Not a PDF file: {path}",
+                        ErrorType.VALIDATION_ERROR,
+                    )
+                pdf_paths = [target_path]
+                label_prefix = target_path.parent.name or target_path.parent.as_posix()
+
+            files: List[Dict[str, Any]] = []
+            sections: List[str] = []
+            errors: List[Dict[str, str]] = []
+
+            for pdf_path in pdf_paths:
+                label = pdf_path.name if target_path.is_file() else f"{label_prefix}/{pdf_path.name}"
+                try:
+                    text = _extract_pdf_text(pdf_path)
+                    if max_chars_per_file > 0:
+                        text = text[:max_chars_per_file]
+                    if not text.strip():
+                        text = "PDF contains no extractable text."
+
+                    sections.append(f"### {label}\n{text}")
+                    files.append(
+                        {
+                            "path": str(pdf_path),
+                            "name": pdf_path.name,
+                            "label": label,
+                            "directory": pdf_path.parent.name,
+                            "characters": len(text),
+                        }
+                    )
+                except Exception as exc:
+                    error_text = f"Extraction error: {exc}"
+                    sections.append(f"### {label}\n{error_text}")
+                    errors.append({"path": str(pdf_path), "error": str(exc)})
+
+            if not pdf_paths:
+                message = f"No PDF files found in {target_path}"
+                sections.append(f"### {label_prefix}\n[No PDF files found]")
+            else:
+                message = f"Extracted text from {len(files)} PDF file(s)"
+
+            content = "\n\n".join(sections).strip()
+            return ExecutionResult.success(
+                message=message,
+                data={
+                    "path": str(target_path),
+                    "content": content,
+                    "output": content,
+                    "count": len(files),
+                    "files": files,
+                    "errors": errors,
+                },
+            )
+
+        except PermissionError:
+            return ExecutionResult.from_error(
+                f"Permission denied: {path}",
+                ErrorType.PERMISSION_ERROR,
+            )
+        except Exception as e:
+            return ExecutionResult.from_error(str(e), ErrorType.SYSTEM_ERROR)
+
+    def _resolve_path(self, path: str) -> Path:
+        """Resolve path relative to base directory."""
+        return _resolve_local_path(self._base_dir, path)
+
+
+
 class FileMkdirTool(Tool):
     """Tool for creating directories."""
     
@@ -512,7 +643,9 @@ def register_file_tools(base_dir: Optional[Path] = None) -> None:
     register_tool(FileReadTool(base_dir))
     register_tool(FileWriteTool(base_dir))
     register_tool(FileListTool(base_dir))
+    register_tool(PdfExtractTool(base_dir))
     register_tool(FileDeleteTool(base_dir))
     register_tool(FileMkdirTool(base_dir))
     register_tool(FileAppendTool(base_dir))
     register_tool(DiskUsageTool(base_dir))
+

@@ -38,6 +38,7 @@ dependencies = [
     "jinja2>=3.1",
     "apscheduler>=3.10",
     "aiohttp>=3.9",
+    "pypdf>=4.2",
 ]
 
 [project.optional-dependencies]
@@ -82,3 +83,4 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
