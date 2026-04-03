@@ -139,6 +139,7 @@ Rules:
 - Requests like "我D盘有哪些目录" or "查看 D 盘文件夹" -> {{"intent":"list_folders","params":{{"path":"D:/","folders_only":true}}}}
 - Requests like "列出 D 盘文件" -> {{"intent":"file_list","params":{{"path":"D:/"}}}}
 - Current news, latest headlines, today's events, or recent web information must not map to help. If a web skill fits, return "skill.<invocation_name>"; otherwise return unknown.
+- IMPORTANT: Requests to summarize/collect/total/统计 invoices/发票 from folders/directories (发票汇总/统计发票/汇总发票金额/统计...发票) -> skill.invoice-summary with dir1/dir2 params extracted from folder names in the request. Example: "统计桌面两个文件夹中发票的金额：长沙出差发票和北京出差发票" -> {{"intent":"skill.invoice-summary","params":{{"dir1":"长沙出差发票","dir2":"北京出差发票"}}}}
 - If an installed skill clearly fits better than a built-in intent, return "skill.<invocation_name>" using the catalog's "invoke as" field
 - If nothing fits, return {{"intent":"unknown","params":{{}}}}
 
@@ -161,6 +162,7 @@ Desktop file listing requests like "列出桌面文件" -> {{"intent":"file_list
 Drive folder requests like "我D盘有哪些目录" -> {{"intent":"list_folders","params":{{"path":"D:/","folders_only":true}}}}.
 Drive file listing requests like "列出 D 盘文件" -> {{"intent":"file_list","params":{{"path":"D:/"}}}}.
 "/ today's news / latest headlines / recent web info" -> matching installed web skill or unknown, never help.
+Invoice summary requests like "统计...发票", "汇总...发票金额" -> skill.invoice-summary with dir1/dir2 extracted from folder names.
 "/cmd <command>" -> run_command.
 "/shell <command>" -> run_shell_command.
 For installed skills, return "skill.<invocation_name>" using the catalog's "invoke as" field.
@@ -606,6 +608,19 @@ User: {user_request}
     
     def _plan_from_skill(self, skill_name: str, params: Dict[str, Any], intent: Intent) -> Plan:
         """Create a plan from a skill definition."""
+        # Special handling for invoice-summary: auto-resolve folder names to desktop paths
+        if skill_name == "invoice-summary":
+            import os
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+
+            # If dir1/dir2 are just folder names (no path separators), prepend desktop path
+            for key in ["dir1", "dir2"]:
+                if key in params and params[key]:
+                    value = str(params[key])
+                    # Check if it's a relative folder name (no / or \)
+                    if "/" not in value and "\\" not in value and not os.path.isabs(value):
+                        params[key] = os.path.join(desktop, value)
+
         if self._skill_registry is None:
             return Plan(
                 steps=[
@@ -790,7 +805,7 @@ User: {user_request}
                 # Check if template references another step anywhere in the expression
                 # Pattern: step_name.field (with optional parens, slices, filters)
                 # Examples: {{read_file.content}}, {{(read_file.content or '')[:2000]}}
-                if re.search(r'\w+\.\w+', value):
+                if re.search(r'\{\{[^}]*\w+\.\w+[^}]*\}\}', value):
                     # Keep template as-is for runtime resolution
                     resolved[key] = value
                 else:

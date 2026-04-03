@@ -146,7 +146,11 @@ class ExecutionEngine:
                     ErrorType.PARSE_ERROR,
                 )
 
-            if self._settings.llm_enabled and self._settings.llm_parse_only and not self._parser_override:
+            # Check if message is a DSL command (starts with /)
+            # DSL commands should always use the parser, not OpenClaw runtime
+            is_dsl_command = message.content.strip().startswith("/")
+
+            if self._settings.llm_enabled and self._settings.llm_parse_only and not self._parser_override and not is_dsl_command:
                 decision: Optional[AgentDecision] = None
                 decision_timeout = max(0.1, float(self._settings.runtime_decision_timeout))
                 try:

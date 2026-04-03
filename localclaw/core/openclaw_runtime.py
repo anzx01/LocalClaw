@@ -1239,6 +1239,33 @@ User: {user_request}
         can be resolved deterministically — primarily file-read and summarize-file requests.
         Returns None to fall through to the LLM when no fast path applies.
         """
+        # Invoice summary: user wants to summarize/total invoices from folders
+        _invoice_tokens = ("发票", "invoice")
+        _summary_tokens = ("汇总", "统计", "合计", "总计", "金额")
+        normalized_req = self._normalize_request_text(request)
+        has_invoice = any(t in normalized_req for t in _invoice_tokens)
+        has_summary = any(t in normalized_req for t in _summary_tokens)
+        if has_invoice and has_summary:
+            invoice_skill = self._select_available_skill("invoice-summary")
+            if invoice_skill:
+                # Extract folder names from request
+                import re as _re
+                params: Dict[str, Any] = {}
+                # Try to extract folder names separated by 和/与/, after a colon
+                folder_match = _re.search(r'[：:]\s*(.+?)(?:和|与|,|，)\s*(.+?)$', request)
+                if folder_match:
+                    params["dir1"] = folder_match.group(1).strip()
+                    params["dir2"] = folder_match.group(2).strip()
+                return AgentDecision(
+                    mode=AgentDecisionMode.SKILL,
+                    skill_name=invoice_skill,
+                    params=params,
+                    confidence=0.99,
+                    source="openclaw_runtime_guardrail",
+                    raw_message=message.content,
+                    rationale="fast_invoice_summary_guardrail",
+                )
+
         # Summarize-file: user wants to summarize a local file
         _summarize_tokens = ("总结", "摘要", "概括", "summarize", "summarise", "summary")
         normalized_req = self._normalize_request_text(request)

@@ -208,6 +208,7 @@ Rules:
 - Requests like "总结我桌面的 xxx.txt", "帮我总结 xxx 文件", "summarize file xxx", "summarise xxx.txt" -> {{"intent":"summarize_file","params":{{"path":"<resolved_path>"}}}}
   Path resolution: "桌面" or "Desktop" -> "~/Desktop"; keep absolute paths as-is; prepend "~/Desktop/" for bare filenames on Desktop context.
 - Current news, latest headlines, today's events, or recent web information must not map to help. If a listed web skill fits better, return "skill.<invocation_name>"; otherwise return unknown.
+- IMPORTANT: Requests to 统计/汇总/合计 发票/invoice amounts from named folders -> skill.invoice-summary. Extract folder names as dir1/dir2 params. Example: "统计桌面两个文件夹中发票的金额：长沙出差发票和北京出差发票" -> {{"intent":"skill.invoice-summary","params":{{"dir1":"长沙出差发票","dir2":"北京出差发票"}}}}
 - If a listed skill is clearly a better match than a built-in intent, return "skill.<invocation_name>" using the catalog's "invoke as" field
 - If nothing fits, return {{"intent":"unknown","params":{{}}}}
 
@@ -319,6 +320,11 @@ class Parser:
 
     async def parse(self, message: Message) -> Intent:
         """Parse a message and return an intent."""
+        # DSL commands should always be parsed first, before LLM
+        intent = await self._dsl_parser.parse(message)
+        if intent:
+            return intent
+
         if self._llm_parser:
             intent = await self._llm_parser.parse(message)
             if intent and intent.intent != "unknown":
@@ -331,10 +337,6 @@ class Parser:
                     source="llm",
                     raw_message=message.content,
                 )
-
-        intent = await self._dsl_parser.parse(message)
-        if intent:
-            return intent
 
         intent = await self._rule_parser.parse(message)
         if intent:
@@ -503,6 +505,18 @@ def create_default_parser(llm_enabled: bool = False, llm_parse_only: bool = Fals
             pattern=r"^.*?(?:冷不|热不|冷不冷|热不热|冷吗|热吗|温度|气温)",
             intent="check_weather",
             priority=15,
+        ),
+        ParseRule(
+            pattern=r"^(?:.*)?(?:汇总|统计|合计|总计).*?(?:发票|invoice).*$",
+            intent="skill.invoice-summary",
+            params_template={},
+            priority=35,
+        ),
+        ParseRule(
+            pattern=r"^(?:.*)?(?:发票|invoice).*(?:汇总|统计|合计|总计|金额|用途).*$",
+            intent="skill.invoice-summary",
+            params_template={},
+            priority=35,
         ),
     ]
     parser.add_rules(default_rules)
