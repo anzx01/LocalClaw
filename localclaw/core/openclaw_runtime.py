@@ -1750,7 +1750,7 @@ User: {user_request}
             stripped_request = new_stripped
 
         _desktop_re = re.compile(
-            r"(?:桌面|desktop)(?:上|里的|中的|的|上的)?\s*(?:的\s*)?(?P<filename>[^\\/:*?\"<>|\r\n\s]+?\.[A-Za-z0-9]+)\s*$",
+            r"(?:我(?:的)?\s*)?(?:桌面|desktop)(?:上|里的|中的|的|上的)?\s*(?:的\s*)?(?P<filename>[^\\/:*?\"<>|\r\n\s]+?\.[A-Za-z0-9]+)\s*$",
             re.IGNORECASE,
         )
         file_match = _desktop_re.search(stripped_request)

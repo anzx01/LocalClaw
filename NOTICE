@@ -1,0 +1,14 @@
+LocalClaw
+
+This repository is licensed under the MIT License. See LICENSE.
+
+OpenClaw, Claude, ChatGPT, OpenAI, Ollama, WeChat, Weixin, WhatsApp, Meta,
+Tavily, and other third-party names are trademarks or product names of their
+respective owners. LocalClaw is an independent project and is not affiliated
+with, sponsored by, or endorsed by those owners unless explicitly stated.
+
+The bundled web-access skill is a LocalClaw adaptation of the upstream
+web-access project. See THIRD_PARTY_NOTICES.md for source and license notes.
+
+The files under test_invoices/ are synthetic fixtures used for automated tests.
+They do not represent real invoices, customers, vendors, or tax records.

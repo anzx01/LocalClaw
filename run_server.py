@@ -195,6 +195,41 @@ def _attempt_auto_stop_existing_server(host: str, port: int) -> Tuple[bool, str]
 def main() -> int:
     host = os.getenv("LOCALCLAW_SERVER_HOST", DEFAULT_HOST).strip() or DEFAULT_HOST
     port = _get_port()
+    
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("--port", "-p"):
+            if i + 1 < len(args):
+                try:
+                    port = int(args[i + 1])
+                except ValueError:
+                    print(f"Invalid port: {args[i + 1]}")
+                    return 1
+                i += 2
+                continue
+            else:
+                print("--port requires a value")
+                return 1
+        elif arg.startswith("--port="):
+            try:
+                port = int(arg.split("=", 1)[1])
+            except ValueError:
+                print(f"Invalid port: {arg}")
+                return 1
+            i += 1
+            continue
+        elif arg in ("--host", "-h"):
+            if i + 1 < len(args):
+                host = args[i + 1]
+                i += 2
+                continue
+            else:
+                print("--host requires a value")
+                return 1
+        i += 1
+    
     auto_restart = _env_truthy("LOCALCLAW_AUTO_RESTART", default=True)
 
     print("Python starting...")

@@ -196,7 +196,7 @@ def test_format_task_for_chat_desktop_folders_only():
         message="Task completed successfully",
         data={
             "step-files": {
-                "path": "C:/Users/admin/Desktop",
+                "path": "C:/Users/example/Desktop",
                 "directories": ["Projects", "Notes"],
                 "files": ["todo.txt", "readme.md"],
             }

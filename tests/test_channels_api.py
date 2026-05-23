@@ -434,8 +434,8 @@ def test_background_service_endpoints(monkeypatch):
         "binary_path": "",
         "can_manage": True,
         "python_executable": "C:/Python/python.exe",
-        "script_path": "G:/myaist/LocalClaw/run_server.py",
-        "command": '"C:/Python/python.exe" "G:/myaist/LocalClaw/run_server.py"',
+        "script_path": "G:/example/LocalClaw/run_server.py",
+        "command": '"C:/Python/python.exe" "G:/example/LocalClaw/run_server.py"',
         "message": "Service is not installed.",
     }
 

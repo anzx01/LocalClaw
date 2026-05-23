@@ -904,3 +904,11 @@ LocalClaw 当前则更像“做一条真正可跑通的本地链路”：
 - OpenClaw 官方 skills 文档: <https://docs.openclaw.ai/tools/skills>
 - OpenClaw 官方 exec approvals 文档: <https://docs.openclaw.ai/tools/exec-approvals>
 - 本仓库里的对照说明: `OPENCLAW_LOCAL_REFERENCE.md`
+
+## 许可与归属
+
+本项目以 MIT License 发布，详见 `LICENSE`。
+
+LocalClaw 是独立项目。文档中出现的 OpenClaw、Claude、ChatGPT、OpenAI、Ollama、WeChat、Weixin、WhatsApp、Meta、Tavily 等名称仅用于说明兼容性、集成方式或参考来源，相关商标和产品名归各自权利人所有。
+
+第三方依赖、改编组件和测试夹具说明见 `NOTICE` 与 `THIRD_PARTY_NOTICES.md`。

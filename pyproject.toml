@@ -7,7 +7,7 @@ name = "localclaw"
 version = "0.1.0"
 description = "A local-first Agent Runtime System compatible with OpenClaw"
 readme = "README.md"
-license = {text = "MIT"}
+license = {file = "LICENSE"}
 requires-python = ">=3.10"
 authors = [
     {name = "LocalClaw Team"}

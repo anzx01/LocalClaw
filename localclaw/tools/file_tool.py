@@ -111,6 +111,9 @@ def _resolve_local_path(base_dir: Path, raw_path: str) -> Path:
     if normalized_lower.startswith("/desktop/"):
         suffix = normalized[len("/Desktop/") :]
         return desktop_dir / Path(suffix)
+    if normalized_lower.startswith("~/desktop/"):
+        suffix = normalized[len("~/Desktop/") :]
+        return desktop_dir / Path(suffix)
     if normalized.startswith("/妗岄潰/"):
         suffix = normalized[len("/妗岄潰/") :]
         return desktop_dir / Path(suffix)
