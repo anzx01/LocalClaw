@@ -18,12 +18,8 @@ Updated: 2026-04-03 17:03:17
 - The user wants invoice summarization to stay on the local-model path.
 - The current failure is not PDF extraction. The current failure is `_local_model_prompt` timing out.
 - `.env` is set to `qwen3:4b`, but runtime falls back to installed `gemma3:4b`.
-- Real desktop folders were confirmed:
-  - Beijing folder on Desktop (name: Beijing trip invoices in Chinese)
-  - Changsha folder on Desktop (name: Changsha trip invoices in Chinese)
-- Extracted PDF text size is roughly:
-  - Beijing folder: 1330 chars
-  - Changsha folder: 1285 chars
+- Test directories: two invoice directories with a mix of hotel, meal, and taxi PDFs.
+- Extracted PDF text size is roughly 1200–1400 chars per directory.
 - A reduced local-model request with `max_tokens=256` still timed out under the current setup.
 
 ## Important Constraint
@@ -38,7 +34,7 @@ Updated: 2026-04-03 17:03:17
 3. Reduce the `invoice-summary` prompt further if possible.
 4. Lower `max_tokens` if needed.
 5. Consider switching to a faster local model.
-6. Re-test with the two real desktop folders above.
+6. Re-test with the invoice test fixture directories.
 
 ## Current Uncommitted Files
 

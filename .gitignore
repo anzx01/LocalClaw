@@ -64,6 +64,11 @@ logs/
 __tmp*
 .tmp_*
 
+# Internal development documents (not part of public project)
+CODE_REVIEW.md
+DEV_PROGRESS*.md
+PLAN.md
+
 # OS
 .DS_Store
 Thumbs.db

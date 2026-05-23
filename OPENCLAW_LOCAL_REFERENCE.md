@@ -1,8 +1,6 @@
 # OpenClaw 参考方案
 
-面向仓库：`G:\aiprj\LocalClaw`
-
-参考源码：`G:\aiprj\openclaw`
+本文记录 LocalClaw 在架构设计阶段参考 OpenClaw 文档所形成的设计决策与边界判断。
 
 目标约束：
 
@@ -43,9 +41,7 @@ LocalClaw 不应该照搬的部分：
 
 ### 1. Gateway / Runtime 分层
 
-OpenClaw 参考：
-
-- `G:\aiprj\openclaw\docs\concepts\architecture.md`
+OpenClaw 参考（<https://docs.openclaw.ai/architecture>）：
 
 可借鉴点：
 
@@ -61,10 +57,7 @@ OpenClaw 参考：
 
 ### 2. 本地模型优先的 Provider 抽象
 
-OpenClaw 参考：
-
-- `G:\aiprj\openclaw\docs\gateway\local-models.md`
-- `G:\aiprj\openclaw\docs\gateway\configuration-reference.md`
+OpenClaw 参考（<https://docs.openclaw.ai/gateway/local-models>、<https://docs.openclaw.ai/gateway/configuration-reference>）：
 
 OpenClaw 的一个关键思路是：
 
@@ -99,10 +92,7 @@ OpenClaw 的一个关键思路是：
 
 ### 3. Skills 改成目录 + `SKILL.md`，而不是只靠 JSON
 
-OpenClaw 参考：
-
-- `G:\aiprj\openclaw\docs\tools\skills.md`
-- `G:\aiprj\openclaw\skills\weather\SKILL.md`
+OpenClaw 参考（<https://docs.openclaw.ai/tools/skills>）：
 
 OpenClaw 的 skills 设计比当前 LocalClaw 的 JSON 技能更稳，优势在于：
 
@@ -138,9 +128,7 @@ skills/
 
 ### 4. Skill 可见性和环境门控
 
-OpenClaw 参考：
-
-- `G:\aiprj\openclaw\docs\tools\skills.md`
+OpenClaw 参考（<https://docs.openclaw.ai/tools/skills>）：
 
 当前 LocalClaw 的问题是：
 
@@ -162,10 +150,7 @@ OpenClaw 参考：
 
 ### 5. 执行审批与白名单必须保留
 
-OpenClaw 参考：
-
-- `G:\aiprj\openclaw\docs\tools\exec-approvals.md`
-- `G:\aiprj\openclaw\src\infra\system-run-command.ts`
+OpenClaw 参考（<https://docs.openclaw.ai/tools/exec-approvals>）：
 
 OpenClaw 的核心经验：
 
@@ -189,9 +174,7 @@ OpenClaw 的核心经验：
 
 ### 6. Web Search 不要写死成单一 API 调用
 
-OpenClaw 参考：
-
-- `G:\aiprj\openclaw\src\web-search\runtime.ts`
+OpenClaw 参考（OpenClaw web search runtime 设计思路）：
 
 OpenClaw 的做法是 provider-based web search runtime，而不是把搜索写死到一个 URL。
 

@@ -11,6 +11,13 @@ following baseline controls:
 - Known copied/reference-only drafts with unclear redistribution terms were
   removed from the tracked project content.
 - Synthetic invoice fixtures are documented as test-only sample data.
+- Local machine paths removed from `OPENCLAW_LOCAL_REFERENCE.md`; all
+  references now point to public OpenClaw documentation URLs.
+- Personal desktop folder references removed from `PROGRESS.md`.
+- MIT upstream attribution comment added to
+  `bundled_skills/web-access/scripts/cdp-proxy.mjs`.
+- Internal development documents (`CODE_REVIEW.md`, `DEV_PROGRESS*.md`,
+  `PLAN.md`) removed from git tracking and added to `.gitignore`.
 
 ## Pre-Push Checks
 

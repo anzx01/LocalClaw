@@ -18,7 +18,7 @@ _RUN_SERVER_SPEC.loader.exec_module(run_server)
 def test_looks_like_localclaw_process_by_script_name():
     assert run_server._looks_like_localclaw_process(
         "python.exe",
-        'C:\\Python\\python.exe "G:\\myaist\\LocalClaw\\run_server.py"',
+        'C:\\Python\\python.exe "C:\\Users\\user\\projects\\localclaw\\run_server.py"',
     )
 
 
@@ -54,7 +54,7 @@ def test_attempt_auto_stop_existing_server_stops_localclaw_pid(monkeypatch):
     monkeypatch.setattr(
         run_server,
         "_get_process_details",
-        lambda pid: ("python.exe", 'python.exe "G:\\myaist\\LocalClaw\\run_server.py"'),
+        lambda pid: ("python.exe", 'python.exe "C:\\Users\\user\\projects\\localclaw\\run_server.py"'),
     )
     monkeypatch.setattr(run_server, "_stop_process_by_pid", lambda pid: stops.append(pid) or True)
     monkeypatch.setattr(run_server, "_wait_for_port_release", lambda host, port: True)

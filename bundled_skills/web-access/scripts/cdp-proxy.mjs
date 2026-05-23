@@ -2,6 +2,12 @@
 // CDP Proxy - 通过 HTTP API 操控用户日常 Chrome
 // 要求：Chrome 已开启 --remote-debugging-port
 // Node.js 22+（使用原生 WebSocket）
+//
+// Adapted from web-access by 一泽 Eze
+// Source: https://github.com/eze-is/web-access
+// License: MIT
+// This file is a LocalClaw-native adaptation. Original copyright belongs to
+// the upstream author(s). Redistribution must retain this notice per MIT terms.
 
 import http from 'node:http';
 import { URL } from 'node:url';
