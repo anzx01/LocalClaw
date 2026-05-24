@@ -2,6 +2,12 @@
 
 LocalClaw 是一个本地优先、单机优先、低成本优先的 Agent Runtime。
 
+![1779590898048](image/README/1779590898048.png)
+
+![1779590947714](image/README/1779590947714.png)
+
+![1779590984129](image/README/1779590984129.png)
+
 它把 Web UI、CLI、个人微信桥接、Weixin webhook、WhatsApp Cloud API webhook 等输入统一收敛成内部 `Message`，再优先交给本地大模型理解，最后通过 `Planner -> ExecutionEngine -> Verifier -> Tool/Skill` 链路完成执行，并把结果回送到当前渠道。
 
 它不是一个“把所有能力都塞进核心代码里”的大一统平台，而更像一个可控的本地运行时骨架：
@@ -227,15 +233,15 @@ Skill 最终也会被展开为 Tool 调用或 transform step；渠道层、UI �
 
 当前主要工具分组如下：
 
-| 工具组 | 典型工具 | 作用 |
-| --- | --- | --- |
-| 文件工具 | `file_list` / `file_read` / `file_write` / `file_append` / `file_delete` / `file_mkdir` / `disk_usage` | 访问本地文件系统与磁盘空间 |
-| 命令工具 | `safe_shell` / `shell` | 执行白名单内常规命令或原始 shell |
-| 网络工具 | `http` / `http_get` / `http_post` | 访问 HTTP 接口 |
-| 浏览器工具 | `browser_cdp` | 通过本地 Chrome + CDP 代理做真实网页访问与交互 |
-| 模型工具 | `_local_model_prompt` | 给 skill 提供一次直接调用本地模型的内部能力 |
-| Marketplace 工具 | `clawhub_search` / `clawhub_scan` / `clawhub_install` / `clawhub_remove` / `clawhub_list` | 搜索、审查、安装、移除 skills |
-| 系统展示工具 | `system_status` / `list_skills` | 为 Web UI / CLI 提供系统信息 |
+| 工具组           | 典型工具                                                                                                             | 作用                                           |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 文件工具         | `file_list` / `file_read` / `file_write` / `file_append` / `file_delete` / `file_mkdir` / `disk_usage` | 访问本地文件系统与磁盘空间                     |
+| 命令工具         | `safe_shell` / `shell`                                                                                           | 执行白名单内常规命令或原始 shell               |
+| 网络工具         | `http` / `http_get` / `http_post`                                                                              | 访问 HTTP 接口                                 |
+| 浏览器工具       | `browser_cdp`                                                                                                      | 通过本地 Chrome + CDP 代理做真实网页访问与交互 |
+| 模型工具         | `_local_model_prompt`                                                                                              | 给 skill 提供一次直接调用本地模型的内部能力    |
+| Marketplace 工具 | `clawhub_search` / `clawhub_scan` / `clawhub_install` / `clawhub_remove` / `clawhub_list`                  | 搜索、审查、安装、移除 skills                  |
+| 系统展示工具     | `system_status` / `list_skills`                                                                                  | 为 Web UI / CLI 提供系统信息                   |
 
 其中几个工具的定位尤其关键：
 
@@ -456,21 +462,21 @@ LocalClaw 的安全思路不是“靠 prompt 自觉”，而是明确把安全�
 
 ## 关键模块职责总览
 
-| 模块 | 当前角色 | 是否在默认主链路 |
-| --- | --- | --- |
-| `channels/` | 输入输出适配、HTTP API、UI 页面 | 是 |
-| `core/openclaw_runtime.py` | 本地模型前置决策器 | 是 |
-| `core/planner.py` | 意图到 step 的展开器 | 是 |
-| `core/engine.py` | 执行状态机与 task 生命周期 | 是 |
-| `core/verifier.py` | 审批与执行前后校验 | 是 |
-| `tools/` | 唯一真实执行入口 | 是 |
-| `skills/` | 声明式扩展层、skill 加载与安全保护 | 是 |
-| `llm/` | 本地模型 provider 抽象 | 是 |
-| `system/windows_service.py` | Windows 自动启动任务管理（Task Scheduler 优先，兼容 legacy service 检测） | Web UI 中可用 |
-| `gateway/` | 消息队列、session、handler 基础设施 | 目前不是默认主路径中心 |
-| `memory/` | 短期与长期记忆能力 | 当前已存在，但尚未深度接入主决策链 |
-| `agents/` | 多 agent 配置、路由与权限封装 | 当前能力较轻，更多是骨架 |
-| `events/` | APScheduler 封装 | 当前更多是预留与安全审查关注对象 |
+| 模块                          | 当前角色                                                                  | 是否在默认主链路                   |
+| ----------------------------- | ------------------------------------------------------------------------- | ---------------------------------- |
+| `channels/`                 | 输入输出适配、HTTP API、UI 页面                                           | 是                                 |
+| `core/openclaw_runtime.py`  | 本地模型前置决策器                                                        | 是                                 |
+| `core/planner.py`           | 意图到 step 的展开器                                                      | 是                                 |
+| `core/engine.py`            | 执行状态机与 task 生命周期                                                | 是                                 |
+| `core/verifier.py`          | 审批与执行前后校验                                                        | 是                                 |
+| `tools/`                    | 唯一真实执行入口                                                          | 是                                 |
+| `skills/`                   | 声明式扩展层、skill 加载与安全保护                                        | 是                                 |
+| `llm/`                      | 本地模型 provider 抽象                                                    | 是                                 |
+| `system/windows_service.py` | Windows 自动启动任务管理（Task Scheduler 优先，兼容 legacy service 检测） | Web UI 中可用                      |
+| `gateway/`                  | 消息队列、session、handler 基础设施                                       | 目前不是默认主路径中心             |
+| `memory/`                   | 短期与长期记忆能力                                                        | 当前已存在，但尚未深度接入主决策链 |
+| `agents/`                   | 多 agent 配置、路由与权限封装                                             | 当前能力较轻，更多是骨架           |
+| `events/`                   | APScheduler 封装                                                          | 当前更多是预留与安全审查关注对象   |
 
 ## 当前主路径与辅助子系统
 
@@ -839,15 +845,15 @@ LocalClaw 当前则更像“做一条真正可跑通的本地链路”：
 
 ### 7. 一张表看差异
 
-| 维度 | OpenClaw | LocalClaw |
-| --- | --- | --- |
-| 产品重心 | 平台化 Gateway Runtime | 本地单机 Runtime |
-| 部署范围 | 更适合多客户端、多节点、多宿主机 | 更强调单机、本地控制面 |
-| skill 组织 | 强调 `SKILL.md`、多来源加载、模型可读 | 已兼容该方向，但加载路径与 catalog 更保守 |
-| 模型策略 | 更通用 provider 抽象 | 明确本地模型优先 |
-| 工具执行 | 强调审批、allowlist、sandbox | 同样强调审批，并增加安装前后 skill 安全控制 |
-| Web 能力 | 偏平台级集成 | 偏“本机真实可跑”的工程化适配 |
-| 系统目标 | 平台规模与生态扩展 | 低成本、可控、本地先跑起来 |
+| 维度       | OpenClaw                                | LocalClaw                                   |
+| ---------- | --------------------------------------- | ------------------------------------------- |
+| 产品重心   | 平台化 Gateway Runtime                  | 本地单机 Runtime                            |
+| 部署范围   | 更适合多客户端、多节点、多宿主机        | 更强调单机、本地控制面                      |
+| skill 组织 | 强调 `SKILL.md`、多来源加载、模型可读 | 已兼容该方向，但加载路径与 catalog 更保守   |
+| 模型策略   | 更通用 provider 抽象                    | 明确本地模型优先                            |
+| 工具执行   | 强调审批、allowlist、sandbox            | 同样强调审批，并增加安装前后 skill 安全控制 |
+| Web 能力   | 偏平台级集成                            | 偏“本机真实可跑”的工程化适配              |
+| 系统目标   | 平台规模与生态扩展                      | 低成本、可控、本地先跑起来                  |
 
 ### 8. 最准确的结论
 
@@ -900,9 +906,9 @@ LocalClaw 当前则更像“做一条真正可跑通的本地链路”：
 
 ## 参考资料
 
-- OpenClaw 官方架构文档: <https://docs.openclaw.ai/architecture>
-- OpenClaw 官方 skills 文档: <https://docs.openclaw.ai/tools/skills>
-- OpenClaw 官方 exec approvals 文档: <https://docs.openclaw.ai/tools/exec-approvals>
+- OpenClaw 官方架构文档: [https://docs.openclaw.ai/architecture](https://docs.openclaw.ai/architecture)
+- OpenClaw 官方 skills 文档: [https://docs.openclaw.ai/tools/skills](https://docs.openclaw.ai/tools/skills)
+- OpenClaw 官方 exec approvals 文档: [https://docs.openclaw.ai/tools/exec-approvals](https://docs.openclaw.ai/tools/exec-approvals)
 - 本仓库里的对照说明: `OPENCLAW_LOCAL_REFERENCE.md`
 
 ## 许可与归属
